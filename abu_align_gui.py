@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.4
+Abu Align Version 0.0.0.5
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -115,8 +115,8 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.4 (Neural Photogrammetry)")
-        self.root.geometry("1000x780")
+        self.root.title("Abu Align - Version 0.0.0.5 (Neural Photogrammetry)")
+        self.root.geometry("1020x800")
         self.root.minsize(880, 660)
 
         # Style configuration (Modern Dark Palette)
@@ -146,6 +146,8 @@ class AbuAlignApp:
         self.output_queue = queue.Queue()
         self.is_running = False
         self.latest_output_dir = None
+        self.active_log_path = None
+        self._ensure_logs_dir()
 
         self._build_menu()
         self._build_ui()
@@ -160,6 +162,9 @@ class AbuAlignApp:
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
         file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="📁 Open Logs Folder", command=self._open_logs_folder)
+        file_menu.add_command(label="📄 View Latest Log File", command=self._open_latest_log)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
 
@@ -189,7 +194,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.4",
+            text="v0.0.0.5",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -392,6 +397,20 @@ class AbuAlignApp:
         )
         self.open_folder_btn.pack(side=tk.LEFT, padx=(0, 8))
 
+        self.logs_btn = tk.Button(
+            action_bar,
+            text="📁 Logs",
+            font=("Segoe UI", 10),
+            bg=self.panel_bg,
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            command=self._open_logs_folder
+        )
+        self.logs_btn.pack(side=tk.LEFT, padx=(0, 8))
+
         self.viewer_btn = tk.Button(
             action_bar,
             text="🌐 3D Browser Viewer",
@@ -430,6 +449,7 @@ class AbuAlignApp:
         ToolTip(self.start_btn, "Start Alignment: Launch neural photogrammetry alignment and export results for RealityScan, Postshot, and COLMAP.")
         ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment process and free GPU memory.")
         ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
+        ToolTip(self.logs_btn, "Open Logs: Open the logs folder in Windows Explorer to inspect detailed diagnostic files.")
         ToolTip(self.viewer_btn, "3D Browser Viewer: Launch interactive web browser viewer (http://localhost:8080) to inspect cameras and 3D point cloud in real time.")
 
         # 4. Live Progress Console Card
@@ -440,9 +460,36 @@ class AbuAlignApp:
             fg=self.text_primary,
             bg=self.panel_bg,
             padx=10,
-            pady=8
+            pady=6
         )
         console_card.pack(fill=tk.BOTH, expand=True)
+
+        console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
+        console_toolbar.pack(fill=tk.X, pady=(0, 4))
+
+        self.log_status_lbl = tk.Label(
+            console_toolbar,
+            text="Log File: Ready (All runs saved to Abu_Align\\logs\\)",
+            font=("Segoe UI", 8),
+            fg=self.text_secondary,
+            bg=self.panel_bg
+        )
+        self.log_status_lbl.pack(side=tk.LEFT)
+
+        view_log_btn = tk.Button(
+            console_toolbar,
+            text="📄 View Latest Log",
+            font=("Segoe UI", 8),
+            bg="#29293d",
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            command=self._open_latest_log
+        )
+        view_log_btn.pack(side=tk.RIGHT)
+        ToolTip(view_log_btn, "Open the latest execution log in default text editor.")
 
         self.console = ScrolledText(
             console_card,
@@ -454,7 +501,43 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align Version 0.0.0.4 Ready.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+        self._log("Abu Align Version 0.0.0.5 Ready.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nPersistent Session Logging: Enabled (Saving to Abu_Align\\logs\\).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+
+    def _get_logs_dir(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        if "versions" in base_dir:
+            logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
+        else:
+            logs_dir = os.path.join(base_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        return logs_dir
+
+    def _ensure_logs_dir(self):
+        return self._get_logs_dir()
+
+    def _open_logs_folder(self):
+        logs_dir = self._get_logs_dir()
+        if os.path.isdir(logs_dir):
+            os.startfile(logs_dir)
+        else:
+            messagebox.showinfo("Logs", f"Logs folder does not exist yet:\n{logs_dir}")
+
+    def _open_latest_log(self):
+        logs_dir = self._get_logs_dir()
+        latest_file = os.path.join(logs_dir, "abu_align_latest.log")
+        if os.path.isfile(latest_file) and os.path.getsize(latest_file) > 0:
+            os.startfile(latest_file)
+            return
+
+        log_files = sorted(
+            [os.path.join(logs_dir, f) for f in os.listdir(logs_dir) if f.endswith(".log")],
+            key=os.path.getmtime,
+            reverse=True
+        )
+        if log_files:
+            os.startfile(log_files[0])
+        else:
+            messagebox.showinfo("Logs", "No log files found yet. Run an alignment first!")
 
     def _browse_dataset(self):
         folder = filedialog.askdirectory(initialdir=self.dataset_var.get())
@@ -479,6 +562,14 @@ class AbuAlignApp:
         self.stop_btn.config(state=tk.NORMAL)
         self.console.delete(1.0, tk.END)
 
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        logs_dir = self._get_logs_dir()
+        self.active_log_path = os.path.join(logs_dir, f"abu_align_{timestamp}.log")
+        self.log_status_lbl.config(
+            text=f"Log: abu_align_{timestamp}.log",
+            fg=self.accent_green
+        )
+
         cmd = [
             self.conda_python,
             "-u",
@@ -501,34 +592,67 @@ class AbuAlignApp:
         elif density == "max":
             cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
 
-        self._log(f"Executing: {' '.join(cmd)}\n\n")
+        self._log(f"Executing: {' '.join(cmd)}\n")
+        self._log(f"Session Log: {self.active_log_path}\n\n")
 
         thread = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
         thread.start()
 
     def _run_process(self, cmd):
+        log_path = self.active_log_path
+        logs_dir = self._get_logs_dir()
+        latest_path = os.path.join(logs_dir, "abu_align_latest.log")
+
         try:
-            self.worker_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            )
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write("=" * 72 + "\n")
+                lf.write("Abu Align v0.0.0.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                lf.write(f"Command:   {' '.join(cmd)}\n")
+                lf.write("=" * 72 + "\n\n")
+                lf.flush()
 
-            for line in iter(self.worker_process.stdout.readline, ""):
-                if line:
-                    self.output_queue.put(line)
-                    if "Output Directory:" in line:
-                        parts = line.split("Output Directory:")
-                        if len(parts) > 1:
-                            self.latest_output_dir = parts[1].strip()
+                self.worker_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
 
-            self.worker_process.stdout.close()
-            self.worker_process.wait()
+                for line in iter(self.worker_process.stdout.readline, ""):
+                    if line:
+                        lf.write(line)
+                        lf.flush()
+                        self.output_queue.put(line)
+                        if "Output Directory:" in line:
+                            parts = line.split("Output Directory:")
+                            if len(parts) > 1:
+                                self.latest_output_dir = parts[1].strip()
+
+                self.worker_process.stdout.close()
+                exit_code = self.worker_process.wait()
+
+                lf.write("\n" + "-" * 72 + "\n")
+                lf.write(f"Process Completed. Exit Code: {exit_code} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                lf.write("-" * 72 + "\n")
+                lf.flush()
+
+            try:
+                import shutil
+                shutil.copyfile(log_path, latest_path)
+            except Exception:
+                pass
+
         except Exception as e:
-            self.output_queue.put(f"\n[ERROR] Process failed: {str(e)}\n")
+            err_msg = f"\n[ERROR] Worker process execution failed: {str(e)}\n"
+            self.output_queue.put(err_msg)
+            try:
+                with open(log_path, "a", encoding="utf-8") as lf:
+                    lf.write(err_msg)
+            except Exception:
+                pass
         finally:
             self.is_running = False
             self.output_queue.put("__PROCESS_FINISHED__")
@@ -541,6 +665,10 @@ class AbuAlignApp:
                     self.start_btn.config(state=tk.NORMAL)
                     self.stop_btn.config(state=tk.DISABLED)
                     self._log("\n[STATUS] Alignment Run Completed.\n")
+                    self.log_status_lbl.config(
+                        text="Log: Saved (Abu_Align\\logs\\)",
+                        fg=self.text_secondary
+                    )
                 else:
                     self._log(msg)
         except queue.Empty:
@@ -604,12 +732,13 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.0.4\n"
+            "Abu Align - Version 0.0.0.5\n"
             "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
             "• Engine: VGGT & VGGT-Omega Foundation Models\n"
             "• Optimizer: Google Ceres Sub-Pixel Bundle Adjustment\n"
             "• Precision: 0.35 px Reprojection Error (Sony 60.2 MP Test)\n"
             "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
+            "• Logging: Persistent Telemetry in Abu_Align\\logs\\\n"
             "• Scalability: Smart Auto-Chunking & VRAM Guard (1,000+ Photos)\n\n"
             "Target Integrations: RealityScan / RealityCapture, Postshot (3DGS), COLMAP\n"
             "Developer: saemranian"

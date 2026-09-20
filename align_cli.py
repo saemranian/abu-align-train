@@ -14,6 +14,12 @@ import copy
 import argparse
 from datetime import datetime
 
+# Ensure parent directory is on sys.path so vggt and dependencies can always be imported
+current_dir = os.path.dirname(os.path.abspath(__file__))
+for parent in [current_dir, os.path.dirname(current_dir), os.path.dirname(os.path.dirname(current_dir))]:
+    if parent and parent not in sys.path:
+        sys.path.insert(0, parent)
+
 def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
     """Finds the next unique sparse output folder (e.g. sparse_03_omega) that never overwrites existing results."""
     engine_suffix = "omega" if "omega" in engine_name.lower() else "vggt"
@@ -187,6 +193,52 @@ def export_realitycapture_csv(reconstruction, output_dir):
     with open(csv_path, "w", encoding="utf-8") as f:
         f.writelines(rows)
     return csv_path
+
+
+def rename_colmap_recons_and_rescale_camera(
+    reconstruction, image_paths, original_coords, img_size, shift_point2d_to_original_res=False, shared_camera=False
+):
+    """Inlined helper to rename cameras and rescale focal lengths to original photo resolutions."""
+    rescale_camera = True
+
+    for pyimageid in reconstruction.images:
+        pyimage = reconstruction.images[pyimageid]
+        pycamera = reconstruction.cameras[pyimage.camera_id]
+        pyimage.name = image_paths[pyimageid - 1]
+
+        top_left = original_coords[pyimageid - 1, :2]
+        real_image_size = original_coords[pyimageid - 1, -2:]
+        resize_ratio = max(real_image_size) / img_size
+
+        if rescale_camera:
+            pred_params = copy.deepcopy(pycamera.params)
+
+            if pycamera.model_name in ["OPENCV", "FULL_OPENCV"]:
+                pred_params[0] *= resize_ratio  # fx
+                pred_params[1] *= resize_ratio  # fy
+                pred_params[2] = (pred_params[2] - top_left[0]) * resize_ratio  # cx
+                pred_params[3] = (pred_params[3] - top_left[1]) * resize_ratio  # cy
+            elif pycamera.model_name == "PINHOLE":
+                pred_params = pred_params * resize_ratio
+                real_pp = real_image_size / 2
+                pred_params[-2:] = real_pp
+            else:
+                pred_params = pred_params * resize_ratio
+                real_pp = real_image_size / 2
+                pred_params[-2:] = real_pp
+
+            pycamera.params = pred_params
+            pycamera.width = int(real_image_size[0])
+            pycamera.height = int(real_image_size[1])
+
+        if shift_point2d_to_original_res:
+            for point2D in pyimage.points2D:
+                point2D.xy = (point2D.xy - top_left) * resize_ratio
+
+        if shared_camera:
+            rescale_camera = False
+
+    return reconstruction
 
 
 def main():
@@ -584,8 +636,13 @@ def main():
 
         ba_options = pycolmap.BundleAdjustmentOptions()
         ba_options.refine_focal_length = True
-        ba_options.refine_principal_point = True
+        ba_options.refine_principal_point = False  # Fixed at image center to eliminate gauge ambiguity and prevent singular Cholesky breakdown
         ba_options.refine_extra_params = (args.lens_model == "brown")
+
+        # Use Schur complement reduction solver to guarantee positive-definite convergence
+        LinearSolverType = type(ba_options.ceres.solver_options.linear_solver_type)
+        ba_options.ceres.auto_select_solver_type = False
+        ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.DENSE_SCHUR if num_frames <= 100 else LinearSolverType.SPARSE_SCHUR
 
         if is_ultra:
             ba_options.ceres.loss_function_type = pycolmap.LossFunctionType.CAUCHY
@@ -619,7 +676,6 @@ def main():
             pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=False, camera_type="PINHOLE"
         )
 
-    from demo_colmap import rename_colmap_recons_and_rescale_camera
     base_names = [os.path.basename(p) for p in image_paths]
     reconstruction = rename_colmap_recons_and_rescale_camera(
         reconstruction, base_names, original_coords.cpu().numpy(), img_size=reconstruction_res, shift_point2d_to_original_res=True, shared_camera=args.shared_camera if use_ba else False
@@ -729,10 +785,21 @@ def main():
 
     if args.view:
         print("\nStarting Interactive 3D Viewer...")
-        from demo_viser import main as viser_main
-        # Launch viser
-        sys.argv = [sys.argv[0], "--image_folder", scan_dir, "--port", str(args.port)]
-        viser_main()
+        try:
+            from demo_viser import main as viser_main
+            sys.argv = [sys.argv[0], "--image_folder", scan_dir, "--port", str(args.port)]
+            viser_main()
+        except Exception as e:
+            print(f"\n[WARNING] Could not launch 3D viewer: {e}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print("\n" + "=" * 70)
+        print("[CRITICAL EXCEPTION] Alignment process encountered an error:")
+        print("=" * 70)
+        traceback.print_exc()
+        print("=" * 70 + "\n")
+        sys.exit(1)

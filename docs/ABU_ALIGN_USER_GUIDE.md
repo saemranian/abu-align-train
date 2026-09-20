@@ -1,7 +1,7 @@
 # Abu Align: Complete User Guide & Fundamentals Manual
 
 **Software Name:** Abu Align (Neural Photogrammetry & Self-Calibration Engine)  
-**Version:** v0.0.0.4  
+**Version:** v0.0.0.5  
 **Target Applications:** RealityScan / RealityCapture, Postshot (3D Gaussian Splatting), COLMAP, Nerfstudio  
 **Author / Maintainer:** saemranian  
 
@@ -219,3 +219,12 @@ Click **📁 Open Results** to access the export packages:
 
 ### Q3: Why is $k_3$ and $k_4$ kept at 0?
 **Answer:** In photogrammetry, higher-order radial coefficients ($k_3, k_4$) are high-degree polynomials ($r^6, r^8$). Unless you have hundreds of photos with targets covering every millimeter of the extreme sensor corners, estimating $k_3$ and $k_4$ causes Runge's polynomial oscillation phenomenon. This produces unnatural warping, stretching, and distortion blowup at the edges of the frame in Postshot. Locking them to zero while calibrating $k_1, k_2, t_1, t_2$ gives physically stable results.
+
+### Q4: Where are the log files stored, and how can I access them?
+**Answer:** Starting in **Version 0.0.0.5**, Abu Align has a persistent logging subsystem. Every alignment session automatically writes an individual timestamped log file (`abu_align_YYYY-MM-DD_HH-MM-SS.log`) and updates `abu_align_latest.log` inside the `Abu_Align/logs/` directory. You can access logs directly in multiple ways:
+1. Click the **📁 Logs** button on the main toolbar.
+2. Click **File → Open Logs Folder** from the top menu.
+3. Click **📄 View Latest Log** directly above the console to inspect the latest run in Notepad.
+
+### Q5: What caused the "Eigen failure: Unable to perform dense Cholesky factorization" and how was it resolved?
+**Answer:** In Bundle Adjustment, when the principal point $(c_x, c_y)$ is refined simultaneously with tangential decentering distortion terms $(t_1, t_2)$, strong mathematical correlation arises between optical center shift and prism tilt. This creates an ill-conditioned, near-singular normal equations matrix in Levenberg-Marquardt optimization. In **v0.0.0.5**, the principal point is locked to the physical sensor center (`width / 2`, `height / 2`), and the optimizer is configured to use Schur Complement linear solvers (`DENSE_SCHUR` and `SPARSE_SCHUR`), guaranteeing strict positive-definite numerical convergence without factorization failure.
