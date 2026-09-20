@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.3
+Abu Align Version 0.0.0.4
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -13,6 +13,12 @@ import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
+
+# Ensure parent directory is on sys.path so vggt and dependencies can be imported from any subfolder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+for parent in [current_dir, os.path.dirname(current_dir), os.path.dirname(os.path.dirname(current_dir))]:
+    if parent and parent not in sys.path:
+        sys.path.insert(0, parent)
 
 # Enable High-DPI Awareness on Windows so the UI renders crisp and sharp without bilinear blur
 if sys.platform == "win32":
@@ -109,9 +115,9 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.3 (Neural Photogrammetry)")
-        self.root.geometry("980x760")
-        self.root.minsize(860, 640)
+        self.root.title("Abu Align - Version 0.0.0.4 (Neural Photogrammetry)")
+        self.root.geometry("1000x780")
+        self.root.minsize(880, 660)
 
         # Style configuration (Modern Dark Palette)
         self.bg_dark = "#181825"
@@ -126,14 +132,46 @@ class AbuAlignApp:
         self.root.configure(bg=self.bg_dark)
 
         self.conda_python = r"C:\Users\USer\miniconda3\envs\vggt\python.exe"
-        self.cli_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_cli.py")
+        cli_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_cli.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "align_cli.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "align_cli.py"),
+        ]
+        self.cli_script = cli_candidates[0]
+        for c in cli_candidates:
+            if os.path.isfile(c):
+                self.cli_script = c
+                break
         self.worker_process = None
         self.output_queue = queue.Queue()
         self.is_running = False
         self.latest_output_dir = None
 
+        self._build_menu()
         self._build_ui()
         self._check_queue()
+
+    def _build_menu(self):
+        menubar = tk.Menu(self.root, bg=self.panel_bg, fg=self.text_primary)
+        self.root.config(menu=menubar)
+
+        # File Menu
+        file_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
+        file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+
+        # Help Menu
+        help_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="Help & Documentation", menu=help_menu)
+        help_menu.add_command(label="📖 User Guide & Fundamentals Manual", command=self._open_user_guide)
+        help_menu.add_command(label="📐 AI vs Traditional Architecture Whitepaper", command=self._open_architecture_doc)
+        help_menu.add_separator()
+        help_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
+        help_menu.add_separator()
+        help_menu.add_command(label="ℹ️ About Abu Align", command=self._show_about_box)
 
     def _build_ui(self):
         # 1. Header Banner
@@ -151,7 +189,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.3",
+            text="v0.0.0.4",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -168,6 +206,23 @@ class AbuAlignApp:
             bg=self.panel_bg
         )
         subtitle_lbl.pack(side=tk.LEFT, padx=10, pady=12)
+
+        # Header Help & User Guide Button
+        help_btn = tk.Button(
+            header,
+            text="📖 User Guide & Manual",
+            font=("Segoe UI", 9, "bold"),
+            bg="#29293d",
+            fg="#f8fafc",
+            activebackground=self.accent_blue,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            command=self._open_user_guide
+        )
+        help_btn.pack(side=tk.RIGHT, padx=16, pady=12)
+        ToolTip(help_btn, "Open Abu Align User Guide & Fundamentals Manual")
 
         # 2. Main Content Notebook / Grid
         content_frame = tk.Frame(self.root, bg=self.bg_dark)
@@ -243,7 +298,7 @@ class AbuAlignApp:
         sub_row.pack(anchor="w", pady=(4, 0))
         tk.Label(sub_row, text="Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
         self.res_var = tk.StringVar(value="1024")
-        res_cb = ttk.Combobox(sub_row, textvariable=self.res_var, values=["1024", "1536", "2048"], state="readonly", width=6)
+        res_cb = ttk.Combobox(sub_row, textvariable=self.res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
         res_cb.pack(side=tk.LEFT, padx=(2, 6))
 
         tk.Label(sub_row, text="Stride:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
@@ -357,7 +412,7 @@ class AbuAlignApp:
 
         ToolTip(rb_omega, "VGGT-Omega Engine (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
         ToolTip(rb_vggt, "VGGT Standard 1B Engine: Original 1.18B-parameter vision foundation model. Predicts 3D point maps and camera poses in a single forward pass.")
-        ToolTip(res_cb, "Canvas Resolution: Input image resize resolution for neural inference. 1024 is fast and memory-efficient; 1536/2048 offers finer spatial detail on 40MP-60MP cameras.")
+        ToolTip(res_cb, "Canvas Resolution: 512 is fastest for preview/low VRAM; 1024/1536/2048 offers finer spatial detail for feature tracking on 40MP-60MP cameras.")
         ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
 
         ToolTip(rb_q1, "Preview (100K pts, Conf >= 2.2): High neural confidence filter. Fastest point cloud for quick visual checks.")
@@ -399,7 +454,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align Version 0.0.0.3 Ready.\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+        self._log("Abu Align Version 0.0.0.4 Ready.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
 
     def _browse_dataset(self):
         folder = filedialog.askdirectory(initialdir=self.dataset_var.get())
@@ -520,6 +575,46 @@ class AbuAlignApp:
             return
         cmd = [self.conda_python, "-u", self.cli_script, "--input", dataset, "--view"]
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
+
+    def _open_user_guide(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(base_dir, "docs", "ABU_ALIGN_USER_GUIDE.md"),
+            os.path.join(os.path.dirname(base_dir), "docs", "ABU_ALIGN_USER_GUIDE.md"),
+            os.path.join(base_dir, "ABU_ALIGN_USER_GUIDE.md"),
+        ]
+        for p in possible_paths:
+            if os.path.isfile(p):
+                os.startfile(p)
+                return
+        messagebox.showinfo("User Guide", "User Guide document (ABU_ALIGN_USER_GUIDE.md) not found.")
+
+    def _open_architecture_doc(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(base_dir, "docs", "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+            os.path.join(os.path.dirname(base_dir), "docs", "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+            os.path.join(base_dir, "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+        ]
+        for p in possible_paths:
+            if os.path.isfile(p):
+                os.startfile(p)
+                return
+        messagebox.showinfo("Architecture Whitepaper", "Architecture document (AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md) not found.")
+
+    def _show_about_box(self):
+        about_text = (
+            "Abu Align - Version 0.0.0.4\n"
+            "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
+            "• Engine: VGGT & VGGT-Omega Foundation Models\n"
+            "• Optimizer: Google Ceres Sub-Pixel Bundle Adjustment\n"
+            "• Precision: 0.35 px Reprojection Error (Sony 60.2 MP Test)\n"
+            "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
+            "• Scalability: Smart Auto-Chunking & VRAM Guard (1,000+ Photos)\n\n"
+            "Target Integrations: RealityScan / RealityCapture, Postshot (3DGS), COLMAP\n"
+            "Developer: saemranian"
+        )
+        messagebox.showinfo("About Abu Align", about_text)
 
 def main():
     root = tk.Tk()

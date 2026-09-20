@@ -1,7 +1,7 @@
 # Abu Align: Complete User Guide & Fundamentals Manual
 
 **Software Name:** Abu Align (Neural Photogrammetry & Self-Calibration Engine)  
-**Version:** v0.0.0.3  
+**Version:** v0.0.0.4  
 **Target Applications:** RealityScan / RealityCapture, Postshot (3D Gaussian Splatting), COLMAP, Nerfstudio  
 **Author / Maintainer:** saemranian  
 
@@ -37,18 +37,23 @@ Pure deep learning poses suffer from small floating-point drift ($\sim 2\text{--
 Abu Align solves this through a **Hybrid Architecture**:
 * **Deep Learning (VGGT):** Instantly reconstructs global camera layout, surface depth, and wide-baseline feature tracks.
 * **Google Ceres Solver (Bundle Adjustment):** Solves non-linear Levenberg-Marquardt least squares using a **Cauchy robust loss function** and a **two-stage polish pass**, locking camera centers to **0.35 sub-pixel precision** and calculating physical lens distortion ($k_1, k_2, t_1, t_2$).
+* **Smart Auto-Chunking (Memory Guard):** For datasets with hundreds or thousands of photos, Abu Align automatically divides processing into overlapping 32-frame batches with 8-frame anchors, aligning them via the Umeyama Sim(3) algorithm. GPU VRAM remains capped under 6GB regardless of dataset size.
 
 ---
 
-## 2. User Interface & Interactive Tooltip System
+## 2. User Interface, Top Menu & Interactive Tooltip System
 
-Starting in **Version 0.0.0.3**, Abu Align features native **High-DPI Awareness** (crisp vector rendering on 1080p, 1440p, and 4K displays) and an **Interactive Hover Tooltip System**. 
-
-Hovering your mouse over any button, radio option, or dropdown displays an immediate contextual popup explaining what that setting does and when to choose it.
+Starting in **Version 0.0.0.4**, Abu Align features:
+* **Top Menu Bar**: Accessible `File` and `Help & Documentation` menus with instant access to user guides, architecture whitepapers, 3D viewer, and about dialog.
+* **Header Quick-Help Button**: `📖 User Guide & Manual` button for one-click access.
+* **Native High-DPI Awareness**: Crisp vector font rendering without Windows bitmap stretching blur on 1080p, 1440p, and 4K displays.
+* **Interactive Hover Tooltips**: Hovering over any control displays an instant dark-mode guide with recommended usage.
 
 ```
 +---------------------------------------------------------------------------------------------------+
-|  ABU ALIGN   [ v0.0.0.3 ]  |  Neural Photogrammetry & Fast Lens Self-Calibration Engine           |
+| File   Help & Documentation                                                                       |
++---------------------------------------------------------------------------------------------------+
+|  ABU ALIGN   [ v0.0.0.4 ]  |  Neural Photogrammetry Engine          [ 📖 User Guide & Manual ]    |
 +---------------------------------------------------------------------------------------------------+
 |  Alignment Configuration                                                                          |
 |  Dataset Folder: [ C:\...\Photos                             ]  [ Browse... ]                     |
@@ -57,7 +62,8 @@ Hovering your mouse over any button, radio option, or dropdown displays an immed
 |  (o) VGGT-Omega          ( ) Preview (100K)       ( ) Feedforward (~25s)   ( ) Pinhole (Zero dist)|
 |  ( ) VGGT Standard 1B    (o) High Quality (300K)  ( ) Standard Ceres BA    (o) Brown Calibration  |
 |  Res: [1024] Stride:[1]  ( ) Ultra Dense (800K)   (o) Ultra Sub-Pixel BA*       (k1-k2, t1-t2)    |
-|                          ( ) Max Grade (1.5M)         (Cauchy + Polish)                           |
+|  (512/1024/1536/2048)    ( ) Max Grade (1.5M)         (Cauchy + Polish)                           |
++---------------------------------------------------------------------------------------------------+
 +---------------------------------------------------------------------------------------------------+
 |  [ ▶ START ALIGNMENT ]    [ ■ STOP ]    [ 📁 Open Results ]    [ 🌐 3D Browser Viewer ]           |
 +---------------------------------------------------------------------------------------------------+

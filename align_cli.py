@@ -85,6 +85,32 @@ def print_progress_bar(current, total, prefix="Progress", stage="", length=30, s
     except Exception:
         pass
 
+def umeyama_alignment(src, dst):
+    """
+    Computes optimal Sim(3) transformation (s, R, t) such that:
+    dst ~= s * R @ src + t
+    using Umeyama's SVD algorithm.
+    """
+    n, m = src.shape
+    mu_src = np.mean(src, axis=0)
+    mu_dst = np.mean(dst, axis=0)
+    
+    src_c = src - mu_src
+    dst_c = dst - mu_dst
+    
+    var_src = np.mean(np.sum(src_c**2, axis=1))
+    H = (dst_c.T @ src_c) / n
+    U, D, Vt = np.linalg.svd(H)
+    
+    S = np.eye(m)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        S[m - 1, m - 1] = -1
+        
+    R = U @ S @ Vt
+    s = (1.0 / max(var_src, 1e-8)) * np.trace(np.diag(D) @ S)
+    t = mu_dst - s * (R @ mu_src)
+    return s, R, t
+
 def export_realitycapture_csv(reconstruction, output_dir):
     csv_path = os.path.join(output_dir, "cameras.csv")
     rows = ["#name,x,y,alt,yaw,pitch,roll,f_35mm,px_norm,py_norm,k1,k2,k3,k4,t1,t2\n"]
@@ -174,6 +200,8 @@ def main():
     parser.add_argument("--conf_thresh", type=float, default=1.8, help="Depth confidence threshold (default: 1.8; lower=denser point cloud)")
     parser.add_argument("--max_points", type=int, default=300000, help="Maximum number of points in exported point cloud (default: 300000)")
     parser.add_argument("--load_res", type=int, default=1024, help="Image load resolution (default: 1024)")
+    parser.add_argument("--chunk_size", type=int, default=32, help="Chunk size for auto-chunking large datasets (default: 32)")
+    parser.add_argument("--auto_chunk", action="store_true", default=True, help="Automatically chunk large datasets (> 48 photos) to prevent VRAM OOM")
     parser.add_argument("--use_ba", action="store_true", help="Enable multi-view feature tracking and PyCeres Bundle Adjustment")
     parser.add_argument("--align_mode", type=str, choices=["none", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
     parser.add_argument("--lens_model", type=str, choices=["pinhole", "brown"], default="brown", help="Lens distortion model: 'pinhole' (zero distortion) or 'brown' (calibrates physical k1, k2, t1, t2)")
@@ -307,63 +335,180 @@ def main():
     import trimesh
 
     # -------------------------------------------------------------
-    # Stage 3: Image Preprocessing with Live Progress Bar
+    # Stage 3 & 4: Image Ingestion & Transformer 3D Inference
     # -------------------------------------------------------------
-    print("[3/5] Preprocessing & Center-Padding Images...")
     img_load_res = args.load_res
-
-    stage_start = time.time()
-    processed_images = []
-    original_coords = []
-    
-    for idx, path in enumerate(image_paths):
-        print_progress_bar(idx + 1, num_frames, prefix="Loading", stage="Resizing", start_time=stage_start)
-        single_tensor, single_coords = load_and_preprocess_images_square([path], target_size=img_load_res)
-        processed_images.append(single_tensor)
-        original_coords.append(single_coords)
-
-    print()
-    images = torch.cat(processed_images, dim=0).to(device)
-    original_coords = torch.cat(original_coords, dim=0).to(device)
-    print(f"      * Batch Shape:   {tuple(images.shape)}")
-    print()
-
-    # -------------------------------------------------------------
-    # Stage 4: Transformer 3D Inference
-    # -------------------------------------------------------------
-    print(f"[4/5] Running Transformer 3D Inference ({engine.upper()}) on RTX 4090...")
     inf_start = time.time()
-    print_progress_bar(1, 3, prefix="Inference", stage=f"Interpolating ({vggt_res}x{vggt_res})", start_time=inf_start)
-    resized_images = F.interpolate(images, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
 
-    print_progress_bar(2, 3, prefix="Inference", stage="Cross-Frame Attention", start_time=inf_start)
-    with torch.no_grad():
-        if engine == "vggt_omega":
-            from vggt_omega.utils.pose_enc import encoding_to_camera
-            with torch.inference_mode():
-                predictions = model(resized_images)
-            extrinsic, intrinsic = encoding_to_camera(predictions["pose_enc"], predictions["images"].shape[-2:])
-            depth_map = predictions["depth"]
-            depth_conf = predictions["depth_conf"]
-        else:
-            with torch.cuda.amp.autocast(dtype=dtype):
-                batch_input = resized_images.unsqueeze(0)
-                agg_tokens, ps_idx = model.aggregator(batch_input)
-                pose_enc = model.camera_head(agg_tokens)[-1]
-                extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, batch_input.shape[-2:])
-                depth_map, depth_conf = model.depth_head(agg_tokens, batch_input, ps_idx)
+    if num_frames > 48 and args.auto_chunk:
+        chunk_size = min(args.chunk_size, 32)
+        overlap = 8
+        step = max(chunk_size - overlap, 1)
 
-    print_progress_bar(3, 3, prefix="Inference", stage="Unprojecting Depth to 3D", start_time=inf_start)
-    extrinsic = extrinsic.squeeze(0).float().cpu().numpy()
-    intrinsic = intrinsic.squeeze(0).float().cpu().numpy()
-    depth_map = depth_map.squeeze(0).float().cpu().numpy()
-    depth_conf = depth_conf.squeeze(0).float().cpu().numpy()
+        print("\n" + "="*70)
+        print(f" [SMART VRAM GUARD] Large dataset detected: {num_frames} frames (> 48).")
+        print(f"                   Auto-chunking into {chunk_size}-frame windows with {overlap}-frame anchors.")
+        print(f"                   VRAM usage safely capped regardless of dataset size (1,000+ photos).")
+        print("="*70 + "\n")
 
-    points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
+        chunk_ranges = []
+        start_idx = 0
+        while start_idx < num_frames:
+            end_idx = min(start_idx + chunk_size, num_frames)
+            chunk_ranges.append((start_idx, end_idx))
+            if end_idx == num_frames:
+                break
+            start_idx += step
+
+        all_extrinsics = []
+        all_intrinsics = []
+        all_depth_maps = []
+        all_depth_confs = []
+        all_images = []
+        all_orig_coords = []
+        prev_chunk_centers = None
+        prev_overlap_start = 0
+
+        for c_idx, (c_start, c_end) in enumerate(chunk_ranges):
+            c_len = c_end - c_start
+            print(f"   --> Batch [{c_idx+1}/{len(chunk_ranges)}]: Frames {c_start+1} to {c_end} ({c_len} frames)...")
+
+            c_paths = image_paths[c_start:c_end]
+            c_tensors = []
+            c_coords = []
+            for p in c_paths:
+                st, sc = load_and_preprocess_images_square([p], target_size=img_load_res)
+                c_tensors.append(st)
+                c_coords.append(sc)
+            c_img = torch.cat(c_tensors, dim=0).to(device)
+            c_coord = torch.cat(c_coords, dim=0).to(device)
+
+            c_resized = F.interpolate(c_img, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
+
+            with torch.no_grad():
+                if engine == "vggt_omega":
+                    from vggt_omega.utils.pose_enc import encoding_to_camera
+                    with torch.inference_mode():
+                        c_pred = model(c_resized)
+                    c_ext, c_int = encoding_to_camera(c_pred["pose_enc"], c_pred["images"].shape[-2:])
+                    c_depth = c_pred["depth"]
+                    c_conf = c_pred["depth_conf"]
+                else:
+                    with torch.cuda.amp.autocast(dtype=dtype):
+                        c_batch = c_resized.unsqueeze(0)
+                        c_tokens, c_ps = model.aggregator(c_batch)
+                        c_penc = model.camera_head(c_tokens)[-1]
+                        c_ext, c_int = pose_encoding_to_extri_intri(c_penc, c_batch.shape[-2:])
+                        c_depth, c_conf = model.depth_head(c_tokens, c_batch, c_ps)
+
+            c_ext = c_ext.squeeze(0).float().cpu().numpy()
+            c_int = c_int.squeeze(0).float().cpu().numpy()
+            c_depth = c_depth.squeeze(0).float().cpu().numpy()
+            c_conf = c_conf.squeeze(0).float().cpu().numpy()
+
+            c_centers = np.zeros((c_len, 3))
+            for i in range(c_len):
+                c_centers[i] = - c_ext[i, :3, :3].T @ c_ext[i, :3, 3]
+
+            if c_idx == 0:
+                all_extrinsics.append(c_ext)
+                all_intrinsics.append(c_int)
+                all_depth_maps.append(c_depth)
+                all_depth_confs.append(c_conf)
+                all_images.append(c_img.cpu())
+                all_orig_coords.append(c_coord.cpu())
+                prev_chunk_centers = c_centers
+                prev_overlap_start = c_len - overlap
+            else:
+                actual_overlap = min(overlap, prev_chunk_centers.shape[0], c_len)
+                src_overlap = c_centers[:actual_overlap]
+                dst_overlap = prev_chunk_centers[-actual_overlap:]
+
+                s_rel, R_rel, t_rel = umeyama_alignment(src_overlap, dst_overlap)
+
+                for i in range(c_len):
+                    R_c = c_ext[i, :3, :3]
+                    C_w = c_centers[i]
+                    C_w_new = s_rel * (R_rel @ C_w) + t_rel
+                    R_c_new = R_c @ R_rel.T
+                    t_c_new = - R_c_new @ C_w_new
+                    c_ext[i, :3, :3] = R_c_new
+                    c_ext[i, :3, 3] = t_c_new
+                    c_centers[i] = C_w_new
+
+                c_depth = c_depth * s_rel
+
+                all_extrinsics.append(c_ext[actual_overlap:])
+                all_intrinsics.append(c_int[actual_overlap:])
+                all_depth_maps.append(c_depth[actual_overlap:])
+                all_depth_confs.append(c_conf[actual_overlap:])
+                all_images.append(c_img[actual_overlap:].cpu())
+                all_orig_coords.append(c_coord[actual_overlap:].cpu())
+
+                prev_chunk_centers = c_centers
+                prev_overlap_start = c_len - actual_overlap
+
+            del c_img, c_coord, c_resized
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        extrinsic = np.concatenate(all_extrinsics, axis=0)
+        intrinsic = np.concatenate(all_intrinsics, axis=0)
+        depth_map = np.concatenate(all_depth_maps, axis=0)
+        depth_conf = np.concatenate(all_depth_confs, axis=0)
+        images = torch.cat(all_images, dim=0).to(device)
+        original_coords = torch.cat(all_orig_coords, dim=0).to(device)
+        points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
+
+    else:
+        # Standard Single-Pass Inference for small/medium datasets (<= 48 frames)
+        print("[3/5] Preprocessing & Center-Padding Images...")
+        stage_start = time.time()
+        processed_images = []
+        original_coords = []
+        for idx, path in enumerate(image_paths):
+            print_progress_bar(idx + 1, num_frames, prefix="Loading", stage="Resizing", start_time=stage_start)
+            single_tensor, single_coords = load_and_preprocess_images_square([path], target_size=img_load_res)
+            processed_images.append(single_tensor)
+            original_coords.append(single_coords)
+
+        print()
+        images = torch.cat(processed_images, dim=0).to(device)
+        original_coords = torch.cat(original_coords, dim=0).to(device)
+        print(f"      * Batch Shape:   {tuple(images.shape)}")
+        print()
+
+        print(f"[4/5] Running Transformer 3D Inference ({engine.upper()})...")
+        print_progress_bar(1, 3, prefix="Inference", stage=f"Interpolating ({vggt_res}x{vggt_res})", start_time=inf_start)
+        resized_images = F.interpolate(images, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
+
+        print_progress_bar(2, 3, prefix="Inference", stage="Cross-Frame Attention", start_time=inf_start)
+        with torch.no_grad():
+            if engine == "vggt_omega":
+                from vggt_omega.utils.pose_enc import encoding_to_camera
+                with torch.inference_mode():
+                    predictions = model(resized_images)
+                extrinsic, intrinsic = encoding_to_camera(predictions["pose_enc"], predictions["images"].shape[-2:])
+                depth_map = predictions["depth"]
+                depth_conf = predictions["depth_conf"]
+            else:
+                with torch.cuda.amp.autocast(dtype=dtype):
+                    batch_input = resized_images.unsqueeze(0)
+                    agg_tokens, ps_idx = model.aggregator(batch_input)
+                    pose_enc = model.camera_head(agg_tokens)[-1]
+                    extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, batch_input.shape[-2:])
+                    depth_map, depth_conf = model.depth_head(agg_tokens, batch_input, ps_idx)
+
+        print_progress_bar(3, 3, prefix="Inference", stage="Unprojecting Depth to 3D", start_time=inf_start)
+        extrinsic = extrinsic.squeeze(0).float().cpu().numpy()
+        intrinsic = intrinsic.squeeze(0).float().cpu().numpy()
+        depth_map = depth_map.squeeze(0).float().cpu().numpy()
+        depth_conf = depth_conf.squeeze(0).float().cpu().numpy()
+        points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
+
     inf_elapsed = time.time() - inf_start
     print()
     print(f"      * Inference Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
-    print()
     print()
 
     # -------------------------------------------------------------
