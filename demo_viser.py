@@ -353,8 +353,16 @@ def main():
 
     # Use the provided image folder path
     print(f"Loading images from {args.image_folder}...")
-    image_names = glob.glob(os.path.join(args.image_folder, "*"))
-    print(f"Found {len(image_names)} images")
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    image_names = [
+        f for f in glob.glob(os.path.join(args.image_folder, "*"))
+        if os.path.isfile(f) and os.path.splitext(f)[1].lower() in valid_exts
+    ]
+    image_names.sort()
+    print(f"Found {len(image_names)} valid photos")
+    if len(image_names) == 0:
+        print(f"[ERROR] No valid JPG/PNG photos found in: {args.image_folder}")
+        return
 
     images = load_and_preprocess_images(image_names).to(device)
     print(f"Preprocessed images shape: {images.shape}")
@@ -384,7 +392,12 @@ def main():
     if args.mask_sky:
         print("Sky segmentation enabled - will filter out sky points")
 
-    print("Starting viser visualization...")
+    print(f"Starting viser visualization on http://localhost:{args.port}...")
+    try:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{args.port}")
+    except Exception:
+        pass
 
     viser_server = viser_wrapper(
         predictions,

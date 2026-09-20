@@ -151,18 +151,18 @@ def export_realitycapture_csv(reconstruction, output_dir):
         # Heading / Yaw: azimuth angle in XY plane from North (+Y) towards East (+X) in [0, 360)
         yaw = np.degrees(np.arctan2(fwd_rc[0], fwd_rc[1])) % 360.0
         
-        # Pitch: angle from Nadir (-Z): 0=nadir (down), 90=horizontal, 180=zenith (up)
-        pitch = np.degrees(np.arccos(np.clip(-fwd_rc[2], -1.0, 1.0)))
+        # Pitch: elevation angle from horizontal plane: -90=nadir (down), 0=horizontal, +90=zenith (up)
+        pitch = np.degrees(np.arcsin(np.clip(fwd_rc[2], -1.0, 1.0)))
         
         # Reference horizontal right vector perpendicular to heading:
         yaw_rad = np.radians(yaw)
-        w0 = np.array([np.cos(yaw_rad), -np.sin(yaw_rad), 0.0])
-        w0_norm = np.linalg.norm(w0)
-        if w0_norm > 1e-6:
-            w0 /= w0_norm
-            u0 = np.cross(w0, fwd_rc)
+        right = np.array([np.cos(yaw_rad), -np.sin(yaw_rad), 0.0])
+        right_norm = np.linalg.norm(right)
+        if right_norm > 1e-6:
+            right /= right_norm
+            u0 = np.cross(right, fwd_rc)
             u0 /= np.linalg.norm(u0)
-            roll = np.degrees(np.arctan2(np.dot(up_rc, w0), np.dot(up_rc, u0)))
+            roll = np.degrees(np.arctan2(np.dot(up_rc, right), np.dot(up_rc, u0)))
         else:
             roll = 0.0
         
@@ -193,6 +193,63 @@ def export_realitycapture_csv(reconstruction, output_dir):
     with open(csv_path, "w", encoding="utf-8") as f:
         f.writelines(rows)
     return csv_path
+
+
+def export_transforms_json(reconstruction, output_dir):
+    """
+    Exports camera poses and intrinsics in NeRF / 3D Gaussian Splatting transforms.json format.
+    Postshot, Nerfstudio, and standard 3DGS pipelines load this natively with zero Euler angle ambiguity.
+    """
+    import json
+    
+    first_cam = next(iter(reconstruction.cameras.values()))
+    w, h = first_cam.width, first_cam.height
+    fx, fy, cx, cy = first_cam.params[0], first_cam.params[1], first_cam.params[2], first_cam.params[3]
+    
+    transforms_data = {
+        "camera_model": first_cam.model_name,
+        "w": int(w),
+        "h": int(h),
+        "fl_x": float(fx),
+        "fl_y": float(fy),
+        "cx": float(cx),
+        "cy": float(cy),
+        "frames": []
+    }
+    
+    if first_cam.model_name in ["OPENCV", "FULL_OPENCV"] and len(first_cam.params) >= 8:
+        transforms_data["k1"] = float(first_cam.params[4])
+        transforms_data["k2"] = float(first_cam.params[5])
+        transforms_data["p1"] = float(first_cam.params[6])
+        transforms_data["p2"] = float(first_cam.params[7])
+    
+    for img_id, img in sorted(reconstruction.images.items()):
+        cfw = img.cam_from_world() if callable(img.cam_from_world) else img.cam_from_world
+        R_c = cfw.rotation.matrix()
+        t_c = cfw.translation
+        
+        # Camera center in COLMAP world: C = - R_c.T @ t_c
+        C_c = - R_c.T @ t_c
+        
+        # Conversion from COLMAP camera frame (+X right, +Y down, +Z fwd)
+        # to OpenGL / NeRF camera frame (+X right, +Y up, +Z back):
+        # R_nerf_c2w = R_c.T @ diag(1, -1, -1)
+        R_nerf_c2w = R_c.T @ np.diag([1.0, -1.0, -1.0])
+        
+        c2w = np.eye(4)
+        c2w[:3, :3] = R_nerf_c2w
+        c2w[:3, 3] = C_c
+        
+        frame_dict = {
+            "file_path": img.name,
+            "transform_matrix": c2w.tolist()
+        }
+        transforms_data["frames"].append(frame_dict)
+        
+    transforms_path = os.path.join(output_dir, "transforms.json")
+    with open(transforms_path, "w", encoding="utf-8") as f:
+        json.dump(transforms_data, f, indent=2)
+    return transforms_path
 
 
 def rename_colmap_recons_and_rescale_camera(
@@ -619,8 +676,16 @@ def main():
         intrinsic_ba[:, :2, :] *= scale
         track_mask = pred_vis_scores > track_vis_thresh
 
+        # Scale reprojection error threshold dynamically with canvas resolution
+        scale_res = img_load_res / 512.0
+        effective_reproj_thresh = reproj_err_thresh * scale_res
+
         cam_model_type = "OPENCV" if args.lens_model == "brown" else "PINHOLE"
-        print(f"      * Initializing PyCOLMAP with {cam_model_type} camera model (shared_camera={args.shared_camera}, max_reproj_error={reproj_err_thresh}px)...")
+        print(f"      * Initializing PyCOLMAP with {cam_model_type} camera model (shared_camera={args.shared_camera}, max_reproj_error={effective_reproj_thresh:.1f}px)...")
+        
+        # Adaptive min inliers per frame based on track distribution to prevent dropping non-contiguous frames
+        min_inliers = max(8, min(24, int(track_mask.sum(1).min()))) if track_mask.ndim > 1 else 16
+
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
             points_3d_ba,
             extrinsic,
@@ -628,43 +693,75 @@ def main():
             pred_tracks,
             np.array(images.shape[-2:]),
             masks=track_mask,
-            max_reproj_error=reproj_err_thresh,
+            max_reproj_error=effective_reproj_thresh,
+            min_inlier_per_frame=min_inliers,
             shared_camera=args.shared_camera,
             camera_type=cam_model_type,
             points_rgb=points_rgb_ba,
         )
 
-        ba_options = pycolmap.BundleAdjustmentOptions()
-        ba_options.refine_focal_length = True
-        ba_options.refine_principal_point = False  # Fixed at image center to eliminate gauge ambiguity and prevent singular Cholesky breakdown
-        ba_options.refine_extra_params = (args.lens_model == "brown")
+        # Retry with relaxed threshold if initial strict gate was too tight for challenging viewpoints
+        if reconstruction is None or reconstruction.num_reg_images() < 2:
+            print(f"      * [RETRY] Relaxing track filtering threshold ({effective_reproj_thresh * 2.0:.1f}px) to register all views...")
+            reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
+                points_3d_ba,
+                extrinsic,
+                intrinsic_ba,
+                pred_tracks,
+                np.array(images.shape[-2:]),
+                masks=track_mask,
+                max_reproj_error=effective_reproj_thresh * 2.0,
+                min_inlier_per_frame=6,
+                shared_camera=args.shared_camera,
+                camera_type=cam_model_type,
+                points_rgb=points_rgb_ba,
+            )
 
-        # Use Schur complement reduction solver to guarantee positive-definite convergence
-        LinearSolverType = type(ba_options.ceres.solver_options.linear_solver_type)
-        ba_options.ceres.auto_select_solver_type = False
-        ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.DENSE_SCHUR if num_frames <= 100 else LinearSolverType.SPARSE_SCHUR
+        if reconstruction is not None and reconstruction.num_reg_images() >= 2:
+            ba_options = pycolmap.BundleAdjustmentOptions()
+            ba_options.refine_focal_length = True
+            ba_options.refine_principal_point = False  # Fixed at image center to eliminate gauge ambiguity
+            ba_options.refine_extra_params = (args.lens_model == "brown")
 
-        if is_ultra:
-            ba_options.ceres.loss_function_type = pycolmap.LossFunctionType.CAUCHY
-            ba_options.ceres.loss_function_scale = 1.0
+            # Use Schur complement reduction solver to guarantee positive-definite convergence
+            LinearSolverType = type(ba_options.ceres.solver_options.linear_solver_type)
+            ba_options.ceres.auto_select_solver_type = False
+            ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.DENSE_SCHUR if num_frames <= 100 else LinearSolverType.SPARSE_SCHUR
 
-        print(f"      * Optimizing camera alignment ({align_mode.upper()} PyCeres BA, robust_loss={'CAUCHY' if is_ultra else 'TRIVIAL'})...")
-        pycolmap.bundle_adjustment(reconstruction, ba_options)
+            if is_ultra:
+                ba_options.ceres.loss_function_type = pycolmap.LossFunctionType.CAUCHY
+                ba_options.ceres.loss_function_scale = 1.0
 
-        # In ultra mode, prune loose tie points and run a fine polish pass
-        if is_ultra:
-            reconstruction.update_point_3d_errors()
-            outliers_pruned = 0
-            for pid in list(reconstruction.points3D.keys()):
-                pt = reconstruction.points3D[pid]
-                if pt.error > 2.5 or len(pt.track.elements) < 3:
-                    reconstruction.delete_point3D(pid)
-                    outliers_pruned += 1
-            if outliers_pruned > 0:
-                print(f"      * Ultra Polish: Pruned {outliers_pruned:,} loose tie points (>2.5px error or <3 views). Running polish pass...")
-                pycolmap.bundle_adjustment(reconstruction, ba_options)
+            print(f"      * Optimizing camera alignment ({align_mode.upper()} PyCeres BA, robust_loss={'CAUCHY' if is_ultra else 'TRIVIAL'})...")
+            pycolmap.bundle_adjustment(reconstruction, ba_options)
 
-        reconstruction_res = img_load_res
+            # In ultra mode, prune loose tie points and run a fine polish pass
+            if is_ultra:
+                reconstruction.update_point_3d_errors()
+                outliers_pruned = 0
+                max_polish_error = 2.5 * scale_res
+                for pid in list(reconstruction.points3D.keys()):
+                    pt = reconstruction.points3D[pid]
+                    if pt.error > max_polish_error or len(pt.track.elements) < 3:
+                        reconstruction.delete_point3D(pid)
+                        outliers_pruned += 1
+                if outliers_pruned > 0:
+                    print(f"      * Ultra Polish: Pruned {outliers_pruned:,} loose tie points (>{max_polish_error:.1f}px error or <3 views). Running polish pass...")
+                    pycolmap.bundle_adjustment(reconstruction, ba_options)
+
+            reconstruction_res = img_load_res
+        else:
+            print("      * [FALLBACK] Insufficient multi-view tracks for Ceres BA; initializing robust feedforward geometry.")
+            points_xyf = create_pixel_coordinate_grid(N, H, W)
+            colmap_mask = randomly_limit_trues(conf_mask, min(max_pts, 100000))
+            pts_3d_colmap = points_3d[colmap_mask]
+            pts_xyf_colmap = points_xyf[colmap_mask]
+            pts_rgb_colmap = points_rgb[colmap_mask]
+
+            reconstruction = batch_np_matrix_to_pycolmap_wo_track(
+                pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=False, camera_type="PINHOLE"
+            )
+            reconstruction_res = vggt_res
     else:
         points_xyf = create_pixel_coordinate_grid(N, H, W)
         colmap_mask = randomly_limit_trues(conf_mask, min(max_pts, 100000))
@@ -675,6 +772,7 @@ def main():
         reconstruction = batch_np_matrix_to_pycolmap_wo_track(
             pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=False, camera_type="PINHOLE"
         )
+        reconstruction_res = vggt_res
 
     base_names = [os.path.basename(p) for p in image_paths]
     reconstruction = rename_colmap_recons_and_rescale_camera(
@@ -710,6 +808,8 @@ def main():
     os.makedirs(rc_dir, exist_ok=True)
     csv_file = export_realitycapture_csv(reconstruction, rc_dir)
     print(f"      * [Postshot / RealityCapture] Exported camera alignments to: {csv_file}")
+    transforms_file = export_transforms_json(reconstruction, rc_dir)
+    print(f"      * [Postshot / RealityCapture] Exported NeRF/3DGS poses to: {transforms_file}")
 
     # High-density colored point cloud (.ply) for Postshot & MeshLab (Transformed to RC Z-up space)
     dense_mask = randomly_limit_trues(conf_mask, max_pts)
@@ -769,6 +869,7 @@ def main():
         f"   |     \\-- points3D.bin / .txt  (Sparse tie points)",
         f"   |-- Postshot_RealityCapture/   (For Postshot training & RealityCapture)",
         f"   |     |-- cameras.csv          (RealityCapture camera alignment)",
+        f"   |     |-- transforms.json      (NeRF / 3DGS camera poses & intrinsics)",
         f"   |     \\-- points.ply           (Dense colored point cloud tie points)",
         f"   \\-- reconstruction_report.txt  (This summary file)",
         f" Total Runtime:        {int(total_time//60):02d}:{int(total_time%60):02d} ({total_time:.1f} seconds)",

@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.5
+Abu Align Version 0.0.0.6
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -115,7 +115,7 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.5 (Neural Photogrammetry)")
+        self.root.title("Abu Align - Version 0.0.0.6 (Neural Photogrammetry)")
         self.root.geometry("1020x800")
         self.root.minsize(880, 660)
 
@@ -194,7 +194,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.5",
+            text="v0.0.0.6",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -606,7 +606,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align v0.0.0.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align v0.0.0.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -701,8 +701,222 @@ class AbuAlignApp:
         if not os.path.isdir(dataset):
             messagebox.showerror("Error", "Please select a valid dataset folder first.")
             return
-        cmd = [self.conda_python, "-u", self.cli_script, "--input", dataset, "--view"]
+
+        # Locate fast_viewer.py
+        base_dirs = [
+            os.path.dirname(self.cli_script),
+            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ]
+        fast_viewer_script = None
+        for b in base_dirs:
+            candidate = os.path.join(b, "fast_viewer.py")
+            if os.path.isfile(candidate):
+                fast_viewer_script = candidate
+                break
+
+        if not fast_viewer_script:
+            messagebox.showerror("Error", "fast_viewer.py not found.")
+            return
+
+        target_arg = self.latest_output_dir if self.latest_output_dir and os.path.isdir(self.latest_output_dir) else dataset
+        cmd = [self.conda_python, fast_viewer_script, "--input", target_arg]
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
+
+    def _open_doc_window(self, title, doc_path):
+        if not os.path.isfile(doc_path):
+            messagebox.showerror("Error", f"Document file not found:\n{doc_path}")
+            return
+
+        doc_win = tk.Toplevel(self.root)
+        doc_win.title(f"Abu Align v0.0.0.6 - {title}")
+        doc_win.geometry("960x780")
+        doc_win.minsize(800, 550)
+        doc_win.configure(bg=self.bg_dark)
+
+        # Header toolbar
+        tb = tk.Frame(doc_win, bg=self.panel_bg, height=48, padx=12, pady=8)
+        tb.pack(fill=tk.X)
+
+        doc_title_lbl = tk.Label(
+            tb,
+            text=f"📖  {title}",
+            font=("Segoe UI", 11, "bold"),
+            fg=self.accent_blue,
+            bg=self.panel_bg
+        )
+        doc_title_lbl.pack(side=tk.LEFT, padx=(4, 16))
+
+        # Search bar
+        search_lbl = tk.Label(tb, text="🔍 Find:", font=("Segoe UI", 9), fg=self.text_secondary, bg=self.panel_bg)
+        search_lbl.pack(side=tk.LEFT, padx=(4, 2))
+
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            tb,
+            textvariable=search_var,
+            font=("Segoe UI", 9),
+            bg="#2a2a3e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief=tk.FLAT,
+            width=22
+        )
+        search_entry.pack(side=tk.LEFT, padx=4, ipady=3)
+
+        match_lbl = tk.Label(tb, text="", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg)
+        match_lbl.pack(side=tk.LEFT, padx=4)
+
+        find_state = {"matches": [], "current_idx": -1}
+
+        def do_search(forward=True):
+            query = search_var.get().strip()
+            text_widget.tag_remove("search_hl", "1.0", tk.END)
+            text_widget.tag_remove("search_current", "1.0", tk.END)
+            find_state["matches"] = []
+
+            if not query:
+                match_lbl.config(text="")
+                return
+
+            start_idx = "1.0"
+            while True:
+                pos = text_widget.search(query, start_idx, stopindex=tk.END, nocase=True)
+                if not pos:
+                    break
+                end_pos = f"{pos}+{len(query)}c"
+                text_widget.tag_add("search_hl", pos, end_pos)
+                find_state["matches"].append((pos, end_pos))
+                start_idx = end_pos
+
+            total = len(find_state["matches"])
+            if total == 0:
+                match_lbl.config(text="No matches", fg=self.accent_red)
+                return
+
+            if forward:
+                find_state["current_idx"] = (find_state["current_idx"] + 1) % total
+            else:
+                find_state["current_idx"] = (find_state["current_idx"] - 1) % total
+
+            cur = find_state["current_idx"]
+            match_lbl.config(text=f"{cur + 1}/{total}", fg=self.accent_green)
+
+            cur_start, cur_end = find_state["matches"][cur]
+            text_widget.tag_add("search_current", cur_start, cur_end)
+            text_widget.see(cur_start)
+
+        find_next_btn = tk.Button(
+            tb,
+            text="▼ Next",
+            font=("Segoe UI", 8),
+            bg="#2a2a3e",
+            fg="#f8fafc",
+            relief=tk.FLAT,
+            padx=6,
+            pady=1,
+            command=lambda: do_search(True)
+        )
+        find_next_btn.pack(side=tk.LEFT, padx=2)
+
+        find_prev_btn = tk.Button(
+            tb,
+            text="▲ Prev",
+            font=("Segoe UI", 8),
+            bg="#2a2a3e",
+            fg="#f8fafc",
+            relief=tk.FLAT,
+            padx=6,
+            pady=1,
+            command=lambda: do_search(False)
+        )
+        find_prev_btn.pack(side=tk.LEFT, padx=2)
+
+        search_entry.bind("<Return>", lambda e: do_search(True))
+        search_entry.bind("<KeyRelease>", lambda e: do_search(True) if search_var.get() else match_lbl.config(text=""))
+        doc_win.bind("<Control-f>", lambda e: search_entry.focus_set())
+        doc_win.bind("<Escape>", lambda e: doc_win.destroy())
+
+        close_btn = tk.Button(
+            tb,
+            text="✕ Close",
+            font=("Segoe UI", 8, "bold"),
+            bg="#374151",
+            fg="#f8fafc",
+            activebackground=self.accent_red,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=2,
+            command=doc_win.destroy
+        )
+        close_btn.pack(side=tk.RIGHT, padx=4)
+
+        # ScrolledText display
+        text_frame = tk.Frame(doc_win, bg=self.bg_dark, padx=12, pady=8)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        text_widget = ScrolledText(
+            text_frame,
+            wrap=tk.WORD,
+            bg="#11111b",
+            fg="#e2e8f0",
+            insertbackground="#ffffff",
+            selectbackground="#3b82f6",
+            selectforeground="#ffffff",
+            font=("Segoe UI", 10),
+            padx=18,
+            pady=14,
+            relief=tk.FLAT
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Configure styling tags
+        text_widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), foreground="#60a5fa", spacing1=12, spacing3=6)
+        text_widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), foreground="#38bdf8", spacing1=10, spacing3=4)
+        text_widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), foreground="#a5b4fc", spacing1=6, spacing3=2)
+        text_widget.tag_configure("code_block", font=("Consolas", 9), background="#1e1e2e", foreground="#fdba74", spacing1=2, spacing3=2)
+        text_widget.tag_configure("bullet", font=("Segoe UI", 10), foreground="#93c5fd")
+        text_widget.tag_configure("alert_note", font=("Segoe UI", 9, "bold"), foreground="#38bdf8")
+        text_widget.tag_configure("alert_warn", font=("Segoe UI", 9, "bold"), foreground="#f59e0b")
+        text_widget.tag_configure("hr", font=("Segoe UI", 4), foreground="#374151")
+        text_widget.tag_configure("search_hl", background="#854d0e", foreground="#ffffff")
+        text_widget.tag_configure("search_current", background="#dc2626", foreground="#ffffff")
+
+        # Load file and parse Markdown
+        try:
+            with open(doc_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            in_code_block = False
+            for line in lines:
+                sline = line.strip()
+                if sline.startswith("```"):
+                    in_code_block = not in_code_block
+                    text_widget.insert(tk.END, line, "code_block")
+                elif in_code_block:
+                    text_widget.insert(tk.END, line, "code_block")
+                elif sline.startswith("# "):
+                    text_widget.insert(tk.END, line, "h1")
+                elif sline.startswith("## "):
+                    text_widget.insert(tk.END, line, "h2")
+                elif sline.startswith("### "):
+                    text_widget.insert(tk.END, line, "h3")
+                elif sline.startswith("- ") or sline.startswith("* "):
+                    text_widget.insert(tk.END, "  • ", "bullet")
+                    text_widget.insert(tk.END, line[2:])
+                elif sline.startswith("> [!NOTE]") or sline.startswith("> [!TIP]"):
+                    text_widget.insert(tk.END, "ℹ️ " + line[2:], "alert_note")
+                elif sline.startswith("> [!WARNING]") or sline.startswith("> [!CAUTION]"):
+                    text_widget.insert(tk.END, "⚠️ " + line[2:], "alert_warn")
+                elif sline.startswith("---") or sline.startswith("==="):
+                    text_widget.insert(tk.END, "─" * 70 + "\n", "hr")
+                else:
+                    text_widget.insert(tk.END, line)
+
+            text_widget.config(state=tk.DISABLED)
+        except Exception as e:
+            text_widget.insert(tk.END, f"Error reading document: {e}")
 
     def _open_user_guide(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -713,7 +927,7 @@ class AbuAlignApp:
         ]
         for p in possible_paths:
             if os.path.isfile(p):
-                os.startfile(p)
+                self._open_doc_window("User Guide & Fundamentals Manual", p)
                 return
         messagebox.showinfo("User Guide", "User Guide document (ABU_ALIGN_USER_GUIDE.md) not found.")
 
@@ -726,17 +940,19 @@ class AbuAlignApp:
         ]
         for p in possible_paths:
             if os.path.isfile(p):
-                os.startfile(p)
+                self._open_doc_window("AI vs Traditional Architecture Whitepaper", p)
                 return
         messagebox.showinfo("Architecture Whitepaper", "Architecture document (AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md) not found.")
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.0.5\n"
+            "Abu Align - Version 0.0.0.6\n"
             "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
             "• Engine: VGGT & VGGT-Omega Foundation Models\n"
             "• Optimizer: Google Ceres Sub-Pixel Bundle Adjustment\n"
-            "• Precision: 0.35 px Reprojection Error (Sony 60.2 MP Test)\n"
+            "• Precision: Sub-Pixel Accuracy with Scaled Cauchy Thresholds\n"
+            "• Coordinate Alignment: Standard Z-Up (Euler Elevation Pitch [-90°, +90°])\n"
+            "• Native In-App Documentation Reader & Fast 3D Browser Viewer\n"
             "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
             "• Logging: Persistent Telemetry in Abu_Align\\logs\\\n"
             "• Scalability: Smart Auto-Chunking & VRAM Guard (1,000+ Photos)\n\n"
