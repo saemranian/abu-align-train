@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.7
+Abu Align Version 0.0.0.8
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -115,7 +115,7 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.7 (Neural Photogrammetry)")
+        self.root.title("Abu Align - Version 0.0.0.8 (Neural Photogrammetry)")
         self.root.geometry("1020x800")
         self.root.minsize(880, 660)
 
@@ -194,7 +194,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.7",
+            text="v0.0.0.8",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -606,7 +606,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align v0.0.0.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align v0.0.0.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -946,7 +946,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.0.7\n"
+            "Abu Align - Version 0.0.0.8\n"
             "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
             "• Engine: VGGT & VGGT-Omega Foundation Models\n"
             "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment\n"
