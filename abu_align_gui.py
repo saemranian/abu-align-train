@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.2
+Abu Align Version 0.0.0.3
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -14,10 +14,102 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
+# Enable High-DPI Awareness on Windows so the UI renders crisp and sharp without bilinear blur
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+class ToolTip:
+    """
+    Interactive hover tooltip that displays helpful parameter explanations
+    in a sleek, modern dark-themed popup.
+    """
+    def __init__(self, widget, text, delay=350):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tip_window = None
+        self.after_id = None
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        self._schedule()
+
+    def _on_leave(self, event=None):
+        self._unschedule()
+        self._hide()
+
+    def _schedule(self):
+        self._unschedule()
+        self.after_id = self.widget.after(self.delay, self._show)
+
+    def _unschedule(self):
+        if self.after_id:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+
+    def _show(self):
+        if self.tip_window or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+
+            screen_w = self.widget.winfo_screenwidth()
+            if x + 350 > screen_w:
+                x = max(10, screen_w - 360)
+
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.attributes("-topmost", True)
+
+            frame = tk.Frame(
+                tw,
+                bg="#232338",
+                highlightbackground="#3b82f6",
+                highlightcolor="#3b82f6",
+                highlightthickness=1,
+                padx=9,
+                pady=6
+            )
+            frame.pack()
+
+            lbl = tk.Label(
+                frame,
+                text=self.text,
+                justify=tk.LEFT,
+                bg="#232338",
+                fg="#f8fafc",
+                font=("Segoe UI", 9),
+                wraplength=340
+            )
+            lbl.pack()
+        except Exception:
+            pass
+
+    def _hide(self):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.2 (Neural Photogrammetry)")
+        self.root.title("Abu Align - Version 0.0.0.3 (Neural Photogrammetry)")
         self.root.geometry("980x760")
         self.root.minsize(860, 640)
 
@@ -59,7 +151,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.2",
+            text="v0.0.0.3",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -259,6 +351,32 @@ class AbuAlignApp:
         )
         self.viewer_btn.pack(side=tk.LEFT)
 
+        # Attach interactive parameter tooltips
+        ToolTip(self.path_entry, "Dataset Folder: Directory containing JPG/PNG photos to align.")
+        ToolTip(browse_btn, "Browse: Open folder selector to pick your photoscanning dataset.")
+
+        ToolTip(rb_omega, "VGGT-Omega Engine (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
+        ToolTip(rb_vggt, "VGGT Standard 1B Engine: Original 1.18B-parameter vision foundation model. Predicts 3D point maps and camera poses in a single forward pass.")
+        ToolTip(res_cb, "Canvas Resolution: Input image resize resolution for neural inference. 1024 is fast and memory-efficient; 1536/2048 offers finer spatial detail on 40MP-60MP cameras.")
+        ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
+
+        ToolTip(rb_q1, "Preview (100K pts, Conf >= 2.2): High neural confidence filter. Fastest point cloud for quick visual checks.")
+        ToolTip(rb_q2, "High Quality (300K pts, Conf >= 1.8): Optimal balance of density and surface cleanliness. Recommended seed for 3D Gaussian Splatting (Postshot).")
+        ToolTip(rb_q3, "Ultra Dense (800K pts, Conf >= 1.5): Deep surface coverage, capturing intricate recesses, background geometry, and secondary objects.")
+        ToolTip(rb_q4, "Max Scan Grade (1.5M pts, Conf >= 1.2): Maximum geometric fidelity. Retains fine edges, wires, corners, and foliage.")
+
+        ToolTip(rb_a1, "Feedforward Pose (~25s): 100% Pure Deep Learning. Predicts camera positions and rotations in a single forward pass without bundle adjustment (~2-4px reprojection error).")
+        ToolTip(rb_a2, "Standard Ceres BA (~1m): Hybrid pipeline. ALIKED neural feature tracking + Google Ceres Levenberg-Marquardt bundle adjustment.")
+        ToolTip(rb_a3, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]: Solves 3,072 multi-view tracks with Cauchy robust loss to downweight outliers, followed by pruning and a 2nd polish pass to reach 0.35 px error.")
+
+        ToolTip(rb_l1, "Pinhole Model: Ideal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0). Native to VGGT training prior. Recommended for pre-undistorted imagery.")
+        ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]: Self-calibrates physical radial (k1, k2) and tangential (t1, t2) lens curvature in Google Ceres. Essential for wide-angle lenses.")
+
+        ToolTip(self.start_btn, "Start Alignment: Launch neural photogrammetry alignment and export results for RealityScan, Postshot, and COLMAP.")
+        ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment process and free GPU memory.")
+        ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
+        ToolTip(self.viewer_btn, "3D Browser Viewer: Launch interactive web browser viewer (http://localhost:8080) to inspect cameras and 3D point cloud in real time.")
+
         # 4. Live Progress Console Card
         console_card = tk.LabelFrame(
             content_frame,
@@ -281,7 +399,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align Version 0.0.0.2 Ready.\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+        self._log("Abu Align Version 0.0.0.3 Ready.\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
 
     def _browse_dataset(self):
         folder = filedialog.askdirectory(initialdir=self.dataset_var.get())
