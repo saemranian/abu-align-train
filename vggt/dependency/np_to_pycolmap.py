@@ -23,6 +23,7 @@ def batch_np_matrix_to_pycolmap(
     extra_params=None,
     min_inlier_per_frame=64,
     points_rgb=None,
+    image_shapes=None,
 ):
     """
     Convert Batched NumPy Arrays to PyCOLMAP
@@ -86,22 +87,25 @@ def batch_np_matrix_to_pycolmap(
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), rgb)
 
     num_points3D = len(valid_idx)
-    camera = None
+    cameras_by_shape = {}
     # frame idx
     for fidx in range(N):
-        # set camera
-        if camera is None or (not shared_camera):
+        # set camera (grouped by unique aspect ratio / orientation if shared_camera is True)
+        shape_key = tuple(image_shapes[fidx]) if image_shapes is not None else (int(image_size[0]), int(image_size[1]))
+        if not shared_camera or shape_key not in cameras_by_shape:
             pycolmap_intri = _build_pycolmap_intri(fidx, intrinsics, camera_type, extra_params)
-
+            cam_id = len(cameras_by_shape) + 1 if shared_camera else fidx + 1
             camera = pycolmap.Camera(
-                model=camera_type, width=image_size[0], height=image_size[1], params=pycolmap_intri, camera_id=fidx + 1
+                model=camera_type, width=image_size[0], height=image_size[1], params=pycolmap_intri, camera_id=cam_id
             )
-
             # add camera
             if hasattr(reconstruction, "add_camera_with_trivial_rig"):
                 reconstruction.add_camera_with_trivial_rig(camera)
             else:
                 reconstruction.add_camera(camera)
+            cameras_by_shape[shape_key] = camera
+        else:
+            camera = cameras_by_shape[shape_key]
 
         # set image
         cam_from_world = pycolmap.Rigid3d(

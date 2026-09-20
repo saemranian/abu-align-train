@@ -1,5 +1,5 @@
 """
-Abu Align Version 0.0.0.6
+Abu Align Version 0.0.0.7
 Professional Graphical User Interface for Neural Photogrammetry Alignment
 Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
 """
@@ -115,7 +115,7 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.6 (Neural Photogrammetry)")
+        self.root.title("Abu Align - Version 0.0.0.7 (Neural Photogrammetry)")
         self.root.geometry("1020x800")
         self.root.minsize(880, 660)
 
@@ -194,7 +194,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.6",
+            text="v0.0.0.7",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -606,7 +606,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align v0.0.0.6 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align v0.0.0.7 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -729,7 +729,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.0.6 - {title}")
+        doc_win.title(f"Abu Align v0.0.0.7 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -946,12 +946,13 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.0.6\n"
+            "Abu Align - Version 0.0.0.7\n"
             "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
             "• Engine: VGGT & VGGT-Omega Foundation Models\n"
-            "• Optimizer: Google Ceres Sub-Pixel Bundle Adjustment\n"
-            "• Precision: Sub-Pixel Accuracy with Scaled Cauchy Thresholds\n"
-            "• Coordinate Alignment: Standard Z-Up (Euler Elevation Pitch [-90°, +90°])\n"
+            "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment\n"
+            "• Feature Tracking: Sub-Pixel Dense Matching (ALIKED + SuperPoint)\n"
+            "• Coordinate Alignment: Standard Z-Up (Euler Nadir Pitch [0°, 180°])\n"
+            "• Orientation Support: Dynamic Multi-Sensor Grouping (Portrait & Landscape)\n"
             "• Native In-App Documentation Reader & Fast 3D Browser Viewer\n"
             "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
             "• Logging: Persistent Telemetry in Abu_Align\\logs\\\n"

@@ -151,18 +151,18 @@ def export_realitycapture_csv(reconstruction, output_dir):
         # Heading / Yaw: azimuth angle in XY plane from North (+Y) towards East (+X) in [0, 360)
         yaw = np.degrees(np.arctan2(fwd_rc[0], fwd_rc[1])) % 360.0
         
-        # Pitch: elevation angle from horizontal plane: -90=nadir (down), 0=horizontal, +90=zenith (up)
-        pitch = np.degrees(np.arcsin(np.clip(fwd_rc[2], -1.0, 1.0)))
+        # Pitch: angle from Nadir (-Z): 0=nadir (down), 90=horizontal, 180=zenith (up)
+        pitch = np.degrees(np.arccos(np.clip(-fwd_rc[2], -1.0, 1.0)))
         
         # Reference horizontal right vector perpendicular to heading:
         yaw_rad = np.radians(yaw)
-        right = np.array([np.cos(yaw_rad), -np.sin(yaw_rad), 0.0])
-        right_norm = np.linalg.norm(right)
-        if right_norm > 1e-6:
-            right /= right_norm
-            u0 = np.cross(right, fwd_rc)
+        w0 = np.array([np.cos(yaw_rad), -np.sin(yaw_rad), 0.0])
+        w0_norm = np.linalg.norm(w0)
+        if w0_norm > 1e-6:
+            w0 /= w0_norm
+            u0 = np.cross(w0, fwd_rc)
             u0 /= np.linalg.norm(u0)
-            roll = np.degrees(np.arctan2(np.dot(up_rc, right), np.dot(up_rc, u0)))
+            roll = np.degrees(np.arctan2(np.dot(up_rc, w0), np.dot(up_rc, u0)))
         else:
             roll = 0.0
         
@@ -256,7 +256,7 @@ def rename_colmap_recons_and_rescale_camera(
     reconstruction, image_paths, original_coords, img_size, shift_point2d_to_original_res=False, shared_camera=False
 ):
     """Inlined helper to rename cameras and rescale focal lengths to original photo resolutions."""
-    rescale_camera = True
+    rescaled_cameras = set()
 
     for pyimageid in reconstruction.images:
         pyimage = reconstruction.images[pyimageid]
@@ -267,7 +267,7 @@ def rename_colmap_recons_and_rescale_camera(
         real_image_size = original_coords[pyimageid - 1, -2:]
         resize_ratio = max(real_image_size) / img_size
 
-        if rescale_camera:
+        if pyimage.camera_id not in rescaled_cameras:
             pred_params = copy.deepcopy(pycamera.params)
 
             if pycamera.model_name in ["OPENCV", "FULL_OPENCV"]:
@@ -287,13 +287,11 @@ def rename_colmap_recons_and_rescale_camera(
             pycamera.params = pred_params
             pycamera.width = int(real_image_size[0])
             pycamera.height = int(real_image_size[1])
+            rescaled_cameras.add(pyimage.camera_id)
 
         if shift_point2d_to_original_res:
             for point2D in pyimage.points2D:
                 point2D.xy = (point2D.xy - top_left) * resize_ratio
-
-        if shared_camera:
-            rescale_camera = False
 
     return reconstruction
 
@@ -650,12 +648,12 @@ def main():
     is_ultra = align_mode == "ultra"
 
     if use_ba:
-        query_frames = min(num_frames, 8 if is_ultra else 4)
+        query_frames = min(num_frames, 16 if is_ultra else 8)
         max_query_pts = 3072 if is_ultra else 2048
         reproj_err_thresh = args.max_reproj_error if args.max_reproj_error is not None else (3.5 if is_ultra else 6.0)
         track_vis_thresh = 0.3 if is_ultra else 0.2
 
-        print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_frames} queries, {max_query_pts} pts/frame]...")
+        print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_frames} queries, {max_query_pts} pts/frame, fine_tracking={is_ultra}]...")
         from vggt.dependency.track_predict import predict_tracks
         from vggt.dependency.np_to_pycolmap import batch_np_matrix_to_pycolmap
         with torch.no_grad():
@@ -667,7 +665,7 @@ def main():
                 max_query_pts=max_query_pts,
                 query_frame_num=query_frames,
                 keypoint_extractor="aliked+sp",
-                fine_tracking=False,
+                fine_tracking=is_ultra,
             )
             torch.cuda.empty_cache()
 
@@ -685,6 +683,7 @@ def main():
         
         # Adaptive min inliers per frame based on track distribution to prevent dropping non-contiguous frames
         min_inliers = max(8, min(24, int(track_mask.sum(1).min()))) if track_mask.ndim > 1 else 16
+        image_shapes = original_coords[:, -2:].cpu().numpy()
 
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
             points_3d_ba,
@@ -698,6 +697,7 @@ def main():
             shared_camera=args.shared_camera,
             camera_type=cam_model_type,
             points_rgb=points_rgb_ba,
+            image_shapes=image_shapes,
         )
 
         # Retry with relaxed threshold if initial strict gate was too tight for challenging viewpoints
@@ -715,25 +715,36 @@ def main():
                 shared_camera=args.shared_camera,
                 camera_type=cam_model_type,
                 points_rgb=points_rgb_ba,
+                image_shapes=image_shapes,
             )
 
         if reconstruction is not None and reconstruction.num_reg_images() >= 2:
+            # Record initial camera centers for coordinate frame synchronization
+            C_initial = np.array([- extrinsic[i, :3, :3].T @ extrinsic[i, :3, 3] for i in range(num_frames)])
+
             ba_options = pycolmap.BundleAdjustmentOptions()
             ba_options.refine_focal_length = True
             ba_options.refine_principal_point = False  # Fixed at image center to eliminate gauge ambiguity
-            ba_options.refine_extra_params = (args.lens_model == "brown")
 
-            # Use Schur complement reduction solver to guarantee positive-definite convergence
+            # Use Sparse Schur solver to eliminate dense Cholesky factorization failures
             LinearSolverType = type(ba_options.ceres.solver_options.linear_solver_type)
             ba_options.ceres.auto_select_solver_type = False
-            ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.DENSE_SCHUR if num_frames <= 100 else LinearSolverType.SPARSE_SCHUR
+            ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.SPARSE_SCHUR
 
             if is_ultra:
                 ba_options.ceres.loss_function_type = pycolmap.LossFunctionType.CAUCHY
                 ba_options.ceres.loss_function_scale = 1.0
 
-            print(f"      * Optimizing camera alignment ({align_mode.upper()} PyCeres BA, robust_loss={'CAUCHY' if is_ultra else 'TRIVIAL'})...")
+            # Two-Stage BA: Stage 1 = Lock camera poses with pinhole model (robust convergence)
+            ba_options.refine_extra_params = False
+            print(f"      * Optimizing camera alignment ({align_mode.upper()} PyCeres BA Stage 1: Camera Poses & Focal Length)...")
             pycolmap.bundle_adjustment(reconstruction, ba_options)
+
+            # Stage 2: Refine physical lens distortion using well-converged camera poses
+            if args.lens_model == "brown":
+                ba_options.refine_extra_params = True
+                print("      * Optimizing camera alignment (Stage 2: Calibrating Physical Lens Distortion k1-k2, t1-t2)...")
+                pycolmap.bundle_adjustment(reconstruction, ba_options)
 
             # In ultra mode, prune loose tie points and run a fine polish pass
             if is_ultra:
@@ -748,6 +759,20 @@ def main():
                 if outliers_pruned > 0:
                     print(f"      * Ultra Polish: Pruned {outliers_pruned:,} loose tie points (>{max_polish_error:.1f}px error or <3 views). Running polish pass...")
                     pycolmap.bundle_adjustment(reconstruction, ba_options)
+
+            # Synchronize 3D dense point cloud coordinates with bundle-adjusted camera poses
+            C_final = []
+            for pyimageid in sorted(reconstruction.images.keys()):
+                img = reconstruction.images[pyimageid]
+                cfw = img.cam_from_world() if callable(img.cam_from_world) else img.cam_from_world
+                R_final = cfw.rotation.matrix()
+                t_final = cfw.translation
+                C_final.append(- R_final.T @ t_final)
+            C_final = np.array(C_final)
+
+            if len(C_initial) == len(C_final) and len(C_final) >= 3:
+                s_ba, R_ba, t_ba = umeyama_alignment(C_initial, C_final)
+                points_3d = s_ba * (points_3d @ R_ba.T) + t_ba
 
             reconstruction_res = img_load_res
         else:
