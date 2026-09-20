@@ -22,7 +22,13 @@ for parent in [current_dir, os.path.dirname(current_dir), os.path.dirname(os.pat
 
 def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
     """Finds the next unique sparse output folder (e.g. sparse_03_omega) that never overwrites existing results."""
-    engine_suffix = "omega" if "omega" in engine_name.lower() else "vggt"
+    eng_lower = engine_name.lower()
+    if "ace" in eng_lower:
+        engine_suffix = "ace0"
+    elif "omega" in eng_lower:
+        engine_suffix = "omega"
+    else:
+        engine_suffix = "vggt"
     if use_ba:
         engine_suffix += "_ba"
     
@@ -49,6 +55,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+import trimesh
+import json
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -66,7 +74,8 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-     3D Photoscanning Alignment & Reconstruction Engine (VGGT)
+     Abu Align v0.0.1.0 - Neural Photogrammetry Alignment Engine
+     Engines: VGGT Foundation | VGGT-Omega | Niantic Labs ACE0
 ======================================================================
 """
     print(banner)
@@ -299,144 +308,7 @@ def rename_colmap_recons_and_rescale_camera(
 
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
-    parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
-    parser.add_argument("--output_dir", "-o", type=str, default=None, help="Custom output directory for sparse COLMAP files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt", "vggt_omega"], default="vggt", help="Model engine: 'vggt' (Standard, public checkpoint) or 'vggt_omega' (Next-Gen, low VRAM)")
-    parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Custom checkpoint path (.pt file) for VGGT-Omega")
-    parser.add_argument("--stride", "-s", type=int, default=1, help="Stride / keyframe interval (e.g. 2 or 3 for large datasets)")
-    parser.add_argument("--max_frames", "-m", type=int, default=None, help="Maximum number of frames to process")
-    parser.add_argument("--conf_thresh", type=float, default=1.8, help="Depth confidence threshold (default: 1.8; lower=denser point cloud)")
-    parser.add_argument("--max_points", type=int, default=300000, help="Maximum number of points in exported point cloud (default: 300000)")
-    parser.add_argument("--load_res", type=int, default=1024, help="Image load resolution (default: 1024)")
-    parser.add_argument("--chunk_size", type=int, default=32, help="Chunk size for auto-chunking large datasets (default: 32)")
-    parser.add_argument("--auto_chunk", action="store_true", default=True, help="Automatically chunk large datasets (> 48 photos) to prevent VRAM OOM")
-    parser.add_argument("--use_ba", action="store_true", help="Enable multi-view feature tracking and PyCeres Bundle Adjustment")
-    parser.add_argument("--align_mode", type=str, choices=["none", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
-    parser.add_argument("--lens_model", type=str, choices=["pinhole", "brown"], default="brown", help="Lens distortion model: 'pinhole' (zero distortion) or 'brown' (calibrates physical k1, k2, t1, t2)")
-    parser.add_argument("--max_reproj_error", type=float, default=None, help="Max reprojection error for tie point tracks")
-    parser.add_argument("--shared_camera", dest="shared_camera", action="store_true", default=True, help="Share camera intrinsics and distortion across all views (recommended for single-camera scans)")
-    parser.add_argument("--no_shared_camera", dest="shared_camera", action="store_false", help="Calibrate separate camera intrinsics for each view")
-    parser.add_argument("--view", "-v", action="store_true", help="Launch interactive 3D browser viewer after alignment")
-    parser.add_argument("--port", type=int, default=8080, help="Viser viewer port (default: 8080)")
-
-    args = parser.parse_args()
-
-    input_dir = os.path.abspath(args.input)
-    if not os.path.isdir(input_dir):
-        print(f"\n[ERROR] Input directory not found: {input_dir}")
-        sys.exit(1)
-
-    print_banner()
-    overall_start_time = time.time()
-
-    # -------------------------------------------------------------
-    # Stage 1: Dataset Discovery
-    # -------------------------------------------------------------
-    print("[1/5] Scanning Image Dataset...")
-    images_subdir = os.path.join(input_dir, "images")
-    scan_dir = images_subdir if os.path.isdir(images_subdir) else input_dir
-
-    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
-    all_files = sorted(os.listdir(scan_dir))
-    image_paths = [
-        os.path.join(scan_dir, f)
-        for f in all_files
-        if os.path.splitext(f)[1].lower() in valid_exts and os.path.isfile(os.path.join(scan_dir, f))
-    ]
-
-    total_images_found = len(image_paths)
-    if total_images_found == 0:
-        print(f"[ERROR] No valid images found in: {scan_dir}")
-        sys.exit(1)
-
-    # Subsample if requested
-    if args.stride > 1:
-        image_paths = image_paths[::args.stride]
-    if args.max_frames and len(image_paths) > args.max_frames:
-        image_paths = image_paths[:args.max_frames]
-
-    num_frames = len(image_paths)
-    with Image.open(image_paths[0]) as sample_img:
-        orig_w, orig_h = sample_img.size
-
-    print(f"      * Directory:     {scan_dir}")
-    print(f"      * Total Images:  {total_images_found}")
-    print(f"      * Keyframes:     {num_frames} (Stride: {args.stride})")
-    print(f"      * Image Size:    {orig_w} x {orig_h} ({orig_w*orig_h/1e6:.1f} MP)")
-    print()
-
-    # -------------------------------------------------------------
-    # Stage 2: Load Model & GPU Environment
-    # -------------------------------------------------------------
-    print("[2/5] Initializing Neural Network & GPU...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device != "cuda":
-        print("[WARNING] CUDA GPU not detected! Running on CPU will be extremely slow.")
-    else:
-        gpu_name = torch.cuda.get_device_name(0)
-        total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        print(f"      * Device:        {gpu_name} ({total_vram:.1f} GB Dedicated VRAM)")
-
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-    print(f"      * Precision:     {dtype}")
-
-    engine = args.engine
-    model = None
-    vggt_res = 518
-
-    # Attempt to load VGGT-Omega if requested
-    if engine == "vggt_omega":
-        possible_ckpts = [
-            args.checkpoint,
-            r"C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\vggt-omega\vggt_omega_1b_512.pt",
-            r"C:\Users\USer\.cache\torch\hub\checkpoints\vggt_omega_1b_512.pt",
-            os.path.join(os.getcwd(), "vggt_omega_1b_512.pt"),
-        ]
-        found_ckpt = None
-        for p in possible_ckpts:
-            if p and os.path.isfile(p):
-                found_ckpt = p
-                break
-
-        if found_ckpt:
-            try:
-                from vggt_omega.models import VGGTOmega
-                t_load = time.time()
-                print(f"      * Engine:        VGGT-Omega (Register Attention)")
-                print(f"      * Checkpoint:    {found_ckpt}")
-                model = VGGTOmega().eval()
-                state_dict = torch.load(found_ckpt, map_location="cpu")
-                model.load_state_dict(state_dict)
-                model = model.to(device)
-                vggt_res = 512
-                print(f"      * Model Loaded:  VGGT-Omega in {time.time()-t_load:.1f}s")
-            except Exception as e:
-                print(f"[WARNING] Failed to load VGGT-Omega: {e}. Falling back to VGGT.")
-                engine = "vggt"
-        else:
-            print("\n" + "="*70)
-            print(" [NOTICE] VGGT-Omega weights (vggt_omega_1b_512.pt) are not yet downloaded.")
-            print("          (Your HuggingFace access request status is currently PENDING)")
-            print("          --> Seamlessly falling back to VGGT-1B (Ready & Cached)!")
-            print("="*70 + "\n")
-            engine = "vggt"
-
-    # Default to standard VGGT
-    if engine == "vggt":
-        from vggt.models.vggt import VGGT
-        vggt_res = 518
-        print(f"      * Engine:        VGGT-1B (Global Attention)")
-        t_load = time.time()
-        model = VGGT()
-        checkpoint_url = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-        model.load_state_dict(torch.hub.load_state_dict_from_url(checkpoint_url))
-        model.eval().to(device)
-        print(f"      * Model Loaded:  VGGT-1B Transformer in {time.time()-t_load:.1f}s")
-
-    print()
-
+def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args):
     from vggt.utils.load_fn import load_and_preprocess_images_square
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
     from vggt.utils.geometry import unproject_depth_map_to_point_map
@@ -839,6 +711,85 @@ def main():
         reconstruction, base_names, original_coords.cpu().numpy(), img_size=reconstruction_res, shift_point2d_to_original_res=True, shared_camera=args.shared_camera if use_ba else False
     )
 
+    conf_thresh = args.conf_thresh
+    max_pts = args.max_points
+    dense_mask = randomly_limit_trues(conf_mask, max_pts)
+    dense_3d = points_3d[dense_mask]
+    dense_rgb = points_rgb[dense_mask]
+    return reconstruction, dense_3d, dense_rgb
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
+    parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
+    parser.add_argument("--output_dir", "-o", type=str, default=None, help="Custom output directory for sparse COLMAP files")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt", "vggt_omega", "ace0", "acezero"], default="vggt", help="Model engine: 'vggt', 'vggt_omega', or 'ace0' (Niantic Labs Scene Coordinate Regression)")
+    parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
+    parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
+    parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
+    parser.add_argument("--ace_try_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
+    parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Custom checkpoint path (.pt file) for VGGT-Omega")
+    parser.add_argument("--stride", "-s", type=int, default=1, help="Stride / keyframe interval (e.g. 2 or 3 for large datasets)")
+    parser.add_argument("--max_frames", "-m", type=int, default=None, help="Maximum number of frames to process")
+    parser.add_argument("--conf_thresh", type=float, default=1.8, help="Depth confidence threshold (default: 1.8; lower=denser point cloud)")
+    parser.add_argument("--max_points", type=int, default=300000, help="Maximum number of points in exported point cloud (default: 300000)")
+    parser.add_argument("--load_res", type=int, default=1024, help="Image load resolution (default: 1024)")
+    parser.add_argument("--chunk_size", type=int, default=32, help="Chunk size for auto-chunking large datasets (default: 32)")
+    parser.add_argument("--auto_chunk", action="store_true", default=True, help="Automatically chunk large datasets (> 48 photos) to prevent VRAM OOM")
+    parser.add_argument("--use_ba", action="store_true", help="Enable multi-view feature tracking and PyCeres Bundle Adjustment")
+    parser.add_argument("--align_mode", type=str, choices=["none", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
+    parser.add_argument("--lens_model", type=str, choices=["pinhole", "brown"], default="brown", help="Lens distortion model: 'pinhole' (zero distortion) or 'brown' (calibrates physical k1, k2, t1, t2)")
+    parser.add_argument("--max_reproj_error", type=float, default=None, help="Max reprojection error for tie point tracks")
+    parser.add_argument("--shared_camera", dest="shared_camera", action="store_true", default=True, help="Share camera intrinsics and distortion across all views (recommended for single-camera scans)")
+    parser.add_argument("--no_shared_camera", dest="shared_camera", action="store_false", help="Calibrate separate camera intrinsics for each view")
+    parser.add_argument("--view", "-v", action="store_true", help="Launch interactive 3D browser viewer after alignment")
+    parser.add_argument("--port", type=int, default=8080, help="Viser viewer port (default: 8080)")
+
+    args = parser.parse_args()
+
+    input_dir = os.path.abspath(args.input)
+    if not os.path.isdir(input_dir):
+        print(f"\n[ERROR] Input directory not found: {input_dir}")
+        sys.exit(1)
+
+    print_banner()
+    overall_start_time = time.time()
+
+    # -------------------------------------------------------------
+    # Stage 1: Dataset Discovery
+    # -------------------------------------------------------------
+    print("[1/5] Scanning Image Dataset...")
+    images_subdir = os.path.join(input_dir, "images")
+    scan_dir = images_subdir if os.path.isdir(images_subdir) else input_dir
+
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    all_files = sorted(os.listdir(scan_dir))
+    image_paths = [
+        os.path.join(scan_dir, f)
+        for f in all_files
+        if os.path.splitext(f)[1].lower() in valid_exts and os.path.isfile(os.path.join(scan_dir, f))
+    ]
+
+    total_images_found = len(image_paths)
+    if total_images_found == 0:
+        print(f"[ERROR] No valid images found in: {scan_dir}")
+        sys.exit(1)
+
+    # Subsample if requested
+    if args.stride > 1:
+        image_paths = image_paths[::args.stride]
+    if args.max_frames and len(image_paths) > args.max_frames:
+        image_paths = image_paths[:args.max_frames]
+
+    num_frames = len(image_paths)
+    with Image.open(image_paths[0]) as sample_img:
+        orig_w, orig_h = sample_img.size
+
+    print(f"      * Directory:     {scan_dir}")
+    print(f"      * Total Images:  {total_images_found}")
+    print(f"      * Keyframes:     {num_frames} (Stride: {args.stride})")
+    print(f"      * Image Size:    {orig_w} x {orig_h} ({orig_w*orig_h/1e6:.1f} MP)")
+
     results_base = os.path.join(input_dir, "results")
     if args.output_dir:
         out_candidate = args.output_dir
@@ -847,10 +798,117 @@ def main():
         else:
             output_dir = out_candidate
     else:
-        output_dir = get_next_sparse_dir(results_base, engine, args.use_ba)
+        output_dir = get_next_sparse_dir(results_base, args.engine, args.use_ba)
 
     os.makedirs(output_dir, exist_ok=True)
-    
+    print(f"      * Target Output: {output_dir}")
+    print()
+
+    # -------------------------------------------------------------
+    # Stage 2: Load Model & GPU Environment
+    # -------------------------------------------------------------
+    print("[2/5] Initializing Neural Network & GPU...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device != "cuda":
+        print("[WARNING] CUDA GPU not detected! Running on CPU will be extremely slow.")
+    else:
+        gpu_name = torch.cuda.get_device_name(0)
+        total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"      * Device:        {gpu_name} ({total_vram:.1f} GB Dedicated VRAM)")
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    print(f"      * Precision:     {dtype}")
+
+    engine = args.engine
+    model = None
+    vggt_res = 518
+
+    # Attempt to load VGGT-Omega if requested
+    if engine == "vggt_omega":
+        possible_ckpts = [
+            args.checkpoint,
+            r"C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\vggt-omega\vggt_omega_1b_512.pt",
+            r"C:\Users\USer\.cache\torch\hub\checkpoints\vggt_omega_1b_512.pt",
+            os.path.join(os.getcwd(), "vggt_omega_1b_512.pt"),
+        ]
+        found_ckpt = None
+        for p in possible_ckpts:
+            if p and os.path.isfile(p):
+                found_ckpt = p
+                break
+
+        if found_ckpt:
+            try:
+                from vggt_omega.models import VGGTOmega
+                t_load = time.time()
+                print(f"      * Engine:        VGGT-Omega (Register Attention)")
+                print(f"      * Checkpoint:    {found_ckpt}")
+                model = VGGTOmega().eval()
+                state_dict = torch.load(found_ckpt, map_location="cpu")
+                model.load_state_dict(state_dict)
+                model = model.to(device)
+                vggt_res = 512
+                print(f"      * Model Loaded:  VGGT-Omega in {time.time()-t_load:.1f}s")
+            except Exception as e:
+                print(f"[WARNING] Failed to load VGGT-Omega: {e}. Falling back to VGGT.")
+                engine = "vggt"
+        else:
+            print("\n" + "="*70)
+            print(" [NOTICE] VGGT-Omega weights (vggt_omega_1b_512.pt) are not yet downloaded.")
+            print("          (Your HuggingFace access request status is currently PENDING)")
+            print("          --> Seamlessly falling back to VGGT-1B (Ready & Cached)!")
+            print("="*70 + "\n")
+            engine = "vggt"
+
+    # Default to standard VGGT
+    if engine == "vggt":
+        from vggt.models.vggt import VGGT
+        vggt_res = 518
+        print(f"      * Engine:        VGGT-1B (Global Attention)")
+        t_load = time.time()
+        model = VGGT()
+        checkpoint_url = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
+        model.load_state_dict(torch.hub.load_state_dict_from_url(checkpoint_url))
+        model.eval().to(device)
+        print(f"      * Model Loaded:  VGGT-1B Transformer in {time.time()-t_load:.1f}s")
+    # ACE0 Engine initialization
+    if engine in ["ace0", "acezero"]:
+        print(f"      * Engine:        ACE0 (Scene Coordinate Regression, Niantic Labs)")
+        print(f"      * Architecture:  Implicit Coordinate Regression MLP + ZoeDepth Seed")
+        print(f"      * Max Rounds:    {args.ace_iterations}")
+        print(f"      * Refinement:    {args.ace_refinement.upper()}")
+
+    print()
+
+    # -------------------------------------------------------------
+    # Stage 3 & 4: 3D Alignment & Reconstruction Inference
+    # -------------------------------------------------------------
+    if engine in ["ace0", "acezero"]:
+        print("[3/5] Starting ACE0 Scene Coordinate Regression...")
+        print("      * Alternating MLP Coordinate Training & PnP-RANSAC Registration")
+        inf_start = time.time()
+        from acezero_engine import run_acezero_reconstruction
+        reconstruction, dense_3d, dense_rgb = run_acezero_reconstruction(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            iterations_max=args.ace_iterations,
+            refinement=args.ace_refinement,
+            try_seeds=args.ace_try_seeds,
+            external_focal_length=args.ace_focal,
+            refine_calibration=True,
+            image_resolution=min(args.load_res, 640) if args.load_res else 480,
+            export_point_cloud=True,
+            shared_camera=args.shared_camera,
+        )
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * ACE0 Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
+        print()
+    else:
+        reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
+            engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
+        )
+
     # Stage 5: Exporting outputs organized by target application
     export_start = time.time()
     print_progress_bar(num_frames, num_frames, prefix="Processed", stage="Exporting application packages...", start_time=export_start)
@@ -872,9 +930,12 @@ def main():
     print(f"      * [Postshot / RealityCapture] Exported NeRF/3DGS poses to: {transforms_file}")
 
     # High-density colored point cloud (.ply) for Postshot & MeshLab (Transformed to RC Z-up space)
-    dense_mask = randomly_limit_trues(conf_mask, max_pts)
-    dense_3d = points_3d[dense_mask]
-    dense_rgb = points_rgb[dense_mask]
+    if len(dense_3d) == 0 and reconstruction.num_points3D() > 0:
+        dense_3d = np.array([pt.xyz for pt in reconstruction.points3D.values()], dtype=np.float32)
+        dense_rgb = np.array([pt.color for pt in reconstruction.points3D.values()], dtype=np.uint8)
+    elif len(dense_3d) == 0:
+        dense_3d = np.zeros((1, 3), dtype=np.float32)
+        dense_rgb = np.full((1, 3), 200, dtype=np.uint8)
     
     # Match RealityCapture Z-up coordinate system (same as cameras.csv):
     M_world = np.array([
@@ -905,7 +966,7 @@ def main():
         f" Date & Time:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f" Dataset Source:       {scan_dir}",
         f" Total Photos:         {total_images_found}",
-        f" Registered Views:     {reg_images} / {num_frames} (100.0%)",
+        f" Registered Views:     {reg_images} / {num_frames} ({reg_images/max(num_frames, 1)*100:.1f}%)",
         f" 3D Points Created:    {num_points:,} sparse / {len(dense_3d):,} dense vertices",
     ]
 

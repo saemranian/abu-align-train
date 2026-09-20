@@ -1,0 +1,977 @@
+"""
+Abu Align Version 0.0.1.0
+Professional Graphical User Interface for Neural Photogrammetry Alignment
+Built on VGGT, VGGT-Omega, and Niantic Labs ACE0 with PyCeres Bundle Adjustment
+"""
+
+import os
+import sys
+import time
+import subprocess
+import threading
+import queue
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from tkinter.scrolledtext import ScrolledText
+
+# Ensure parent directory is on sys.path so vggt and dependencies can be imported from any subfolder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+for parent in [current_dir, os.path.dirname(current_dir), os.path.dirname(os.path.dirname(current_dir))]:
+    if parent and parent not in sys.path:
+        sys.path.insert(0, parent)
+
+# Enable High-DPI Awareness on Windows so the UI renders crisp and sharp without bilinear blur
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+class ToolTip:
+    """
+    Interactive hover tooltip that displays helpful parameter explanations
+    in a sleek, modern dark-themed popup.
+    """
+    def __init__(self, widget, text, delay=350):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tip_window = None
+        self.after_id = None
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        self._schedule()
+
+    def _on_leave(self, event=None):
+        self._unschedule()
+        self._hide()
+
+    def _schedule(self):
+        self._unschedule()
+        self.after_id = self.widget.after(self.delay, self._show)
+
+    def _unschedule(self):
+        if self.after_id:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+
+    def _show(self):
+        if self.tip_window or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+
+            screen_w = self.widget.winfo_screenwidth()
+            if x + 350 > screen_w:
+                x = max(10, screen_w - 360)
+
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.attributes("-topmost", True)
+
+            frame = tk.Frame(
+                tw,
+                bg="#232338",
+                highlightbackground="#3b82f6",
+                highlightcolor="#3b82f6",
+                highlightthickness=1,
+                padx=9,
+                pady=6
+            )
+            frame.pack()
+
+            lbl = tk.Label(
+                frame,
+                text=self.text,
+                justify=tk.LEFT,
+                bg="#232338",
+                fg="#f8fafc",
+                font=("Segoe UI", 9),
+                wraplength=340
+            )
+            lbl.pack()
+        except Exception:
+            pass
+
+    def _hide(self):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
+
+class AbuAlignApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Abu Align - Version 0.0.1.0 (Neural Photogrammetry)")
+        self.root.geometry("1020x800")
+        self.root.minsize(880, 660)
+
+        # Style configuration (Modern Dark Palette)
+        self.bg_dark = "#181825"
+        self.panel_bg = "#1e1e2e"
+        self.accent_blue = "#3b82f6"
+        self.accent_green = "#10b981"
+        self.accent_red = "#ef4444"
+        self.text_primary = "#f8fafc"
+        self.text_secondary = "#94a3b8"
+        self.console_bg = "#11111b"
+
+        self.root.configure(bg=self.bg_dark)
+
+        self.conda_python = r"C:\Users\USer\miniconda3\envs\vggt\python.exe"
+        cli_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_cli.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "align_cli.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "align_cli.py"),
+        ]
+        self.cli_script = cli_candidates[0]
+        for c in cli_candidates:
+            if os.path.isfile(c):
+                self.cli_script = c
+                break
+        self.worker_process = None
+        self.output_queue = queue.Queue()
+        self.is_running = False
+        self.latest_output_dir = None
+        self.active_log_path = None
+        self._ensure_logs_dir()
+
+        self._build_menu()
+        self._build_ui()
+        self._check_queue()
+
+    def _build_menu(self):
+        menubar = tk.Menu(self.root, bg=self.panel_bg, fg=self.text_primary)
+        self.root.config(menu=menubar)
+
+        # File Menu
+        file_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
+        file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="📁 Open Logs Folder", command=self._open_logs_folder)
+        file_menu.add_command(label="📄 View Latest Log File", command=self._open_latest_log)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+
+        # Help Menu
+        help_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="Help & Documentation", menu=help_menu)
+        help_menu.add_command(label="📖 User Guide & Fundamentals Manual", command=self._open_user_guide)
+        help_menu.add_command(label="📐 AI vs Traditional Architecture Whitepaper", command=self._open_architecture_doc)
+        help_menu.add_separator()
+        help_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
+        help_menu.add_separator()
+        help_menu.add_command(label="ℹ️ About Abu Align", command=self._show_about_box)
+
+    def _build_ui(self):
+        # 1. Header Banner
+        header = tk.Frame(self.root, bg=self.panel_bg, height=65)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+
+        title_lbl = tk.Label(
+            header,
+            text="ABU ALIGN",
+            font=("Segoe UI", 16, "bold"),
+            fg=self.accent_blue,
+            bg=self.panel_bg
+        )
+        title_lbl.pack(side=tk.LEFT, padx=16, pady=8)
+
+        version_badge = tk.Label(
+            header,
+            text="v0.0.1.0",
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg=self.accent_blue,
+            padx=6,
+            pady=2
+        )
+        version_badge.pack(side=tk.LEFT, pady=12)
+
+        subtitle_lbl = tk.Label(
+            header,
+            text="|   Neural Photogrammetry & Fast Lens Self-Calibration Engine",
+            font=("Segoe UI", 10),
+            fg=self.text_secondary,
+            bg=self.panel_bg
+        )
+        subtitle_lbl.pack(side=tk.LEFT, padx=10, pady=12)
+
+        # Header Help & User Guide Button
+        help_btn = tk.Button(
+            header,
+            text="📖 User Guide & Manual",
+            font=("Segoe UI", 9, "bold"),
+            bg="#29293d",
+            fg="#f8fafc",
+            activebackground=self.accent_blue,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            command=self._open_user_guide
+        )
+        help_btn.pack(side=tk.RIGHT, padx=16, pady=12)
+        ToolTip(help_btn, "Open Abu Align User Guide & Fundamentals Manual")
+
+        # 2. Main Content Notebook / Grid
+        content_frame = tk.Frame(self.root, bg=self.bg_dark)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
+
+        # Top Control Card
+        control_card = tk.LabelFrame(
+            content_frame,
+            text=" Alignment Configuration ",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=14,
+            pady=10
+        )
+        control_card.pack(fill=tk.X, pady=(0, 8))
+
+        # Dataset Path Selection
+        path_row = tk.Frame(control_card, bg=self.panel_bg)
+        path_row.pack(fill=tk.X, pady=4)
+
+        tk.Label(
+            path_row,
+            text="Dataset Folder:",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            width=14,
+            anchor="w"
+        ).pack(side=tk.LEFT)
+
+        self.dataset_var = tk.StringVar(value=r"C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Sony\101MSDCF\CC\Interior\RedBox\SEL Copy")
+        self.path_entry = tk.Entry(
+            path_row,
+            textvariable=self.dataset_var,
+            font=("Segoe UI", 9),
+            bg=self.bg_dark,
+            fg=self.text_primary,
+            insertbackground=self.text_primary,
+            relief=tk.FLAT
+        )
+        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=3)
+
+        browse_btn = tk.Button(
+            path_row,
+            text="Browse...",
+            font=("Segoe UI", 9),
+            bg=self.accent_blue,
+            fg="#ffffff",
+            activebackground="#2563eb",
+            relief=tk.FLAT,
+            padx=12,
+            command=self._browse_dataset
+        )
+        browse_btn.pack(side=tk.RIGHT)
+
+        # Options Grid: 4 Clean Columns
+        opts_grid = tk.Frame(control_card, bg=self.panel_bg)
+        opts_grid.pack(fill=tk.X, pady=(8, 4))
+
+        # Column 1: Engine & Canvas
+        col1 = tk.Frame(opts_grid, bg=self.panel_bg)
+        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(col1, text="Engine & Canvas:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.engine_var = tk.StringVar(value="vggt_omega")
+        rb_omega = tk.Radiobutton(col1, text="VGGT-Omega (Fast, Low VRAM)", variable=self.engine_var, value="vggt_omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_omega.pack(anchor="w")
+        rb_vggt = tk.Radiobutton(col1, text="VGGT Standard 1B", variable=self.engine_var, value="vggt", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_vggt.pack(anchor="w")
+        rb_ace0 = tk.Radiobutton(col1, text="ACE0 (Niantic Labs SfM)", variable=self.engine_var, value="ace0", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace0.pack(anchor="w")
+
+        ToolTip(rb_omega, "VGGT-Omega: Next-Gen Visual Geometry Transformer with Register Attention. Blazing fast, low VRAM footprint.")
+        ToolTip(rb_vggt, "VGGT-1B: Standard 1-Billion parameter foundation model. Full global attention cross-frame tracking.")
+        ToolTip(rb_ace0, "ACE0 (ECCV 2024 Oral): Learning-based Structure-from-Motion by Niantic Labs. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
+
+        sub_row = tk.Frame(col1, bg=self.panel_bg)
+        sub_row.pack(anchor="w", pady=(4, 0))
+        tk.Label(sub_row, text="Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        self.res_var = tk.StringVar(value="1024")
+        res_cb = ttk.Combobox(sub_row, textvariable=self.res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
+        res_cb.pack(side=tk.LEFT, padx=(2, 6))
+
+        tk.Label(sub_row, text="Stride:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        self.stride_var = tk.StringVar(value="1")
+        stride_cb = ttk.Combobox(sub_row, textvariable=self.stride_var, values=["1", "2", "3", "4", "5"], state="readonly", width=4)
+        stride_cb.pack(side=tk.LEFT, padx=2)
+
+        # Column 2: Point Cloud Density (Quality)
+        col2 = tk.Frame(opts_grid, bg=self.panel_bg)
+        col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(col2, text="Point Cloud Density:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.density_var = tk.StringVar(value="high")
+        rb_q1 = tk.Radiobutton(col2, text="Preview (100K pts, Conf 2.2)", variable=self.density_var, value="preview", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q1.pack(anchor="w")
+        rb_q2 = tk.Radiobutton(col2, text="High Quality (300K pts, Conf 1.8)", variable=self.density_var, value="high", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q2.pack(anchor="w")
+        rb_q3 = tk.Radiobutton(col2, text="Ultra Dense (800K pts, Conf 1.5)", variable=self.density_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q3.pack(anchor="w")
+        rb_q4 = tk.Radiobutton(col2, text="Max Scan Grade (1.5M pts, Conf 1.2)", variable=self.density_var, value="max", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q4.pack(anchor="w")
+
+        # Column 3: Camera Alignment Accuracy
+        col3 = tk.Frame(opts_grid, bg=self.panel_bg)
+        col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(col3, text="Camera Alignment Accuracy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.align_var = tk.StringVar(value="ultra")
+        rb_a1 = tk.Radiobutton(col3, text="Feedforward (Fast, ~25s)", variable=self.align_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a1.pack(anchor="w")
+        rb_a2 = tk.Radiobutton(col3, text="Standard Ceres BA (~1m)", variable=self.align_var, value="standard", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a2.pack(anchor="w")
+        rb_a3 = tk.Radiobutton(col3, text="Ultra Sub-Pixel BA (Cauchy+Polish)", variable=self.align_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a3.pack(anchor="w")
+
+        # Column 4: Lens Distortion Calibration
+        col4 = tk.Frame(opts_grid, bg=self.panel_bg)
+        col4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(col4, text="Lens Distortion Model:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.lens_var = tk.StringVar(value="brown")
+        rb_l1 = tk.Radiobutton(col4, text="Pinhole (Ideal, zero distortion)", variable=self.lens_var, value="pinhole", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_l1.pack(anchor="w")
+        rb_l2 = tk.Radiobutton(col4, text="Brown Calibration (k1-k2, t1-t2)", variable=self.lens_var, value="brown", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_l2.pack(anchor="w")
+
+        # 3. Action Buttons & Progress Bar
+        action_bar = tk.Frame(content_frame, bg=self.bg_dark)
+        action_bar.pack(fill=tk.X, pady=(0, 6))
+
+        self.start_btn = tk.Button(
+            action_bar,
+            text="▶  START ALIGNMENT",
+            font=("Segoe UI", 11, "bold"),
+            bg=self.accent_green,
+            fg="#ffffff",
+            activebackground="#059669",
+            relief=tk.FLAT,
+            padx=18,
+            pady=6,
+            command=self._start_alignment
+        )
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.stop_btn = tk.Button(
+            action_bar,
+            text="■  STOP",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.accent_red,
+            fg="#ffffff",
+            activebackground="#dc2626",
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            state=tk.DISABLED,
+            command=self._stop_alignment
+        )
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.open_folder_btn = tk.Button(
+            action_bar,
+            text="📁 Open Results",
+            font=("Segoe UI", 10),
+            bg=self.panel_bg,
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            command=self._open_results_folder
+        )
+        self.open_folder_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.logs_btn = tk.Button(
+            action_bar,
+            text="📁 Logs",
+            font=("Segoe UI", 10),
+            bg=self.panel_bg,
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            command=self._open_logs_folder
+        )
+        self.logs_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.viewer_btn = tk.Button(
+            action_bar,
+            text="🌐 3D Browser Viewer",
+            font=("Segoe UI", 10),
+            bg=self.panel_bg,
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            command=self._launch_viewer
+        )
+        self.viewer_btn.pack(side=tk.LEFT)
+
+        # Attach interactive parameter tooltips
+        ToolTip(self.path_entry, "Dataset Folder: Directory containing JPG/PNG photos to align.")
+        ToolTip(browse_btn, "Browse: Open folder selector to pick your photoscanning dataset.")
+
+        ToolTip(rb_omega, "VGGT-Omega Engine (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
+        ToolTip(rb_vggt, "VGGT Standard 1B Engine: Original 1.18B-parameter vision foundation model. Predicts 3D point maps and camera poses in a single forward pass.")
+        ToolTip(res_cb, "Canvas Resolution: 512 is fastest for preview/low VRAM; 1024/1536/2048 offers finer spatial detail for feature tracking on 40MP-60MP cameras.")
+        ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
+
+        ToolTip(rb_q1, "Preview (100K pts, Conf >= 2.2): High neural confidence filter. Fastest point cloud for quick visual checks.")
+        ToolTip(rb_q2, "High Quality (300K pts, Conf >= 1.8): Optimal balance of density and surface cleanliness. Recommended seed for 3D Gaussian Splatting (Postshot).")
+        ToolTip(rb_q3, "Ultra Dense (800K pts, Conf >= 1.5): Deep surface coverage, capturing intricate recesses, background geometry, and secondary objects.")
+        ToolTip(rb_q4, "Max Scan Grade (1.5M pts, Conf >= 1.2): Maximum geometric fidelity. Retains fine edges, wires, corners, and foliage.")
+
+        ToolTip(rb_a1, "Feedforward Pose (~25s): 100% Pure Deep Learning. Predicts camera positions and rotations in a single forward pass without bundle adjustment (~2-4px reprojection error).")
+        ToolTip(rb_a2, "Standard Ceres BA (~1m): Hybrid pipeline. ALIKED neural feature tracking + Google Ceres Levenberg-Marquardt bundle adjustment.")
+        ToolTip(rb_a3, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]: Solves 3,072 multi-view tracks with Cauchy robust loss to downweight outliers, followed by pruning and a 2nd polish pass to reach 0.35 px error.")
+
+        ToolTip(rb_l1, "Pinhole Model: Ideal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0). Native to VGGT training prior. Recommended for pre-undistorted imagery.")
+        ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]: Self-calibrates physical radial (k1, k2) and tangential (t1, t2) lens curvature in Google Ceres. Essential for wide-angle lenses.")
+
+        ToolTip(self.start_btn, "Start Alignment: Launch neural photogrammetry alignment and export results for RealityScan, Postshot, and COLMAP.")
+        ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment process and free GPU memory.")
+        ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
+        ToolTip(self.logs_btn, "Open Logs: Open the logs folder in Windows Explorer to inspect detailed diagnostic files.")
+        ToolTip(self.viewer_btn, "3D Browser Viewer: Launch interactive web browser viewer (http://localhost:8080) to inspect cameras and 3D point cloud in real time.")
+
+        # 4. Live Progress Console Card
+        console_card = tk.LabelFrame(
+            content_frame,
+            text=" Live Telemetry & Process Logs ",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=10,
+            pady=6
+        )
+        console_card.pack(fill=tk.BOTH, expand=True)
+
+        console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
+        console_toolbar.pack(fill=tk.X, pady=(0, 4))
+
+        self.log_status_lbl = tk.Label(
+            console_toolbar,
+            text="Log File: Ready (All runs saved to Abu_Align\\logs\\)",
+            font=("Segoe UI", 8),
+            fg=self.text_secondary,
+            bg=self.panel_bg
+        )
+        self.log_status_lbl.pack(side=tk.LEFT)
+
+        view_log_btn = tk.Button(
+            console_toolbar,
+            text="📄 View Latest Log",
+            font=("Segoe UI", 8),
+            bg="#29293d",
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            command=self._open_latest_log
+        )
+        view_log_btn.pack(side=tk.RIGHT)
+        ToolTip(view_log_btn, "Open the latest execution log in default text editor.")
+
+        self.console = ScrolledText(
+            console_card,
+            bg=self.console_bg,
+            fg="#a6accd",
+            insertbackground="#ffffff",
+            font=("Consolas", 9),
+            relief=tk.FLAT,
+            wrap=tk.WORD
+        )
+        self.console.pack(fill=tk.BOTH, expand=True)
+        self._log("Abu Align Version 0.0.1.0 Ready.\nTriple-Engine Architecture: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nPersistent Session Logging: Enabled (Saving to Abu_Align\\logs\\).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+
+    def _get_logs_dir(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        if "versions" in base_dir:
+            logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
+        else:
+            logs_dir = os.path.join(base_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        return logs_dir
+
+    def _ensure_logs_dir(self):
+        return self._get_logs_dir()
+
+    def _open_logs_folder(self):
+        logs_dir = self._get_logs_dir()
+        if os.path.isdir(logs_dir):
+            os.startfile(logs_dir)
+        else:
+            messagebox.showinfo("Logs", f"Logs folder does not exist yet:\n{logs_dir}")
+
+    def _open_latest_log(self):
+        logs_dir = self._get_logs_dir()
+        latest_file = os.path.join(logs_dir, "abu_align_latest.log")
+        if os.path.isfile(latest_file) and os.path.getsize(latest_file) > 0:
+            os.startfile(latest_file)
+            return
+
+        log_files = sorted(
+            [os.path.join(logs_dir, f) for f in os.listdir(logs_dir) if f.endswith(".log")],
+            key=os.path.getmtime,
+            reverse=True
+        )
+        if log_files:
+            os.startfile(log_files[0])
+        else:
+            messagebox.showinfo("Logs", "No log files found yet. Run an alignment first!")
+
+    def _browse_dataset(self):
+        folder = filedialog.askdirectory(initialdir=self.dataset_var.get())
+        if folder:
+            self.dataset_var.set(folder)
+
+    def _log(self, text):
+        self.console.insert(tk.END, text)
+        self.console.see(tk.END)
+
+    def _start_alignment(self):
+        if self.is_running:
+            return
+
+        dataset_path = self.dataset_var.get().strip()
+        if not os.path.isdir(dataset_path):
+            messagebox.showerror("Error", f"Dataset folder not found:\n{dataset_path}")
+            return
+
+        self.is_running = True
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.console.delete(1.0, tk.END)
+
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        logs_dir = self._get_logs_dir()
+        self.active_log_path = os.path.join(logs_dir, f"abu_align_{timestamp}.log")
+        self.log_status_lbl.config(
+            text=f"Log: abu_align_{timestamp}.log",
+            fg=self.accent_green
+        )
+
+        cmd = [
+            self.conda_python,
+            "-u",
+            self.cli_script,
+            "--input", dataset_path,
+            "--engine", self.engine_var.get(),
+            "--stride", str(self.stride_var.get()),
+            "--load_res", str(self.res_var.get()),
+            "--align_mode", self.align_var.get(),
+            "--lens_model", self.lens_var.get(),
+        ]
+
+        density = self.density_var.get()
+        if density == "preview":
+            cmd.extend(["--conf_thresh", "2.2", "--max_points", "100000"])
+        elif density == "high":
+            cmd.extend(["--conf_thresh", "1.8", "--max_points", "300000"])
+        elif density == "ultra":
+            cmd.extend(["--conf_thresh", "1.5", "--max_points", "800000"])
+        elif density == "max":
+            cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
+
+        self._log(f"Executing: {' '.join(cmd)}\n")
+        self._log(f"Session Log: {self.active_log_path}\n\n")
+
+        thread = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
+        thread.start()
+
+    def _run_process(self, cmd):
+        log_path = self.active_log_path
+        logs_dir = self._get_logs_dir()
+        latest_path = os.path.join(logs_dir, "abu_align_latest.log")
+
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write("=" * 72 + "\n")
+                lf.write("Abu Align v0.0.1.0 - Run Telemetry & Diagnostic Log\n")
+                lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                lf.write(f"Command:   {' '.join(cmd)}\n")
+                lf.write("=" * 72 + "\n\n")
+                lf.flush()
+
+                self.worker_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+
+                for line in iter(self.worker_process.stdout.readline, ""):
+                    if line:
+                        lf.write(line)
+                        lf.flush()
+                        self.output_queue.put(line)
+                        if "Output Directory:" in line:
+                            parts = line.split("Output Directory:")
+                            if len(parts) > 1:
+                                self.latest_output_dir = parts[1].strip()
+
+                self.worker_process.stdout.close()
+                exit_code = self.worker_process.wait()
+
+                lf.write("\n" + "-" * 72 + "\n")
+                lf.write(f"Process Completed. Exit Code: {exit_code} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                lf.write("-" * 72 + "\n")
+                lf.flush()
+
+            try:
+                import shutil
+                shutil.copyfile(log_path, latest_path)
+            except Exception:
+                pass
+
+        except Exception as e:
+            err_msg = f"\n[ERROR] Worker process execution failed: {str(e)}\n"
+            self.output_queue.put(err_msg)
+            try:
+                with open(log_path, "a", encoding="utf-8") as lf:
+                    lf.write(err_msg)
+            except Exception:
+                pass
+        finally:
+            self.is_running = False
+            self.output_queue.put("__PROCESS_FINISHED__")
+
+    def _check_queue(self):
+        try:
+            while True:
+                msg = self.output_queue.get_nowait()
+                if msg == "__PROCESS_FINISHED__":
+                    self.start_btn.config(state=tk.NORMAL)
+                    self.stop_btn.config(state=tk.DISABLED)
+                    self._log("\n[STATUS] Alignment Run Completed.\n")
+                    self.log_status_lbl.config(
+                        text="Log: Saved (Abu_Align\\logs\\)",
+                        fg=self.text_secondary
+                    )
+                else:
+                    self._log(msg)
+        except queue.Empty:
+            pass
+        self.root.after(80, self._check_queue)
+
+    def _stop_alignment(self):
+        if self.worker_process and self.is_running:
+            try:
+                self.worker_process.terminate()
+                self._log("\n[ABORT] User cancelled alignment process.\n")
+            except Exception:
+                pass
+            self.is_running = False
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+
+    def _open_results_folder(self):
+        target = self.latest_output_dir
+        if not target or not os.path.isdir(target):
+            dataset = self.dataset_var.get().strip()
+            target = os.path.join(dataset, "results")
+        if os.path.isdir(target):
+            os.startfile(target)
+        else:
+            messagebox.showinfo("Info", f"Results folder does not exist yet:\n{target}")
+
+    def _launch_viewer(self):
+        dataset = self.dataset_var.get().strip()
+        if not os.path.isdir(dataset):
+            messagebox.showerror("Error", "Please select a valid dataset folder first.")
+            return
+
+        # Locate fast_viewer.py
+        base_dirs = [
+            os.path.dirname(self.cli_script),
+            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ]
+        fast_viewer_script = None
+        for b in base_dirs:
+            candidate = os.path.join(b, "fast_viewer.py")
+            if os.path.isfile(candidate):
+                fast_viewer_script = candidate
+                break
+
+        if not fast_viewer_script:
+            messagebox.showerror("Error", "fast_viewer.py not found.")
+            return
+
+        target_arg = self.latest_output_dir if self.latest_output_dir and os.path.isdir(self.latest_output_dir) else dataset
+        cmd = [self.conda_python, fast_viewer_script, "--input", target_arg]
+        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
+
+    def _open_doc_window(self, title, doc_path):
+        if not os.path.isfile(doc_path):
+            messagebox.showerror("Error", f"Document file not found:\n{doc_path}")
+            return
+
+        doc_win = tk.Toplevel(self.root)
+        doc_win.title(f"Abu Align v0.0.0.7 - {title}")
+        doc_win.geometry("960x780")
+        doc_win.minsize(800, 550)
+        doc_win.configure(bg=self.bg_dark)
+
+        # Header toolbar
+        tb = tk.Frame(doc_win, bg=self.panel_bg, height=48, padx=12, pady=8)
+        tb.pack(fill=tk.X)
+
+        doc_title_lbl = tk.Label(
+            tb,
+            text=f"📖  {title}",
+            font=("Segoe UI", 11, "bold"),
+            fg=self.accent_blue,
+            bg=self.panel_bg
+        )
+        doc_title_lbl.pack(side=tk.LEFT, padx=(4, 16))
+
+        # Search bar
+        search_lbl = tk.Label(tb, text="🔍 Find:", font=("Segoe UI", 9), fg=self.text_secondary, bg=self.panel_bg)
+        search_lbl.pack(side=tk.LEFT, padx=(4, 2))
+
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            tb,
+            textvariable=search_var,
+            font=("Segoe UI", 9),
+            bg="#2a2a3e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief=tk.FLAT,
+            width=22
+        )
+        search_entry.pack(side=tk.LEFT, padx=4, ipady=3)
+
+        match_lbl = tk.Label(tb, text="", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg)
+        match_lbl.pack(side=tk.LEFT, padx=4)
+
+        find_state = {"matches": [], "current_idx": -1}
+
+        def do_search(forward=True):
+            query = search_var.get().strip()
+            text_widget.tag_remove("search_hl", "1.0", tk.END)
+            text_widget.tag_remove("search_current", "1.0", tk.END)
+            find_state["matches"] = []
+
+            if not query:
+                match_lbl.config(text="")
+                return
+
+            start_idx = "1.0"
+            while True:
+                pos = text_widget.search(query, start_idx, stopindex=tk.END, nocase=True)
+                if not pos:
+                    break
+                end_pos = f"{pos}+{len(query)}c"
+                text_widget.tag_add("search_hl", pos, end_pos)
+                find_state["matches"].append((pos, end_pos))
+                start_idx = end_pos
+
+            total = len(find_state["matches"])
+            if total == 0:
+                match_lbl.config(text="No matches", fg=self.accent_red)
+                return
+
+            if forward:
+                find_state["current_idx"] = (find_state["current_idx"] + 1) % total
+            else:
+                find_state["current_idx"] = (find_state["current_idx"] - 1) % total
+
+            cur = find_state["current_idx"]
+            match_lbl.config(text=f"{cur + 1}/{total}", fg=self.accent_green)
+
+            cur_start, cur_end = find_state["matches"][cur]
+            text_widget.tag_add("search_current", cur_start, cur_end)
+            text_widget.see(cur_start)
+
+        find_next_btn = tk.Button(
+            tb,
+            text="▼ Next",
+            font=("Segoe UI", 8),
+            bg="#2a2a3e",
+            fg="#f8fafc",
+            relief=tk.FLAT,
+            padx=6,
+            pady=1,
+            command=lambda: do_search(True)
+        )
+        find_next_btn.pack(side=tk.LEFT, padx=2)
+
+        find_prev_btn = tk.Button(
+            tb,
+            text="▲ Prev",
+            font=("Segoe UI", 8),
+            bg="#2a2a3e",
+            fg="#f8fafc",
+            relief=tk.FLAT,
+            padx=6,
+            pady=1,
+            command=lambda: do_search(False)
+        )
+        find_prev_btn.pack(side=tk.LEFT, padx=2)
+
+        search_entry.bind("<Return>", lambda e: do_search(True))
+        search_entry.bind("<KeyRelease>", lambda e: do_search(True) if search_var.get() else match_lbl.config(text=""))
+        doc_win.bind("<Control-f>", lambda e: search_entry.focus_set())
+        doc_win.bind("<Escape>", lambda e: doc_win.destroy())
+
+        close_btn = tk.Button(
+            tb,
+            text="✕ Close",
+            font=("Segoe UI", 8, "bold"),
+            bg="#374151",
+            fg="#f8fafc",
+            activebackground=self.accent_red,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=2,
+            command=doc_win.destroy
+        )
+        close_btn.pack(side=tk.RIGHT, padx=4)
+
+        # ScrolledText display
+        text_frame = tk.Frame(doc_win, bg=self.bg_dark, padx=12, pady=8)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        text_widget = ScrolledText(
+            text_frame,
+            wrap=tk.WORD,
+            bg="#11111b",
+            fg="#e2e8f0",
+            insertbackground="#ffffff",
+            selectbackground="#3b82f6",
+            selectforeground="#ffffff",
+            font=("Segoe UI", 10),
+            padx=18,
+            pady=14,
+            relief=tk.FLAT
+        )
+        text_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Configure styling tags
+        text_widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), foreground="#60a5fa", spacing1=12, spacing3=6)
+        text_widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), foreground="#38bdf8", spacing1=10, spacing3=4)
+        text_widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), foreground="#a5b4fc", spacing1=6, spacing3=2)
+        text_widget.tag_configure("code_block", font=("Consolas", 9), background="#1e1e2e", foreground="#fdba74", spacing1=2, spacing3=2)
+        text_widget.tag_configure("bullet", font=("Segoe UI", 10), foreground="#93c5fd")
+        text_widget.tag_configure("alert_note", font=("Segoe UI", 9, "bold"), foreground="#38bdf8")
+        text_widget.tag_configure("alert_warn", font=("Segoe UI", 9, "bold"), foreground="#f59e0b")
+        text_widget.tag_configure("hr", font=("Segoe UI", 4), foreground="#374151")
+        text_widget.tag_configure("search_hl", background="#854d0e", foreground="#ffffff")
+        text_widget.tag_configure("search_current", background="#dc2626", foreground="#ffffff")
+
+        # Load file and parse Markdown
+        try:
+            with open(doc_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            in_code_block = False
+            for line in lines:
+                sline = line.strip()
+                if sline.startswith("```"):
+                    in_code_block = not in_code_block
+                    text_widget.insert(tk.END, line, "code_block")
+                elif in_code_block:
+                    text_widget.insert(tk.END, line, "code_block")
+                elif sline.startswith("# "):
+                    text_widget.insert(tk.END, line, "h1")
+                elif sline.startswith("## "):
+                    text_widget.insert(tk.END, line, "h2")
+                elif sline.startswith("### "):
+                    text_widget.insert(tk.END, line, "h3")
+                elif sline.startswith("- ") or sline.startswith("* "):
+                    text_widget.insert(tk.END, "  • ", "bullet")
+                    text_widget.insert(tk.END, line[2:])
+                elif sline.startswith("> [!NOTE]") or sline.startswith("> [!TIP]"):
+                    text_widget.insert(tk.END, "ℹ️ " + line[2:], "alert_note")
+                elif sline.startswith("> [!WARNING]") or sline.startswith("> [!CAUTION]"):
+                    text_widget.insert(tk.END, "⚠️ " + line[2:], "alert_warn")
+                elif sline.startswith("---") or sline.startswith("==="):
+                    text_widget.insert(tk.END, "─" * 70 + "\n", "hr")
+                else:
+                    text_widget.insert(tk.END, line)
+
+            text_widget.config(state=tk.DISABLED)
+        except Exception as e:
+            text_widget.insert(tk.END, f"Error reading document: {e}")
+
+    def _open_user_guide(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(base_dir, "docs", "ABU_ALIGN_USER_GUIDE.md"),
+            os.path.join(os.path.dirname(base_dir), "docs", "ABU_ALIGN_USER_GUIDE.md"),
+            os.path.join(base_dir, "ABU_ALIGN_USER_GUIDE.md"),
+        ]
+        for p in possible_paths:
+            if os.path.isfile(p):
+                self._open_doc_window("User Guide & Fundamentals Manual", p)
+                return
+        messagebox.showinfo("User Guide", "User Guide document (ABU_ALIGN_USER_GUIDE.md) not found.")
+
+    def _open_architecture_doc(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(base_dir, "docs", "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+            os.path.join(os.path.dirname(base_dir), "docs", "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+            os.path.join(base_dir, "AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md"),
+        ]
+        for p in possible_paths:
+            if os.path.isfile(p):
+                self._open_doc_window("AI vs Traditional Architecture Whitepaper", p)
+                return
+        messagebox.showinfo("Architecture Whitepaper", "Architecture document (AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md) not found.")
+
+    def _show_about_box(self):
+        about_text = (
+            "Abu Align - Version 0.0.1.0\n"
+            "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
+            "• Engines: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0 (ECCV 2024)\n"
+            "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment / ACE Regression\n"
+            "• Feature Tracking: Sub-Pixel Dense Matching (ALIKED + SuperPoint)\n"
+            "• Coordinate Alignment: Standard Z-Up (Euler Nadir Pitch [0°, 180°])\n"
+            "• Orientation Support: Dynamic Multi-Sensor Grouping (Portrait & Landscape)\n"
+            "• Native In-App Documentation Reader & Fast 3D Browser Viewer\n"
+            "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
+            "• Logging: Persistent Telemetry in Abu_Align\\logs\\\n"
+            "• Scalability: Smart Auto-Chunking & VRAM Guard (1,000+ Photos)\n\n"
+            "Target Integrations: RealityScan / RealityCapture, Postshot (3DGS), COLMAP\n"
+            "Developer: saemranian"
+        )
+        messagebox.showinfo("About Abu Align", about_text)
+
+def main():
+    root = tk.Tk()
+    app = AbuAlignApp(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

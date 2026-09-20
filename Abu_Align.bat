@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Abu Align Version 0.0.0.9
+title Abu Align Version 0.0.1.0
 cd /d "%~dp0"
 set "CONDA_PYTHON=C:\Users\USer\miniconda3\envs\vggt\python.exe"
 

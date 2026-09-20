@@ -1,7 +1,7 @@
 """
-Abu Align Version 0.0.0.9
+Abu Align Version 0.0.1.0
 Professional Graphical User Interface for Neural Photogrammetry Alignment
-Built on VGGT & VGGT-Omega with PyCeres Bundle Adjustment
+Built on VGGT, VGGT-Omega, and Niantic Labs ACE0 with PyCeres Bundle Adjustment
 """
 
 import os
@@ -115,7 +115,7 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.0.9 (Neural Photogrammetry)")
+        self.root.title("Abu Align - Version 0.0.1.0 (Neural Photogrammetry)")
         self.root.geometry("1020x800")
         self.root.minsize(880, 660)
 
@@ -194,7 +194,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.0.9",
+            text="v0.0.1.0",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_blue,
@@ -298,6 +298,12 @@ class AbuAlignApp:
         rb_omega.pack(anchor="w")
         rb_vggt = tk.Radiobutton(col1, text="VGGT Standard 1B", variable=self.engine_var, value="vggt", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_vggt.pack(anchor="w")
+        rb_ace0 = tk.Radiobutton(col1, text="ACE0 (Niantic Labs SfM)", variable=self.engine_var, value="ace0", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace0.pack(anchor="w")
+
+        ToolTip(rb_omega, "VGGT-Omega: Next-Gen Visual Geometry Transformer with Register Attention. Blazing fast, low VRAM footprint.")
+        ToolTip(rb_vggt, "VGGT-1B: Standard 1-Billion parameter foundation model. Full global attention cross-frame tracking.")
+        ToolTip(rb_ace0, "ACE0 (ECCV 2024 Oral): Learning-based Structure-from-Motion by Niantic Labs. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
 
         sub_row = tk.Frame(col1, bg=self.panel_bg)
         sub_row.pack(anchor="w", pady=(4, 0))
@@ -501,7 +507,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align Version 0.0.0.5 Ready.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nPersistent Session Logging: Enabled (Saving to Abu_Align\\logs\\).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+        self._log("Abu Align Version 0.0.1.0 Ready.\nTriple-Engine Architecture: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nPersistent Session Logging: Enabled (Saving to Abu_Align\\logs\\).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
 
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -606,7 +612,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align v0.0.0.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align v0.0.1.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -946,10 +952,10 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.0.9\n"
+            "Abu Align - Version 0.0.1.0\n"
             "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
-            "• Engine: VGGT & VGGT-Omega Foundation Models\n"
-            "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment\n"
+            "• Engines: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0 (ECCV 2024)\n"
+            "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment / ACE Regression\n"
             "• Feature Tracking: Sub-Pixel Dense Matching (ALIKED + SuperPoint)\n"
             "• Coordinate Alignment: Standard Z-Up (Euler Nadir Pitch [0°, 180°])\n"
             "• Orientation Support: Dynamic Multi-Sensor Grouping (Portrait & Landscape)\n"
