@@ -651,12 +651,22 @@ def main():
     is_ultra = align_mode == "ultra"
 
     if use_ba:
-        query_frames = min(num_frames, 6 if is_ultra else 4)
+        if num_frames > 48:
+            # Trajectory-wide uniform keyframe distribution for large scans:
+            # Spaced every ~12-16 frames so every photo has immediate keyframe overlap
+            n_queries = min(16, max(8, num_frames // 14))
+            step = (num_frames - 1) / max(n_queries - 1, 1)
+            query_frames = sorted(list(set([int(round(i * step)) for i in range(n_queries)])))
+            query_count_str = f"{len(query_frames)} trajectory-spanning queries"
+        else:
+            query_frames = min(num_frames, 6 if is_ultra else 4)
+            query_count_str = f"{query_frames} queries"
+
         max_query_pts = 2048 if is_ultra else 1536
         reproj_err_thresh = args.max_reproj_error if args.max_reproj_error is not None else (3.5 if is_ultra else 6.0)
         track_vis_thresh = 0.3 if is_ultra else 0.2
 
-        print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_frames} queries, {max_query_pts} pts/frame, fine_tracking=False]...")
+        print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_count_str}, {max_query_pts} pts/frame, fine_tracking=False]...")
         from vggt.dependency.track_predict import predict_tracks
         from vggt.dependency.np_to_pycolmap import batch_np_matrix_to_pycolmap
         with torch.no_grad():
@@ -727,8 +737,18 @@ def main():
             ba_options.refine_principal_point = False  # Fixed at image center to eliminate gauge ambiguity
             ba_options.min_track_length = 3 if is_ultra else 2
 
-            # Auto-select solver type to guarantee stable, positive-definite Schur convergence
-            ba_options.ceres.auto_select_solver_type = True
+            LinearSolverType = type(ba_options.ceres.solver_options.linear_solver_type)
+            PreconditionerType = type(ba_options.ceres.solver_options.preconditioner_type)
+
+            if num_frames > 48:
+                # Iterative Schur PCG solver for large scans: eliminates SuiteSparse CHOLMOD Cholesky factorization failures
+                ba_options.ceres.auto_select_solver_type = False
+                ba_options.ceres.solver_options.linear_solver_type = LinearSolverType.ITERATIVE_SCHUR
+                ba_options.ceres.solver_options.preconditioner_type = PreconditionerType.SCHUR_JACOBI
+                ba_options.ceres.solver_options.max_linear_solver_iterations = 100
+            else:
+                ba_options.ceres.auto_select_solver_type = True
+
             ba_options.ceres.solver_options.function_tolerance = 1e-6
             ba_options.ceres.solver_options.parameter_tolerance = 1e-8
 

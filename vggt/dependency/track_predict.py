@@ -56,7 +56,10 @@ def predict_tracks(
     tracker = build_vggsfm_tracker().to(device, dtype)
 
     # Find query frames
-    query_frame_indexes = generate_rank_by_dino(images, query_frame_num=query_frame_num, device=device)
+    if isinstance(query_frame_num, (list, tuple, np.ndarray)):
+        query_frame_indexes = list(query_frame_num)
+    else:
+        query_frame_indexes = generate_rank_by_dino(images, query_frame_num=query_frame_num, device=device)
 
     # Add the first image to the front if not already present
     if 0 in query_frame_indexes:
