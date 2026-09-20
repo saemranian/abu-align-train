@@ -223,8 +223,8 @@ def _forward_on_query(
 
     pred_track, pred_vis = switch_tensor_order([pred_track, pred_vis], reorder_index, dim=1)
 
-    pred_track = pred_track.squeeze(0).float().cpu().numpy()
-    pred_vis = pred_vis.squeeze(0).float().cpu().numpy()
+    pred_track = pred_track.detach().squeeze(0).float().cpu().numpy()
+    pred_vis = pred_vis.detach().squeeze(0).float().cpu().numpy()
 
     return pred_track, pred_vis, pred_conf, pred_point_3d, pred_color
 

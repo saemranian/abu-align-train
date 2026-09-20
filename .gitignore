@@ -147,3 +147,14 @@ skyseg.onnx
 # pixi environments
 .pixi
 *.egg-info
+
+# Reconstruction outputs & point clouds
+examples/*/results/
+examples/*/sparse/
+**/results/
+**/sparse/
+*.ply
+*.bin
+backups/
+Abu_Align_Backups/
+scratch/

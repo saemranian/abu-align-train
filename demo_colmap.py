@@ -59,6 +59,9 @@ def parse_args():
     parser.add_argument(
         "--conf_thres_value", type=float, default=5.0, help="Confidence threshold value for depth filtering (wo BA)"
     )
+    parser.add_argument("--stride", type=int, default=1, help="Stride to subsample input images")
+    parser.add_argument("--max_frames", type=int, default=None, help="Maximum number of frames to reconstruct")
+    parser.add_argument("--output_dir", type=str, default=None, help="Custom output directory for sparse COLMAP files")
     return parser.parse_args()
 
 
@@ -118,10 +121,27 @@ def demo_fn(args):
     print(f"Model loaded")
 
     # Get image paths and preprocess them
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
     image_dir = os.path.join(args.scene_dir, "images")
-    image_path_list = glob.glob(os.path.join(image_dir, "*"))
+    if not os.path.isdir(image_dir):
+        image_dir = args.scene_dir
+
+    image_path_list = [
+        os.path.join(image_dir, f)
+        for f in sorted(os.listdir(image_dir))
+        if os.path.splitext(f)[1].lower() in valid_exts and os.path.isfile(os.path.join(image_dir, f))
+    ]
     if len(image_path_list) == 0:
-        raise ValueError(f"No images found in {image_dir}")
+        raise ValueError(f"No valid images found in {image_dir}")
+
+    if args.stride > 1:
+        image_path_list = image_path_list[::args.stride]
+        print(f"Subsampled images with stride {args.stride}: {len(image_path_list)} images")
+
+    if args.max_frames is not None and len(image_path_list) > args.max_frames:
+        image_path_list = image_path_list[:args.max_frames]
+        print(f"Limited images to max_frames {args.max_frames}")
+
     base_image_path_list = [os.path.basename(path) for path in image_path_list]
 
     # Load images and original coordinates
@@ -240,13 +260,13 @@ def demo_fn(args):
         shared_camera=shared_camera,
     )
 
-    print(f"Saving reconstruction to {args.scene_dir}/sparse")
-    sparse_reconstruction_dir = os.path.join(args.scene_dir, "sparse")
+    sparse_reconstruction_dir = args.output_dir if args.output_dir else os.path.join(args.scene_dir, "sparse")
+    print(f"Saving reconstruction to {sparse_reconstruction_dir}")
     os.makedirs(sparse_reconstruction_dir, exist_ok=True)
     reconstruction.write(sparse_reconstruction_dir)
 
     # Save point cloud for fast visualization
-    trimesh.PointCloud(points_3d, colors=points_rgb).export(os.path.join(args.scene_dir, "sparse/points.ply"))
+    trimesh.PointCloud(points_3d, colors=points_rgb).export(os.path.join(sparse_reconstruction_dir, "points.ply"))
 
     return True
 
@@ -263,24 +283,35 @@ def rename_colmap_recons_and_rescale_camera(
         pycamera = reconstruction.cameras[pyimage.camera_id]
         pyimage.name = image_paths[pyimageid - 1]
 
+        top_left = original_coords[pyimageid - 1, :2]
+        real_image_size = original_coords[pyimageid - 1, -2:]
+        resize_ratio = max(real_image_size) / img_size
+
         if rescale_camera:
             # Rescale the camera parameters
             pred_params = copy.deepcopy(pycamera.params)
 
-            real_image_size = original_coords[pyimageid - 1, -2:]
-            resize_ratio = max(real_image_size) / img_size
-            pred_params = pred_params * resize_ratio
-            real_pp = real_image_size / 2
-            pred_params[-2:] = real_pp  # center of the image
+            if pycamera.model_name in ["OPENCV", "FULL_OPENCV"]:
+                pred_params[0] *= resize_ratio  # fx
+                pred_params[1] *= resize_ratio  # fy
+                pred_params[2] = (pred_params[2] - top_left[0]) * resize_ratio  # cx
+                pred_params[3] = (pred_params[3] - top_left[1]) * resize_ratio  # cy
+                # Distortion parameters (k1, k2, p1, p2, k3, k4...) are dimensionless and scale-invariant
+            elif pycamera.model_name == "PINHOLE":
+                pred_params = pred_params * resize_ratio
+                real_pp = real_image_size / 2
+                pred_params[-2:] = real_pp  # center of the image
+            else:
+                pred_params = pred_params * resize_ratio
+                real_pp = real_image_size / 2
+                pred_params[-2:] = real_pp
 
             pycamera.params = pred_params
-            pycamera.width = real_image_size[0]
-            pycamera.height = real_image_size[1]
+            pycamera.width = int(real_image_size[0])
+            pycamera.height = int(real_image_size[1])
 
         if shift_point2d_to_original_res:
             # Also shift the point2D to original resolution
-            top_left = original_coords[pyimageid - 1, :2]
-
             for point2D in pyimage.points2D:
                 point2D.xy = (point2D.xy - top_left) * resize_ratio
 

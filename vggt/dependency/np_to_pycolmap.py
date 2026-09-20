@@ -98,16 +98,15 @@ def batch_np_matrix_to_pycolmap(
             )
 
             # add camera
-            reconstruction.add_camera(camera)
+            if hasattr(reconstruction, "add_camera_with_trivial_rig"):
+                reconstruction.add_camera_with_trivial_rig(camera)
+            else:
+                reconstruction.add_camera(camera)
 
         # set image
         cam_from_world = pycolmap.Rigid3d(
             pycolmap.Rotation3d(extrinsics[fidx][:3, :3]), extrinsics[fidx][:3, 3]
         )  # Rot and Trans
-
-        image = pycolmap.Image(
-            id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
-        )
 
         points2D_list = []
 
@@ -132,15 +131,23 @@ def batch_np_matrix_to_pycolmap(
 
         assert point2D_idx == len(points2D_list)
 
-        try:
-            image.points2D = pycolmap.ListPoint2D(points2D_list)
-            image.registered = True
-        except:
-            print(f"frame {fidx + 1} is out of BA")
-            image.registered = False
-
-        # add image
-        reconstruction.add_image(image)
+        if hasattr(reconstruction, "add_image_with_trivial_frame"):
+            image = pycolmap.Image(
+                name=f"image_{fidx + 1}", camera_id=camera.camera_id, image_id=fidx + 1, points2D=points2D_list
+            )
+            reconstruction.add_image_with_trivial_frame(image, cam_from_world)
+        else:
+            image = pycolmap.Image(
+                id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
+            )
+            try:
+                image.points2D = pycolmap.ListPoint2D(points2D_list)
+                image.registered = True
+            except:
+                print(f"frame {fidx + 1} is out of BA")
+                image.registered = False
+            # add image
+            reconstruction.add_image(image)
 
     return reconstruction, valid_mask
 
@@ -174,7 +181,8 @@ def pycolmap_to_batch_np_matrix(reconstruction, device="cpu", camera_type="SIMPL
         # Extract and append extrinsics
         pyimg = reconstruction.images[i + 1]
         pycam = reconstruction.cameras[pyimg.camera_id]
-        matrix = pyimg.cam_from_world.matrix()
+        cam_from_world = pyimg.cam_from_world() if callable(pyimg.cam_from_world) else pyimg.cam_from_world
+        matrix = cam_from_world.matrix()
         extrinsics.append(matrix)
 
         # Extract and append intrinsics
@@ -246,16 +254,15 @@ def batch_np_matrix_to_pycolmap_wo_track(
             )
 
             # add camera
-            reconstruction.add_camera(camera)
+            if hasattr(reconstruction, "add_camera_with_trivial_rig"):
+                reconstruction.add_camera_with_trivial_rig(camera)
+            else:
+                reconstruction.add_camera(camera)
 
         # set image
         cam_from_world = pycolmap.Rigid3d(
             pycolmap.Rotation3d(extrinsics[fidx][:3, :3]), extrinsics[fidx][:3, 3]
         )  # Rot and Trans
-
-        image = pycolmap.Image(
-            id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
-        )
 
         points2D_list = []
 
@@ -277,15 +284,23 @@ def batch_np_matrix_to_pycolmap_wo_track(
 
         assert point2D_idx == len(points2D_list)
 
-        try:
-            image.points2D = pycolmap.ListPoint2D(points2D_list)
-            image.registered = True
-        except:
-            print(f"frame {fidx + 1} does not have any points")
-            image.registered = False
-
-        # add image
-        reconstruction.add_image(image)
+        if hasattr(reconstruction, "add_image_with_trivial_frame"):
+            image = pycolmap.Image(
+                name=f"image_{fidx + 1}", camera_id=camera.camera_id, image_id=fidx + 1, points2D=points2D_list
+            )
+            reconstruction.add_image_with_trivial_frame(image, cam_from_world)
+        else:
+            image = pycolmap.Image(
+                id=fidx + 1, name=f"image_{fidx + 1}", camera_id=camera.camera_id, cam_from_world=cam_from_world
+            )
+            try:
+                image.points2D = pycolmap.ListPoint2D(points2D_list)
+                image.registered = True
+            except:
+                print(f"frame {fidx + 1} does not have any points")
+                image.registered = False
+            # add image
+            reconstruction.add_image(image)
 
     return reconstruction
 
@@ -307,13 +322,45 @@ def _build_pycolmap_intri(fidx, intrinsics, camera_type, extra_params=None):
         pycolmap_intri = np.array(
             [intrinsics[fidx][0, 0], intrinsics[fidx][1, 1], intrinsics[fidx][0, 2], intrinsics[fidx][1, 2]]
         )
+    elif camera_type == "OPENCV":
+        # params: fx, fy, cx, cy, k1, k2, p1, p2
+        pycolmap_intri = np.array(
+            [
+                intrinsics[fidx][0, 0],
+                intrinsics[fidx][1, 1],
+                intrinsics[fidx][0, 2],
+                intrinsics[fidx][1, 2],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
+    elif camera_type == "FULL_OPENCV":
+        # params: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        pycolmap_intri = np.array(
+            [
+                intrinsics[fidx][0, 0],
+                intrinsics[fidx][1, 1],
+                intrinsics[fidx][0, 2],
+                intrinsics[fidx][1, 2],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
     elif camera_type == "SIMPLE_PINHOLE":
         focal = (intrinsics[fidx][0, 0] + intrinsics[fidx][1, 1]) / 2
         pycolmap_intri = np.array([focal, intrinsics[fidx][0, 2], intrinsics[fidx][1, 2]])
     elif camera_type == "SIMPLE_RADIAL":
-        raise NotImplementedError("SIMPLE_RADIAL is not supported yet")
         focal = (intrinsics[fidx][0, 0] + intrinsics[fidx][1, 1]) / 2
-        pycolmap_intri = np.array([focal, intrinsics[fidx][0, 2], intrinsics[fidx][1, 2], extra_params[fidx][0]])
+        k1 = extra_params[fidx][0] if extra_params is not None else 0.0
+        pycolmap_intri = np.array([focal, intrinsics[fidx][0, 2], intrinsics[fidx][1, 2], k1])
     else:
         raise ValueError(f"Camera type {camera_type} is not supported yet")
 
