@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import time
 import torch
 import numpy as np
 from .vggsfm_utils import *
@@ -82,8 +83,18 @@ def predict_tracks(
     if fine_tracking:
         print("For faster inference, consider disabling fine_tracking")
 
-    for query_index in query_frame_indexes:
-        print(f"Predicting tracks for query frame {query_index}")
+    t_track_start = time.time()
+    total_queries = len(query_frame_indexes)
+
+    for q_i, query_index in enumerate(query_frame_indexes):
+        q_elapsed = time.time() - t_track_start
+        q_avg = q_elapsed / max(q_i, 1)
+        q_eta = q_avg * (total_queries - q_i) if q_i > 0 else 0
+        eta_str = f" | ETA: {int(q_eta//60)}m {int(q_eta%60):02d}s" if q_i > 0 else ""
+        pct = (q_i / total_queries) * 100
+
+        print(f"[TELEMETRY:STAGE5] query={q_i+1} total={total_queries} frame={query_index} pct={pct:.1f} eta_sec={int(q_eta)}", flush=True)
+        print(f"      * [Deep Tracking] Query [{q_i+1}/{total_queries}] (Frame {query_index}) - {pct:.1f}%{eta_str}...", flush=True)
         pred_track, pred_vis, pred_conf, pred_point_3d, pred_color = _forward_on_query(
             query_index,
             images,

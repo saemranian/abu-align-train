@@ -284,7 +284,10 @@ def predict_tracks_in_chunks(
     pred_vis_list = []
     pred_score_list = []
 
-    for split_points in query_points_list:
+    total_splits = len(query_points_list)
+    for s_idx, split_points in enumerate(query_points_list):
+        if total_splits > 1:
+            print(f"        [Chunk {s_idx+1}/{total_splits}] Tracking keypoints through temporal attention...", flush=True)
         # Feed into track predictor for each split
         fine_pred_track, _, pred_vis, pred_score = track_predictor(
             images_feed, split_points, fmaps=fmaps_feed, fine_tracking=fine_tracking, fine_chunk=fine_chunk
