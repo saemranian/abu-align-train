@@ -1,12 +1,13 @@
 """
-Abu Align Version 0.0.1.0
-Professional Graphical User Interface for Neural Photogrammetry Alignment
-Built on VGGT, VGGT-Omega, and Niantic Labs ACE0 with PyCeres Bundle Adjustment
+Abu Align & Train Version 0.0.1.2
+Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
+Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
 
 import os
 import sys
 import time
+import glob
 import subprocess
 import threading
 import queue
@@ -115,9 +116,9 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align - Version 0.0.1.0 (Neural Photogrammetry)")
-        self.root.geometry("1020x800")
-        self.root.minsize(880, 660)
+        self.root.title("Abu Align & Train - Version 0.0.1.2 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.geometry("1060x860")
+        self.root.minsize(880, 680)
 
         # Style configuration (Modern Dark Palette)
         self.bg_dark = "#181825"
@@ -125,6 +126,8 @@ class AbuAlignApp:
         self.accent_blue = "#3b82f6"
         self.accent_green = "#10b981"
         self.accent_red = "#ef4444"
+        self.accent_purple = "#8b5cf6"
+        self.accent_cyan = "#0284c7"
         self.text_primary = "#f8fafc"
         self.text_secondary = "#94a3b8"
         self.console_bg = "#11111b"
@@ -142,6 +145,18 @@ class AbuAlignApp:
             if os.path.isfile(c):
                 self.cli_script = c
                 break
+
+        train_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_engine.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train_engine.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "train_engine.py"),
+        ]
+        self.train_script = train_candidates[0]
+        for c in train_candidates:
+            if os.path.isfile(c):
+                self.train_script = c
+                break
+
         self.worker_process = None
         self.output_queue = queue.Queue()
         self.is_running = False
@@ -162,6 +177,7 @@ class AbuAlignApp:
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
         file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
+        file_menu.add_command(label="📁 Open 3DGS Models Folder", command=self._open_models_folder)
         file_menu.add_separator()
         file_menu.add_command(label="📁 Open Logs Folder", command=self._open_logs_folder)
         file_menu.add_command(label="📄 View Latest Log File", command=self._open_latest_log)
@@ -176,7 +192,7 @@ class AbuAlignApp:
         help_menu.add_separator()
         help_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
         help_menu.add_separator()
-        help_menu.add_command(label="ℹ️ About Abu Align", command=self._show_about_box)
+        help_menu.add_command(label="ℹ️ About Abu Align & Train", command=self._show_about_box)
 
     def _build_ui(self):
         # 1. Header Banner
@@ -185,7 +201,7 @@ class AbuAlignApp:
 
         title_lbl = tk.Label(
             header,
-            text="ABU ALIGN",
+            text="ABU ALIGN & TRAIN",
             font=("Segoe UI", 16, "bold"),
             fg=self.accent_blue,
             bg=self.panel_bg
@@ -194,10 +210,10 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.0",
+            text="v0.0.1.2",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
-            bg=self.accent_blue,
+            bg=self.accent_purple,
             padx=6,
             pady=2
         )
@@ -205,7 +221,7 @@ class AbuAlignApp:
 
         subtitle_lbl = tk.Label(
             header,
-            text="|   Neural Photogrammetry & Fast Lens Self-Calibration Engine",
+            text="|   Neural Photogrammetry & 3D Gaussian Splatting Training Suite",
             font=("Segoe UI", 10),
             fg=self.text_secondary,
             bg=self.panel_bg
@@ -300,10 +316,13 @@ class AbuAlignApp:
         rb_vggt.pack(anchor="w")
         rb_ace0 = tk.Radiobutton(col1, text="ACE0 (Niantic Labs SfM)", variable=self.engine_var, value="ace0", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_ace0.pack(anchor="w")
+        rb_cusfm = tk.Radiobutton(col1, text="NVIDIA PyCuSFM (cuSFM GPU)", variable=self.engine_var, value="pycusfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cusfm.pack(anchor="w")
 
         ToolTip(rb_omega, "VGGT-Omega: Next-Gen Visual Geometry Transformer with Register Attention. Blazing fast, low VRAM footprint.")
         ToolTip(rb_vggt, "VGGT-1B: Standard 1-Billion parameter foundation model. Full global attention cross-frame tracking.")
         ToolTip(rb_ace0, "ACE0 (ECCV 2024 Oral): Learning-based Structure-from-Motion by Niantic Labs. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
+        ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA Structure-from-Motion framework by NVIDIA Isaac. Combines learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and global bundle adjustment with cuDSS sparse GPU solver.")
 
         sub_row = tk.Frame(col1, bg=self.panel_bg)
         sub_row.pack(anchor="w", pady=(4, 0))
@@ -356,23 +375,219 @@ class AbuAlignApp:
         rb_l2 = tk.Radiobutton(col4, text="Brown Calibration (k1-k2, t1-t2)", variable=self.lens_var, value="brown", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_l2.pack(anchor="w")
 
-        # 3. Action Buttons & Progress Bar
+        tk.Label(col4, text="PyCuSFM Features:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w", pady=(6, 0))
+        self.cusfm_feat_var = tk.StringVar(value="aliked")
+        feat_cb = ttk.Combobox(col4, textvariable=self.cusfm_feat_var, values=["aliked", "superpoint", "sift"], state="readonly", width=12)
+        feat_cb.pack(anchor="w", padx=2, pady=2)
+        ToolTip(feat_cb, "Feature extractor for PyCuSFM engine: ALIKED (default, fast neural keypoints), SuperPoint (robust), or SIFT (classical CUDA).")
+
+        # Smart Cache & Memory Controls Row
+        cache_row = tk.Frame(control_card, bg=self.panel_bg)
+        cache_row.pack(fill=tk.X, pady=(6, 0))
+
+        self.cache_var = tk.BooleanVar(value=True)
+        cache_chk = tk.Checkbutton(
+            cache_row,
+            text="⚡ Smart Persistent Cache (.abu_cache) - Instant Re-runs (< 5s)",
+            variable=self.cache_var,
+            font=("Segoe UI", 9, "bold"),
+            fg="#60a5fa",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        cache_chk.pack(side=tk.LEFT)
+        ToolTip(cache_chk, "Smart Persistent Cache (.abu_cache):\n• Reuses neural poses & 3D points when changing Point Cloud Density, Alignment Accuracy, or Lens Distortion.\n• Reuses 2D feature tracks when re-solving Ceres BA.\n• Skips 5-15 minutes of neural inference and tracking on repeated runs.")
+
+        clear_cache_btn = tk.Button(
+            cache_row,
+            text="🗑 Clear Cache",
+            font=("Segoe UI", 8),
+            bg="#2a2a3e",
+            fg=self.text_primary,
+            activebackground=self.accent_red,
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=8,
+            pady=1,
+            command=self._clear_dataset_cache
+        )
+        clear_cache_btn.pack(side=tk.LEFT, padx=(8, 16))
+        ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
+
+        tk.Label(cache_row, text="Chunk:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        self.chunk_size_var = tk.StringVar(value="32")
+        chunk_cb = ttk.Combobox(cache_row, textvariable=self.chunk_size_var, values=["16", "24", "32", "48", "64"], state="readonly", width=4)
+        chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
+        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets (> 48 photos). Caps VRAM usage.")
+
+        tk.Label(cache_row, text="Anchor:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        self.anchor_var = tk.StringVar(value="8")
+        anchor_cb = ttk.Combobox(cache_row, textvariable=self.anchor_var, values=["4", "6", "8", "12", "16"], state="readonly", width=4)
+        anchor_cb.pack(side=tk.LEFT, padx=2)
+        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows for seamless Umeyama trajectory alignment.")
+
+        # 3. 3D Gaussian Splatting Training Suite Card (Abu Train)
+        train_card = tk.LabelFrame(
+            content_frame,
+            text=" 3D Gaussian Splatting Training Suite (Abu Train) ",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=14,
+            pady=8
+        )
+        train_card.pack(fill=tk.X, pady=(0, 8))
+
+        train_grid = tk.Frame(train_card, bg=self.panel_bg)
+        train_grid.pack(fill=tk.X, pady=(2, 4))
+
+        # Train Col 1: Auto-Train & Engine Selection
+        tcol1 = tk.Frame(train_grid, bg=self.panel_bg)
+        tcol1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        self.auto_train_var = tk.BooleanVar(value=True)
+        auto_chk = tk.Checkbutton(
+            tcol1,
+            text="⚡ Auto-Train 3DGS after Alignment finishes",
+            variable=self.auto_train_var,
+            font=("Segoe UI", 9, "bold"),
+            fg=self.accent_green,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        auto_chk.pack(anchor="w", pady=(0, 4))
+        ToolTip(auto_chk, "When checked, Abu Align automatically kicks off 3DGS training immediately after photogrammetry alignment finishes.")
+
+        tk.Label(tcol1, text="Training Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.train_engine_var = tk.StringVar(value="lichtfeld")
+        rb_t_lf = tk.Radiobutton(tcol1, text="LichtFeld Studio (Vulkan Real-Time GUI + GUT)", variable=self.train_engine_var, value="lichtfeld", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_t_lf.pack(anchor="w")
+        rb_t_ns = tk.Radiobutton(tcol1, text="Nerfstudio Splatfacto (PyTorch SOTA + PLY)", variable=self.train_engine_var, value="splatfacto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_t_ns.pack(anchor="w")
+        rb_t_gr = tk.Radiobutton(tcol1, text="NVIDIA 3DGRUT / 3DGUT (Ray Traced & GUT)", variable=self.train_engine_var, value="3dgrut", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_t_gr.pack(anchor="w")
+
+        ToolTip(rb_t_lf, "LichtFeld Studio: Native high-performance Vulkan/C++ 3DGS trainer with live real-time viewport (120+ FPS) and MCP bridge.")
+        ToolTip(rb_t_ns, "Nerfstudio Splatfacto: State-of-the-Art PyTorch 3DGS optimizer with automatic standalone Gaussian Splatting PLY exporter.")
+        ToolTip(rb_t_gr, "NVIDIA 3DGRUT / 3DGUT: NVIDIA Research framework for Gaussian ray tracing and unscented transform handling complex non-linear optics.")
+
+        # Train Col 2: Training Iterations
+        tcol2 = tk.Frame(train_grid, bg=self.panel_bg)
+        tcol2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(tcol2, text="Training Iterations:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
+        iter_cb = ttk.Combobox(
+            tcol2,
+            textvariable=self.train_iter_var,
+            values=[
+                "7,000 (Fast Preview)",
+                "15,000 (Balanced / Standard)",
+                "30,000 (Production High-Fidelity)"
+            ],
+            state="readonly",
+            width=28
+        )
+        iter_cb.pack(anchor="w", pady=(2, 6))
+        ToolTip(iter_cb, "Training duration: 7,000 steps (~1-2 min preview); 15,000 steps (~3-5 min standard); 30,000 steps (~7-10 min full production quality).")
+
+        # Train Col 3: Viewport Mode & Optics
+        tcol3 = tk.Frame(train_grid, bg=self.panel_bg)
+        tcol3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(tcol3, text="Training Viewport Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.train_mode_var = tk.StringVar(value="interactive")
+        rb_m_gui = tk.Radiobutton(tcol3, text="Interactive Viewport (Live 3D GUI)", variable=self.train_mode_var, value="interactive", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_m_gui.pack(anchor="w")
+        rb_m_cli = tk.Radiobutton(tcol3, text="Headless Background (Fast CLI)", variable=self.train_mode_var, value="headless", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_m_cli.pack(anchor="w")
+
+        self.gut_var = tk.BooleanVar(value=True)
+        gut_chk = tk.Checkbutton(
+            tcol3,
+            text="Enable GUT Optics (Unscented Transform)",
+            variable=self.gut_var,
+            font=("Segoe UI", 8),
+            fg=self.text_secondary,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        gut_chk.pack(anchor="w", pady=(4, 0))
+        ToolTip(gut_chk, "Gaussian Unscented Transform (GUT): Corrects camera ray curvature and optical distortion for sharper splats.")
+
+        # Train Col 4: Advanced Optics & Sparsity
+        tcol4 = tk.Frame(train_grid, bg=self.panel_bg)
+        tcol4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+
+        tk.Label(tcol4, text="Advanced Opts & Compression:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        self.bilateral_var = tk.BooleanVar(value=False)
+        bilat_chk = tk.Checkbutton(tcol4, text="Bilateral Grid Color Correct", variable=self.bilateral_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        bilat_chk.pack(anchor="w")
+        ToolTip(bilat_chk, "Bilateral Grid: Corrects complex non-linear lighting variations, dynamic shadows, and color shifts.")
+
+        self.exposure_var = tk.BooleanVar(value=False)
+        expo_chk = tk.Checkbutton(tcol4, text="Auto Exposure / WB Align", variable=self.exposure_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        expo_chk.pack(anchor="w")
+        ToolTip(expo_chk, "Per-camera auto-exposure and white-balance calibration across differing camera sensor captures.")
+
+        self.sparsity_var = tk.BooleanVar(value=False)
+        sparse_chk = tk.Checkbutton(tcol4, text="ADMM Sparsity Pruning (-60% MB)", variable=self.sparsity_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        sparse_chk.pack(anchor="w")
+        ToolTip(sparse_chk, "ADMM Sparsity Pruning: Removes near-zero opacity Gaussians during training, reducing PLY file size by up to 60%.")
+
+        self.mip_var = tk.BooleanVar(value=False)
+        mip_chk = tk.Checkbutton(tcol4, text="Anti-Aliased Mip-Filtering", variable=self.mip_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        mip_chk.pack(anchor="w")
+        ToolTip(mip_chk, "Mip-Splats: Anti-aliasing filter that prevents aliasing and high-frequency noise in fine textures.")
+
+        # 4. Action Buttons
         action_bar = tk.Frame(content_frame, bg=self.bg_dark)
         action_bar.pack(fill=tk.X, pady=(0, 6))
 
+        self.one_click_btn = tk.Button(
+            action_bar,
+            text="⚡  ONE-CLICK ALIGN & TRAIN",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.accent_purple,
+            fg="#ffffff",
+            activebackground="#7c3aed",
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            command=self._start_one_click
+        )
+        self.one_click_btn.pack(side=tk.LEFT, padx=(0, 6))
+
         self.start_btn = tk.Button(
             action_bar,
-            text="▶  START ALIGNMENT",
-            font=("Segoe UI", 11, "bold"),
+            text="▶  ALIGNMENT ONLY",
+            font=("Segoe UI", 10, "bold"),
             bg=self.accent_green,
             fg="#ffffff",
             activebackground="#059669",
             relief=tk.FLAT,
-            padx=18,
+            padx=12,
             pady=6,
             command=self._start_alignment
         )
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.train_only_btn = tk.Button(
+            action_bar,
+            text="🎯  TRAIN 3DGS ONLY",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.accent_cyan,
+            fg="#ffffff",
+            activebackground="#0369a1",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            command=self._start_train_only
+        )
+        self.train_only_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.stop_btn = tk.Button(
             action_bar,
@@ -382,50 +597,64 @@ class AbuAlignApp:
             fg="#ffffff",
             activebackground="#dc2626",
             relief=tk.FLAT,
-            padx=14,
+            padx=10,
             pady=6,
             state=tk.DISABLED,
             command=self._stop_alignment
         )
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.open_folder_btn = tk.Button(
             action_bar,
-            text="📁 Open Results",
-            font=("Segoe UI", 10),
+            text="📁 Results",
+            font=("Segoe UI", 9),
             bg=self.panel_bg,
             fg=self.text_primary,
             activebackground="#33334d",
             relief=tk.FLAT,
-            padx=12,
+            padx=9,
             pady=6,
             command=self._open_results_folder
         )
-        self.open_folder_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.open_folder_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.models_btn = tk.Button(
+            action_bar,
+            text="📁 3DGS Models",
+            font=("Segoe UI", 9),
+            bg=self.panel_bg,
+            fg=self.text_primary,
+            activebackground="#33334d",
+            relief=tk.FLAT,
+            padx=9,
+            pady=6,
+            command=self._open_models_folder
+        )
+        self.models_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.logs_btn = tk.Button(
             action_bar,
             text="📁 Logs",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             bg=self.panel_bg,
             fg=self.text_primary,
             activebackground="#33334d",
             relief=tk.FLAT,
-            padx=12,
+            padx=9,
             pady=6,
             command=self._open_logs_folder
         )
-        self.logs_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.logs_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.viewer_btn = tk.Button(
             action_bar,
-            text="🌐 3D Browser Viewer",
-            font=("Segoe UI", 10),
+            text="🌐 3D Viewer",
+            font=("Segoe UI", 9),
             bg=self.panel_bg,
             fg=self.text_primary,
             activebackground="#33334d",
             relief=tk.FLAT,
-            padx=12,
+            padx=9,
             pady=6,
             command=self._launch_viewer
         )
@@ -452,13 +681,16 @@ class AbuAlignApp:
         ToolTip(rb_l1, "Pinhole Model: Ideal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0). Native to VGGT training prior. Recommended for pre-undistorted imagery.")
         ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]: Self-calibrates physical radial (k1, k2) and tangential (t1, t2) lens curvature in Google Ceres. Essential for wide-angle lenses.")
 
-        ToolTip(self.start_btn, "Start Alignment: Launch neural photogrammetry alignment and export results for RealityScan, Postshot, and COLMAP.")
-        ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment process and free GPU memory.")
+        ToolTip(self.one_click_btn, "One-Click Pipeline: Runs complete photogrammetry alignment and immediately launches 3DGS training automatically.")
+        ToolTip(self.start_btn, "Start Alignment Only: Runs photogrammetry and exports COLMAP, RealityCapture CSV, transforms.json, and 3dgs_dataset/.")
+        ToolTip(self.train_only_btn, "Train 3DGS Only: Train a 3D Gaussian Splatting model directly from an existing alignment (3dgs_dataset/ or results/).")
+        ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment or training process and free GPU memory.")
         ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
+        ToolTip(self.models_btn, "Open 3DGS Models: Open output directory containing trained Gaussian Splatting .ply / .spz models.")
         ToolTip(self.logs_btn, "Open Logs: Open the logs folder in Windows Explorer to inspect detailed diagnostic files.")
         ToolTip(self.viewer_btn, "3D Browser Viewer: Launch interactive web browser viewer (http://localhost:8080) to inspect cameras and 3D point cloud in real time.")
 
-        # 4. Live Progress Console Card
+        # 5. Live Progress Console Card
         console_card = tk.LabelFrame(
             content_frame,
             text=" Live Telemetry & Process Logs ",
@@ -469,6 +701,51 @@ class AbuAlignApp:
             pady=6
         )
         console_card.pack(fill=tk.BOTH, expand=True)
+
+        # Progress Bar & Real-Time Telemetry Bar
+        telemetry_frame = tk.Frame(console_card, bg=self.panel_bg)
+        telemetry_frame.pack(fill=tk.X, pady=(2, 4))
+
+        self.telemetry_lbl = tk.Label(
+            telemetry_frame,
+            text="Status: Ready | Pipeline Idle",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.accent_blue,
+            bg=self.panel_bg
+        )
+        self.telemetry_lbl.pack(side=tk.LEFT)
+
+        self.eta_lbl = tk.Label(
+            telemetry_frame,
+            text="",
+            font=("Segoe UI", 9),
+            fg=self.accent_green,
+            bg=self.panel_bg
+        )
+        self.eta_lbl.pack(side=tk.RIGHT)
+
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "Abu.Horizontal.TProgressbar",
+            troughcolor="#11111b",
+            background="#3b82f6",
+            darkcolor="#2563eb",
+            lightcolor="#60a5fa",
+            bordercolor="#1e1e2e",
+            thickness=14
+        )
+
+        self.progress_bar = ttk.Progressbar(
+            console_card,
+            orient="horizontal",
+            mode="determinate",
+            style="Abu.Horizontal.TProgressbar"
+        )
+        self.progress_bar.pack(fill=tk.X, pady=(0, 6))
 
         console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
         console_toolbar.pack(fill=tk.X, pady=(0, 4))
@@ -507,7 +784,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align Version 0.0.1.0 Ready.\nTriple-Engine Architecture: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0.\nSmart Large-Dataset Engine Active (Auto-Chunking & VRAM Guard for 1,000+ photos).\nPersistent Session Logging: Enabled (Saving to Abu_Align\\logs\\).\nSelect a photoscan directory and click 'START ALIGNMENT'.\n")
+        self._log("Abu Align & Train Version 0.0.1.2 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -554,7 +831,37 @@ class AbuAlignApp:
         self.console.insert(tk.END, text)
         self.console.see(tk.END)
 
-    def _start_alignment(self):
+    def _parse_train_iterations(self):
+        iter_str = self.train_iter_var.get()
+        if "7,000" in iter_str:
+            return 7000
+        elif "15,000" in iter_str:
+            return 15000
+        return 30000
+
+    def _clear_dataset_cache(self):
+        dataset_path = self.dataset_var.get().strip()
+        if not os.path.isdir(dataset_path):
+            messagebox.showinfo("Smart Cache", "Please select a valid dataset folder first.")
+            return
+
+        from cache_manager import get_cache_root, clear_cache
+        cache_root = get_cache_root(dataset_path)
+        if not os.path.isdir(cache_root):
+            messagebox.showinfo("Smart Cache", f"No cache folder found for this dataset at:\n{cache_root}")
+            return
+
+        confirm = messagebox.askyesno(
+            "Clear Cache",
+            f"Are you sure you want to delete all cached neural predictions and feature tracks for this dataset?\n\nCache Location: {cache_root}\n\nFuture runs will execute full neural inference from scratch."
+        )
+        if confirm:
+            n_cleared, b_freed = clear_cache(cache_root)
+            mb = b_freed / (1024 * 1024)
+            messagebox.showinfo("Smart Cache", f"Purged cache successfully!\nFreed: {mb:.1f} MB across {n_cleared} directories.")
+            self._log(f"\n[SMART CACHE] Purged cache directory {cache_root} ({mb:.1f} MB freed).\n")
+
+    def _start_alignment(self, force_auto_train=False):
         if self.is_running:
             return
 
@@ -565,8 +872,14 @@ class AbuAlignApp:
 
         self.is_running = True
         self.start_btn.config(state=tk.DISABLED)
+        self.one_click_btn.config(state=tk.DISABLED)
+        self.train_only_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.console.delete(1.0, tk.END)
+
+        self.progress_bar["value"] = 0
+        self.telemetry_lbl.config(text="Status: Initializing Pipeline...", fg=self.accent_blue)
+        self.eta_lbl.config(text="")
 
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         logs_dir = self._get_logs_dir()
@@ -588,6 +901,17 @@ class AbuAlignApp:
             "--lens_model", self.lens_var.get(),
         ]
 
+        if not self.cache_var.get():
+            cmd.append("--no_cache")
+
+        cmd.extend([
+            "--chunk_size", str(self.chunk_size_var.get()),
+            "--anchor_size", str(self.anchor_var.get())
+        ])
+
+        if self.engine_var.get() == "pycusfm":
+            cmd.extend(["--cusfm_features", self.cusfm_feat_var.get()])
+
         density = self.density_var.get()
         if density == "preview":
             cmd.extend(["--conf_thresh", "2.2", "--max_points", "100000"])
@@ -598,7 +922,88 @@ class AbuAlignApp:
         elif density == "max":
             cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
 
+        # 3DGS Training Suite settings (logged in report, executed if auto-train enabled)
+        cmd.extend(["--train_engine", self.train_engine_var.get()])
+        cmd.extend(["--train_iterations", str(self._parse_train_iterations())])
+        cmd.extend(["--train_mode", self.train_mode_var.get()])
+        if self.gut_var.get():
+            cmd.append("--gut")
+        if self.bilateral_var.get():
+            cmd.append("--bilateral_grid")
+        if self.exposure_var.get():
+            cmd.append("--exposure_correction")
+        if self.sparsity_var.get():
+            cmd.append("--enable_sparsity")
+        if self.mip_var.get():
+            cmd.append("--enable_mip")
+
+        if force_auto_train or self.auto_train_var.get():
+            cmd.append("--train")
+
         self._log(f"Executing: {' '.join(cmd)}\n")
+        self._log(f"Session Log: {self.active_log_path}\n\n")
+
+        thread = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
+        thread.start()
+
+    def _start_one_click(self):
+        """Runs alignment and automatically chains into 3DGS training immediately upon completion."""
+        self._start_alignment(force_auto_train=True)
+
+    def _start_train_only(self):
+        """Directly trains 3DGS from an existing dataset's 3dgs_dataset/ or results/ folder."""
+        if self.is_running:
+            return
+
+        dataset_path = self.dataset_var.get().strip()
+        if not os.path.isdir(dataset_path):
+            messagebox.showerror("Error", f"Dataset folder not found:\n{dataset_path}")
+            return
+
+        if not self.train_script or not os.path.isfile(self.train_script):
+            messagebox.showerror("Error", f"train_engine.py not found at:\n{self.train_script}")
+            return
+
+        self.is_running = True
+        self.start_btn.config(state=tk.DISABLED)
+        self.one_click_btn.config(state=tk.DISABLED)
+        self.train_only_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.console.delete(1.0, tk.END)
+
+        self.progress_bar["value"] = 0
+        self.telemetry_lbl.config(text="Status: Initializing 3DGS Training...", fg=self.accent_blue)
+        self.eta_lbl.config(text="")
+
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        logs_dir = self._get_logs_dir()
+        self.active_log_path = os.path.join(logs_dir, f"abu_train_{timestamp}.log")
+        self.log_status_lbl.config(
+            text=f"Log: abu_train_{timestamp}.log",
+            fg=self.accent_green
+        )
+
+        cmd = [
+            self.conda_python,
+            "-u",
+            self.train_script,
+            "--dataset", dataset_path,
+            "--engine", self.train_engine_var.get(),
+            "--iterations", str(self._parse_train_iterations()),
+            "--mode", self.train_mode_var.get(),
+        ]
+        if self.gut_var.get():
+            cmd.append("--gut")
+        if self.bilateral_var.get():
+            cmd.append("--bilateral_grid")
+        if self.exposure_var.get():
+            cmd.append("--exposure_correction")
+        if self.sparsity_var.get():
+            cmd.append("--enable_sparsity")
+        if self.mip_var.get():
+            cmd.append("--enable_mip")
+
+        self._log(f"Executing Standalone 3DGS Training: {' '.join(cmd)}\n")
         self._log(f"Session Log: {self.active_log_path}\n\n")
 
         thread = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
@@ -612,7 +1017,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align v0.0.1.0 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.1.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -669,14 +1074,54 @@ class AbuAlignApp:
                 msg = self.output_queue.get_nowait()
                 if msg == "__PROCESS_FINISHED__":
                     self.start_btn.config(state=tk.NORMAL)
+                    self.one_click_btn.config(state=tk.NORMAL)
+                    self.train_only_btn.config(state=tk.NORMAL)
                     self.stop_btn.config(state=tk.DISABLED)
-                    self._log("\n[STATUS] Alignment Run Completed.\n")
+                    self.progress_bar["value"] = 100
+                    self.telemetry_lbl.config(text="Status: Pipeline Completed Successfully (100%)", fg=self.accent_green)
+                    self.eta_lbl.config(text="Done")
+                    self._log("\n[STATUS] Pipeline Job Completed.\n")
                     self.log_status_lbl.config(
                         text="Log: Saved (Abu_Align\\logs\\)",
                         fg=self.text_secondary
                     )
                 else:
                     self._log(msg)
+                    msg_s = msg.strip()
+                    if msg_s.startswith("[TELEMETRY:STAGE3]"):
+                        try:
+                            parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                            pct = float(parts.get("pct", 0))
+                            self.progress_bar["value"] = pct
+                            if parts.get("status") == "cache_hit":
+                                self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)", fg="#60a5fa")
+                                self.eta_lbl.config(text="Saved ~5-10 min")
+                            else:
+                                b = parts.get("batch", "?")
+                                tot = parts.get("total", "?")
+                                self.telemetry_lbl.config(text=f"Stage 3/5: Neural Batch Inference [{b}/{tot}] ({pct:.1f}%)", fg=self.accent_blue)
+                        except Exception:
+                            pass
+                    elif msg_s.startswith("[TELEMETRY:STAGE5]"):
+                        try:
+                            parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                            pct = float(parts.get("pct", 0))
+                            self.progress_bar["value"] = pct
+                            if parts.get("status") == "cache_hit":
+                                self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Multi-View Tracks Loaded (Stage 5 Skipped)", fg="#60a5fa")
+                                self.eta_lbl.config(text="Saved ~10-20 min")
+                            else:
+                                q = parts.get("query", "?")
+                                tot = parts.get("total", "?")
+                                f = parts.get("frame", "?")
+                                eta_s = float(parts.get("eta_sec", 0))
+                                eta_str = f"{int(eta_s//60)}m {int(eta_s%60):02d}s" if eta_s > 0 else "calculating..."
+                                self.telemetry_lbl.config(text=f"Stage 5/5: Multi-View Tracking [Query {q}/{tot}, Frame #{f}] ({pct:.1f}%)", fg="#a855f7")
+                                self.eta_lbl.config(text=f"⏱ ETA: {eta_str}")
+                        except Exception:
+                            pass
+                    elif "[LichtFeld]" in msg and any(k in msg.lower() for k in ["step", "iter", "export", "loss"]):
+                        self.telemetry_lbl.config(text="Stage 6: LichtFeld 3DGS Training Active", fg=self.accent_cyan)
         except queue.Empty:
             pass
         self.root.after(80, self._check_queue)
@@ -685,11 +1130,13 @@ class AbuAlignApp:
         if self.worker_process and self.is_running:
             try:
                 self.worker_process.terminate()
-                self._log("\n[ABORT] User cancelled alignment process.\n")
+                self._log("\n[ABORT] User cancelled process.\n")
             except Exception:
                 pass
             self.is_running = False
             self.start_btn.config(state=tk.NORMAL)
+            self.one_click_btn.config(state=tk.NORMAL)
+            self.train_only_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
 
     def _open_results_folder(self):
@@ -701,6 +1148,28 @@ class AbuAlignApp:
             os.startfile(target)
         else:
             messagebox.showinfo("Info", f"Results folder does not exist yet:\n{target}")
+
+    def _open_models_folder(self):
+        target = None
+        if self.latest_output_dir:
+            cand = os.path.join(self.latest_output_dir, "3dgs_models")
+            if os.path.isdir(cand):
+                target = cand
+        if not target or not os.path.isdir(target):
+            dataset = self.dataset_var.get().strip()
+            res_dir = os.path.join(dataset, "results")
+            if os.path.isdir(res_dir):
+                models_dirs = sorted(glob.glob(os.path.join(res_dir, "**", "3dgs_models"), recursive=True), key=os.path.getmtime, reverse=True)
+                if models_dirs:
+                    target = models_dirs[0]
+            if not target:
+                cand2 = os.path.join(dataset, "3dgs_models")
+                if os.path.isdir(cand2):
+                    target = cand2
+        if target and os.path.isdir(target):
+            os.startfile(target)
+        else:
+            messagebox.showinfo("Info", "3DGS Models folder does not exist yet. Run training first!")
 
     def _launch_viewer(self):
         dataset = self.dataset_var.get().strip()
@@ -952,21 +1421,19 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align - Version 0.0.1.0\n"
-            "Neural Photogrammetry & Fast Lens Self-Calibration Engine\n\n"
-            "• Engines: VGGT Foundation, VGGT-Omega, & Niantic Labs ACE0 (ECCV 2024)\n"
-            "• Optimizer: Two-Stage Sparse Schur Ceres Bundle Adjustment / ACE Regression\n"
-            "• Feature Tracking: Sub-Pixel Dense Matching (ALIKED + SuperPoint)\n"
-            "• Coordinate Alignment: Standard Z-Up (Euler Nadir Pitch [0°, 180°])\n"
-            "• Orientation Support: Dynamic Multi-Sensor Grouping (Portrait & Landscape)\n"
-            "• Native In-App Documentation Reader & Fast 3D Browser Viewer\n"
-            "• Distortion: Self-Calibrated Brown-Conrady (k1, k2, t1, t2)\n"
-            "• Logging: Persistent Telemetry in Abu_Align\\logs\\\n"
-            "• Scalability: Smart Auto-Chunking & VRAM Guard (1,000+ Photos)\n\n"
-            "Target Integrations: RealityScan / RealityCapture, Postshot (3DGS), COLMAP\n"
+            "Abu Align & Train - Version 0.0.1.2\n"
+            "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
+            "• Photogrammetry Engines: VGGT Foundation, VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
+            "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"
+            "• Automated Workflows: One-Click Align & Train, Auto-Handoff, & Standalone 3DGS Training\n"
+            "• Standardized 3DGS Factory: Universal 3dgs_dataset/ (sparse/0/, images/, transforms.json, points.ply)\n"
+            "• Distortion & Optics: Gaussian Unscented Transform (GUT) & Self-Calibrated Brown-Conrady\n"
+            "• Telemetry: Real-time progress bars, loss curves, PSNR, and persistent logs in Abu_Align\\logs\\\n"
+            "• Scalability: Smart Auto-Chunking & VRAM Guard for large multi-sensor datasets\n\n"
+            "Target Integrations: LichtFeld Studio, Postshot, Nerfstudio, RealityScan, COLMAP\n"
             "Developer: saemranian"
         )
-        messagebox.showinfo("About Abu Align", about_text)
+        messagebox.showinfo("About Abu Align & Train", about_text)
 
 def main():
     root = tk.Tk()

@@ -24,14 +24,14 @@ namespace AbuAlignLauncher
                 if (!File.Exists(pythonPath))
                 {
                     MessageBox.Show("Conda environment python not found at:\n" + pythonPath,
-                        "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        "Abu Align & Train - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
                 if (!File.Exists(scriptPath))
                 {
                     MessageBox.Show("GUI script not found at:\n" + scriptPath,
-                        "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        "Abu Align & Train - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
@@ -46,8 +46,8 @@ namespace AbuAlignLauncher
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Failed to launch Abu Align:\n" + ex.Message,
-                    "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Failed to launch Abu Align & Train:\n" + ex.Message,
+                    "Abu Align & Train - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
     }
