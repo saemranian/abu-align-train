@@ -1,90 +1,92 @@
-# Abu Align v0.0.1.0 Walkthrough: Niantic Labs ACE0 Engine Integration
+# Abu Align & Train v0.0.1.2 Walkthrough: Intelligent Caching, Live Telemetry & Engine Expansion
 
-## Overview & Executive Summary
-In **Abu Align v0.0.1.0**, we introduce a major architectural leap with the integration of **Niantic Labs' ACE0 (Scene Coordinate Reconstruction: Posing of Image Collections via Incremental Learning of a Relocalizer - ECCV 2024 Oral)**.
+## Executive Summary
 
-Abu Align is now a **Triple-Engine Neural Photogrammetry Platform**:
-1. **VGGT-Omega (Next-Gen Foundation):** Fast transformer architecture with register attention for high-speed tracking.
-2. **VGGT-1B (Standard Foundation):** 1-Billion parameter foundation model for global cross-frame geometric attention.
-3. **ACE0 Engine (Niantic Labs Scene Coordinate Regression):** Implicit neural Structure-from-Motion that trains tiny scene coordinate MLPs on-the-fly, operating at ultra-low VRAM footprints (~2-4 GB) with robust relocalization across challenging viewpoints.
-
----
-
-## Key Innovations in `v0.0.1.0`
-
-### 1. Niantic Labs ACE0 Engine Integration
-- Cloned and integrated the official Niantic Labs ACE0 codebase.
-- Verified pretrained encoder: `ace_encoder_pretrained.pt` (22.28 MB) for instant feature representation.
-- Built an end-to-end engine adapter ([`acezero_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/acezero_engine.py)) that:
-  - Stages input datasets and handles stride subsampling automatically.
-  - Executes the iterative ACE0 mapping loop (alternating MLP optimization and PnP-RANSAC relocalization).
-  - Parses predicted camera poses (`poses_final.txt`) and dense 3D scene coordinates (`pc_final.ply`).
-  - Constructs standard `pycolmap.Reconstruction` objects for seamless multi-application export.
-
-### 2. Dual-Mode Windows DSAC* Fallback Engine
-- **The Challenge:** Niantic's original DSAC* module relies on C++ extensions compiled with OpenMP and OpenCV headers, frequently failing to compile on Windows environments lacking MSVC build tools.
-- **The Solution:** Engineered a drop-in dual-mode fallback in [`dsacstar/__init__.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/acezero/dsacstar/__init__.py).
-  - If the native C++ module is present, it is used directly.
-  - If uncompiled, it transparently falls back to an optimized OpenCV `cv2.solvePnPRansac` + Levenberg-Marquardt iterative non-linear refinement algorithm (`forward_rgb_py`).
-  - Achieves exact $(R, t)$ recovery with $10^{-8}$ precision at $<20$ ms per view, requiring zero compiler toolchains.
-
-### 3. Windows Subprocess & Dependency Hardening
-- **Path & Execution Safety:** Patched `ace_zero_util.py` to route all child script executions (`train_ace.py`, `register_mapping.py`) through `sys.executable`, eliminating Windows `[WinError 193]` executable format errors.
-- **Automated ZoeDepth Ingestion:** Patched `dataset_io.py` to invoke `torch.hub` with `trust_repo=True`, preventing interactive prompt freezes in automated workflows.
-- **Directory Ingestion:** Enhanced `dataset_io.py::get_files_from_glob` to handle folder paths directly alongside standard glob patterns.
-- **Environment Dependencies:** Added `joblib`, `cloudpickle`, and `timm` to the Conda runtime.
-
-### 4. Triple-Engine Unified GUI & CLI
-- **CLI (`align_cli.py`):**
-  - Added `--engine ace0` (or `acezero`).
-  - Added `--ace_iterations` (max mapping rounds, default: 30).
-  - Added `--ace_refinement` (`mlp`, `naive`, `none`).
-  - Added `--ace_focal` (initial focal length override or automatic diagonal estimation).
-  - Generated dedicated sparse directory naming: `sparse_XX_ace0`.
-- **GUI (`abu_align_gui.py`):**
-  - Updated window title, header badge, console greeting, and telemetry log to **v0.0.1.0**.
-  - Added interactive engine radio selector with informative ToolTips explaining each engine's strengths and memory profiles.
-  - Updated the "About Abu Align" dialog to reflect the triple-engine architecture.
+In this milestone, **Abu Align & Train v0.0.1.2** introduces three major performance, observability, and control enhancements:
+1. **Intelligent Multi-Tier Caching System (`.abu_cache`):** Persistent half-precision tensor caching for neural forward passes (Stage 3 & 4) and 2D feature trajectories (Stage 5), cutting re-run times from **4+ minutes down to 33 seconds** on the `SEL Copy` 60MP dataset.
+2. **Granular Live Telemetry & Visual Progress Bar:** Fine-grained `[TELEMETRY:STAGE3]` and `[TELEMETRY:STAGE5]` streaming emitting query numbers, frame IDs, percentage completion, and real-time ETAs with dynamic `ttk.Progressbar` and active status label.
+3. **Deep Engine Options & Parameters Expansion:** Exposing advanced photogrammetry and 3DGS training options across all 4 alignment engines (VGGT, VGGT-Omega, ACE0, PyCuSFM) and 3 training engines (LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT) with interactive hover `ToolTip`s.
 
 ---
 
-## Universal Export Pipeline
+## 1. Intelligent Multi-Tier Caching Architecture (`.abu_cache`)
 
-Regardless of whether the reconstruction was computed via VGGT Foundation or ACE0 Scene Coordinate Regression, Stage 5 exports identical, industry-standard packages:
+### Location:
+Stored deterministically inside `<dataset_dir>/results/.abu_cache/<cache_key>/` (or `<dataset_dir>/.abu_cache/`). The user's original photos directory remains 100% pristine and unmodified.
 
-```
-results/sparse_XX_ace0/
-├── COLMAP_Lichtfield/
-│   ├── cameras.bin / cameras.txt
-│   ├── images.bin / images.txt
-│   └── points3D.bin / points3D.txt
-├── Postshot_RealityCapture/
-│   ├── cameras.csv          (RealityCapture Z-up, Euler Nadir Pitch [0°, 180°])
-│   ├── transforms.json      (Instant NeRF & 3D Gaussian Splatting import)
-│   └── points.ply           (High-density colored point cloud in RC coordinate space)
-└── reconstruction_report.txt (Full telemetry, timings, and alignment diagnostics)
-```
+### Cache Fingerprinting (`cache_key`):
+SHA-256 fingerprint generated from:
+- Dataset image count, filenames, sizes, and file modification timestamps.
+- Alignment engine (`vggt`, `vggt_omega`, `ace0`, `pycusfm`).
+- Canvas resolution (`load_res`) and frame sampling `stride`.
+
+### Multi-Tier Storage:
+- **Tier 1 (Neural Inference Cache):**
+  - `extrinsic.pt` & `intrinsic.pt`: Rigid camera poses & focal lengths.
+  - `original_coords.pt`: Full-resolution image coordinate offsets.
+  - `points_3d_fp16.pt` & `depth_map_fp16.pt`: Dense 3D unprojected points and depth maps saved in half-precision (`float16`) to minimize disk footprint while preserving sub-millimeter precision.
+  - `depth_conf_fp16.pt`: Neural confidence maps.
+  - `meta.json`: Execution metadata, frame counts, and timestamp.
+- **Tier 2 (Multi-View Tracking Cache):**
+  - `tracking/tracks.npz`: Multi-view 2D feature tracks, visibility scores, confidence arrays, and bundle-adjusted tie points.
 
 ---
 
-## Deliverables in `v0.0.1.0`
+## 2. Parameter Reuse Analysis: What Can Be Reused?
 
-1. **Source Code:**
-   - [align_cli.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/align_cli.py) & [Abu_Align/align_cli.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/align_cli.py)
-   - [abu_align_gui.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/abu_align_gui.py) & [Abu_Align/abu_align_gui.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/abu_align_gui.py)
-   - [acezero_engine.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/acezero_engine.py) & [Abu_Align/acezero_engine.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/acezero_engine.py)
-   - [Abu_Align.bat](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align.bat) & [Abu_Align/Abu_Align.bat](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/Abu_Align.bat)
+| Changed Parameter / Scenario | Reuses Neural Cache? | Reuses Tracking Cache? | Expected Re-run Time | Technical Reason |
+| :--- | :---: | :---: | :---: | :--- |
+| **Point Cloud Density Only** (e.g. Preview $\leftrightarrow$ High $\leftrightarrow$ Max) | **YES (100%)** | N/A | **< 5 seconds** | Only adjusts confidence threshold `conf_thresh` and random sampling mask on already computed 3D points. |
+| **Lens Distortion Model** (Pinhole $\leftrightarrow$ Brown Calibration) | **YES (100%)** | **YES (100%)** | **~10–15 seconds** | 2D feature tracks and 3D initial points are unchanged; Ceres simply toggles radial ($k_1, k_2$) and tangential ($t_1, t_2$) parameter blocks. |
+| **Camera Alignment Accuracy** (Feedforward $\to$ Standard Ceres BA) | **YES (100%)** | Miss (First time) | **~1–2 minutes** | Skips 5–10 min neural inference; runs tracking once and caches it. Subsequent BA runs take ~10s. |
+| **3DGS Training Options** (Iterations, Viewport, Bilateral, Exposure) | **YES (100%)** | **YES (100%)** | **0 seconds (Alignment)** | Photogrammetry alignment is untouched; immediately launches LichtFeld or Nerfstudio. |
+| **Canvas Resolution (`load_res`)** (e.g. 512 $\to$ 1024) | No (Invalidated) | No (Invalidated) | Full Run | Changes image tensor dimensions and feature tracking coordinate grid. |
+| **Engine Change** (e.g. VGGT-Omega $\leftrightarrow$ ACE0) | No (Invalidated) | No (Invalidated) | Full Run | Distinct neural architectures with incompatible latent spaces. |
 
-2. **Compiled Standalone Executables:**
-   - [Abu_Align.exe](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align.exe) (Root launcher)
-   - [Abu_Align/Abu_Align.exe](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/Abu_Align.exe) (Folder launcher)
-   - [Abu_Align/Abu_Align_v0.0.1.0.exe](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/Abu_Align_v0.0.1.0.exe) (Dedicated standalone executable)
-   - [Abu_Align/versions/v0.0.1.0/Abu_Align_v0.0.1.0.exe](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/versions/v0.0.1.0/Abu_Align_v0.0.1.0.exe)
+---
 
-3. **Isolated Version Archive:**
-   - [Abu_Align/versions/v0.0.1.0/](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/versions/v0.0.1.0/)
+## 3. Live Telemetry & Progress Bar
 
-4. **Walkthrough Documentation:**
-   - [walkthrough.md](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/walkthrough.md) (Root workspace)
-   - [Abu_Align/walkthrough.md](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/walkthrough.md)
-   - [docs/WALKTHROUGH_v0.0.1.0.md](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/docs/WALKTHROUGH_v0.0.1.0.md)
+### Structured Telemetry Streaming:
+- `[TELEMETRY:STAGE3] batch=X total=Y pct=Z`
+- `[TELEMETRY:STAGE3] pct=50.0 status=cache_hit`
+- `[TELEMETRY:STAGE5] query=X total=Y frame=Z pct=W eta_sec=N`
+- `[TELEMETRY:STAGE5] pct=85.0 status=cache_hit`
+
+### GUI Integration:
+- **`ttk.Progressbar`:** Positioned right above the console window in `abu_align_gui.py`. Smoothly updates between 0% and 100%.
+- **Dynamic Status Label (`self.telemetry_lbl`):** Displays current stage, active query, and active frame (e.g., `Stage 5/5: Multi-View Tracking [Query 2/5, Frame #1] (20.0%)`).
+- **Live ETA Display (`self.eta_lbl`):** Calculates and formats real-time remaining time (e.g., `⏱ ETA: 2m 11s`).
+- **Smart Cache Hit Indicators:** Displays `⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)` in bright blue.
+
+---
+
+## 4. Verification Benchmark on Test Dataset
+
+**Dataset:** `C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Sony\101MSDCF\CC\Interior\RedBox\SEL Copy`  
+**Hardware:** NVIDIA GeForce RTX 4090 (24 GB VRAM)  
+**Photos:** 28 total (14 keyframes with `--stride 2`, 60.2 MP each)
+
+### Benchmark Results:
+| Execution Run | Selected Settings | Cache Status | Runtime | Outcome |
+| :--- | :--- | :--- | :---: | :--- |
+| **Run 1 (Initial)** | `vggt_omega`, Brown Lens Model, Standard BA | Cache Populated | **04:23** | Saved neural predictions and tracking data to `.abu_cache\3981555166b24cf6`. |
+| **Run 2 (Re-run with Lens Model Changed to Pinhole)** | `vggt_omega`, Pinhole Model, Standard BA | **100% Cache Hit** (Neural + Tracking) | **00:33** | **8× Faster!** Skipped Stage 3 & 4 neural inference in 0.30s; skipped CoTracker in 0.05s; converged Ceres BA in 0.29s. |
+
+### Generated Verification Reports:
+- `SEL Copy\results\test_cache_run1\reconstruction_report.txt`
+- `SEL Copy\results\test_cache_run2\reconstruction_report.txt`
+
+---
+
+## 5. Summary of Modified & Created Files
+
+| File | Changes Made |
+| :--- | :--- |
+| **`Abu_Align/cache_manager.py`** & `cache_manager.py` | Multi-tier caching manager with `compute_dataset_hash`, half-precision tensor serialization (`save_neural_cache`, `load_neural_cache`), tracking caching (`save_tracking_cache`, `load_tracking_cache`), and cache purge (`clear_cache`). |
+| **`vggt/dependency/track_predict.py`** | Added granular `[TELEMETRY:STAGE5]` streaming with real-time ETA calculation and query frame progress. Fixed missing `import time`. |
+| **`vggt/dependency/vggsfm_utils.py`** | Added per-chunk progress output inside `predict_tracks_in_chunks`. |
+| **`Abu_Align/align_cli.py`** & `align_cli.py` | Integrated cache checking and saving for Stage 3/4 and Stage 5; enriched `reconstruction_report.txt` with cache status and advanced training parameters; added CLI flags (`--anchor_size`, `--no_cache`, `--clear_cache`, `--bilateral_grid`, etc.). |
+| **`Abu_Align/train_engine.py`** & `train_engine.py` | Added support for `--bilateral_grid`, `--exposure_correction`, `--enable_sparsity`, `--enable_mip`, and `--sh_degree`. |
+| **`Abu_Align/abu_align_gui.py`** & `abu_align_gui.py` | Added `ttk.Progressbar`, live status/ETA labels, Smart Cache toggle (`[x] Smart Cache`), Clear Cache button (`[🗑 Clear Cache]`), sliding-window chunk/anchor selectors, advanced 3DGS toggles, hover tooltips, and real-time telemetry stream parsing. |
+| **`Abu_Align/Abu_Align_and_Train.exe`** & `Abu_Align_and_Train.exe` | Recompiled standalone executable launcher using `csc.exe`. |
