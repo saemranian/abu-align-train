@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.1.2
+Abu Align & Train Version 0.0.1.3
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
@@ -11,6 +11,10 @@ import glob
 import subprocess
 import threading
 import queue
+try:
+    import psutil
+except ImportError:
+    psutil = None
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -116,7 +120,7 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.1.2 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.1.3 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1060x860")
         self.root.minsize(880, 680)
 
@@ -160,6 +164,7 @@ class AbuAlignApp:
         self.worker_process = None
         self.output_queue = queue.Queue()
         self.is_running = False
+        self.is_paused = False
         self.latest_output_dir = None
         self.active_log_path = None
         self._ensure_logs_dir()
@@ -210,7 +215,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.2",
+            text="v0.0.1.3",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -589,6 +594,21 @@ class AbuAlignApp:
         )
         self.train_only_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        self.pause_btn = tk.Button(
+            action_bar,
+            text="⏸  PAUSE",
+            font=("Segoe UI", 10, "bold"),
+            bg="#f59e0b",
+            fg="#ffffff",
+            activebackground="#d97706",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            state=tk.DISABLED,
+            command=self._toggle_pause
+        )
+        self.pause_btn.pack(side=tk.LEFT, padx=(0, 6))
+
         self.stop_btn = tk.Button(
             action_bar,
             text="■  STOP",
@@ -684,6 +704,7 @@ class AbuAlignApp:
         ToolTip(self.one_click_btn, "One-Click Pipeline: Runs complete photogrammetry alignment and immediately launches 3DGS training automatically.")
         ToolTip(self.start_btn, "Start Alignment Only: Runs photogrammetry and exports COLMAP, RealityCapture CSV, transforms.json, and 3dgs_dataset/.")
         ToolTip(self.train_only_btn, "Train 3DGS Only: Train a 3D Gaussian Splatting model directly from an existing alignment (3dgs_dataset/ or results/).")
+        ToolTip(self.pause_btn, "Pause / Resume: Freeze or thaw the current alignment or training process tree without losing VRAM or progress.")
         ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment or training process and free GPU memory.")
         ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
         ToolTip(self.models_btn, "Open 3DGS Models: Open output directory containing trained Gaussian Splatting .ply / .spz models.")
@@ -702,9 +723,45 @@ class AbuAlignApp:
         )
         console_card.pack(fill=tk.BOTH, expand=True)
 
+        # Stage Breadcrumbs Flow
+        stages_bar = tk.Frame(console_card, bg=self.panel_bg)
+        stages_bar.pack(fill=tk.X, pady=(2, 6))
+
+        stage_names = [
+            "1. Scan",
+            "2. GPU Init",
+            "3. Preprocess",
+            "4. 3D Inf",
+            "5. Tracking & BA",
+            "6. 3DGS Train"
+        ]
+        self.stage_badges = []
+        for i, name in enumerate(stage_names):
+            badge = tk.Label(
+                stages_bar,
+                text=name,
+                font=("Segoe UI", 8, "bold"),
+                fg="#64748b",
+                bg="#232338",
+                padx=8,
+                pady=2,
+                relief=tk.FLAT
+            )
+            badge.pack(side=tk.LEFT, padx=(0, 2))
+            self.stage_badges.append(badge)
+            if i < len(stage_names) - 1:
+                sep = tk.Label(
+                    stages_bar,
+                    text="➔",
+                    font=("Segoe UI", 8),
+                    fg="#475569",
+                    bg=self.panel_bg
+                )
+                sep.pack(side=tk.LEFT, padx=(0, 2))
+
         # Progress Bar & Real-Time Telemetry Bar
         telemetry_frame = tk.Frame(console_card, bg=self.panel_bg)
-        telemetry_frame.pack(fill=tk.X, pady=(2, 4))
+        telemetry_frame.pack(fill=tk.X, pady=(0, 4))
 
         self.telemetry_lbl = tk.Label(
             telemetry_frame,
@@ -724,6 +781,18 @@ class AbuAlignApp:
         )
         self.eta_lbl.pack(side=tk.RIGHT)
 
+        # High-Contrast Progress Bar Container (Border + Gauge + Percentage Readout)
+        prog_container = tk.Frame(
+            console_card,
+            bg="#11111b",
+            highlightbackground="#3b82f6",
+            highlightcolor="#3b82f6",
+            highlightthickness=1,
+            padx=2,
+            pady=2
+        )
+        prog_container.pack(fill=tk.X, pady=(0, 6))
+
         style = ttk.Style()
         try:
             style.theme_use("clam")
@@ -735,17 +804,27 @@ class AbuAlignApp:
             background="#3b82f6",
             darkcolor="#2563eb",
             lightcolor="#60a5fa",
-            bordercolor="#1e1e2e",
-            thickness=14
+            bordercolor="#11111b",
+            thickness=18
         )
 
         self.progress_bar = ttk.Progressbar(
-            console_card,
+            prog_container,
             orient="horizontal",
             mode="determinate",
             style="Abu.Horizontal.TProgressbar"
         )
-        self.progress_bar.pack(fill=tk.X, pady=(0, 6))
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 6), pady=2)
+
+        self.pct_lbl = tk.Label(
+            prog_container,
+            text="  0.0% ",
+            font=("Segoe UI", 9, "bold"),
+            fg="#60a5fa",
+            bg="#11111b",
+            width=8
+        )
+        self.pct_lbl.pack(side=tk.RIGHT, padx=(0, 4))
 
         console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
         console_toolbar.pack(fill=tk.X, pady=(0, 4))
@@ -784,7 +863,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.1.2 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.1.3 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -861,6 +940,64 @@ class AbuAlignApp:
             messagebox.showinfo("Smart Cache", f"Purged cache successfully!\nFreed: {mb:.1f} MB across {n_cleared} directories.")
             self._log(f"\n[SMART CACHE] Purged cache directory {cache_root} ({mb:.1f} MB freed).\n")
 
+    def _set_stage(self, stage_idx):
+        """
+        Updates the 6 stage badges:
+        - indices < stage_idx: completed (green bg #065f46, green fg #34d399)
+        - index == stage_idx: active (blue bg #2563eb, white fg #ffffff)
+        - indices > stage_idx: pending (dark bg #232338, gray fg #64748b)
+        """
+        if not hasattr(self, "stage_badges"):
+            return
+        for i, badge in enumerate(self.stage_badges):
+            if i < stage_idx:
+                badge.config(bg="#065f46", fg="#34d399")
+            elif i == stage_idx:
+                badge.config(bg="#2563eb", fg="#ffffff")
+            else:
+                badge.config(bg="#232338", fg="#64748b")
+
+    def _toggle_pause(self):
+        """
+        Universal Pause / Resume:
+        Freezes or thaws the active pipeline process tree using psutil process suspension.
+        Preserves all GPU VRAM allocations and computation state in RAM.
+        """
+        if not self.worker_process or not self.is_running:
+            return
+        if psutil is None:
+            messagebox.showwarning("Pause/Resume", "psutil library is required for process suspension.")
+            return
+
+        try:
+            proc = psutil.Process(self.worker_process.pid)
+            if not self.is_paused:
+                children = proc.children(recursive=True)
+                for c in children:
+                    try:
+                        c.suspend()
+                    except Exception:
+                        pass
+                proc.suspend()
+                self.is_paused = True
+                self.pause_btn.config(text="▶  RESUME", bg="#10b981")
+                self.telemetry_lbl.config(text="Status: ⏸ PAUSED (GPU VRAM & state preserved in RAM)", fg="#f59e0b")
+                self._log("\n[PROCESS] ⏸ Execution paused by user. Process tree suspended.\n")
+            else:
+                proc.resume()
+                children = proc.children(recursive=True)
+                for c in children:
+                    try:
+                        c.resume()
+                    except Exception:
+                        pass
+                self.is_paused = False
+                self.pause_btn.config(text="⏸  PAUSE", bg="#f59e0b")
+                self.telemetry_lbl.config(text="Status: ▶ Resumed and executing...", fg=self.accent_blue)
+                self._log("\n[PROCESS] ▶ Execution resumed by user.\n")
+        except Exception as e:
+            self._log(f"\n[ERROR] Failed to toggle pause: {e}\n")
+
     def _start_alignment(self, force_auto_train=False):
         if self.is_running:
             return
@@ -871,13 +1008,17 @@ class AbuAlignApp:
             return
 
         self.is_running = True
+        self.is_paused = False
         self.start_btn.config(state=tk.DISABLED)
         self.one_click_btn.config(state=tk.DISABLED)
         self.train_only_btn.config(state=tk.DISABLED)
+        self.pause_btn.config(state=tk.NORMAL, text="⏸  PAUSE", bg="#f59e0b")
         self.stop_btn.config(state=tk.NORMAL)
         self.console.delete(1.0, tk.END)
 
+        self._set_stage(0)
         self.progress_bar["value"] = 0
+        self.pct_lbl.config(text="  0.0%")
         self.telemetry_lbl.config(text="Status: Initializing Pipeline...", fg=self.accent_blue)
         self.eta_lbl.config(text="")
 
@@ -965,13 +1106,17 @@ class AbuAlignApp:
             return
 
         self.is_running = True
+        self.is_paused = False
         self.start_btn.config(state=tk.DISABLED)
         self.one_click_btn.config(state=tk.DISABLED)
         self.train_only_btn.config(state=tk.DISABLED)
+        self.pause_btn.config(state=tk.NORMAL, text="⏸  PAUSE", bg="#f59e0b")
         self.stop_btn.config(state=tk.NORMAL)
         self.console.delete(1.0, tk.END)
 
+        self._set_stage(5)
         self.progress_bar["value"] = 0
+        self.pct_lbl.config(text="  0.0%")
         self.telemetry_lbl.config(text="Status: Initializing 3DGS Training...", fg=self.accent_blue)
         self.eta_lbl.config(text="")
 
@@ -1017,7 +1162,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.1.2 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.1.3 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -1076,8 +1221,12 @@ class AbuAlignApp:
                     self.start_btn.config(state=tk.NORMAL)
                     self.one_click_btn.config(state=tk.NORMAL)
                     self.train_only_btn.config(state=tk.NORMAL)
+                    self.pause_btn.config(state=tk.DISABLED, text="⏸  PAUSE", bg="#f59e0b")
                     self.stop_btn.config(state=tk.DISABLED)
+                    self.is_paused = False
                     self.progress_bar["value"] = 100
+                    self.pct_lbl.config(text="100.0%")
+                    self._set_stage(6)
                     self.telemetry_lbl.config(text="Status: Pipeline Completed Successfully (100%)", fg=self.accent_green)
                     self.eta_lbl.config(text="Done")
                     self._log("\n[STATUS] Pipeline Job Completed.\n")
@@ -1088,11 +1237,17 @@ class AbuAlignApp:
                 else:
                     self._log(msg)
                     msg_s = msg.strip()
-                    if msg_s.startswith("[TELEMETRY:STAGE3]"):
+                    if any(k in msg for k in ["Stage 1", "Found", "Scanning", "images found"]):
+                        self._set_stage(0)
+                    elif any(k in msg for k in ["Stage 2", "Loading model", "Initializing GPU"]):
+                        self._set_stage(1)
+                    elif msg_s.startswith("[TELEMETRY:STAGE3]") or "Stage 3" in msg:
+                        self._set_stage(2)
                         try:
                             parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
                             pct = float(parts.get("pct", 0))
                             self.progress_bar["value"] = pct
+                            self.pct_lbl.config(text=f"{pct:5.1f}%")
                             if parts.get("status") == "cache_hit":
                                 self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)", fg="#60a5fa")
                                 self.eta_lbl.config(text="Saved ~5-10 min")
@@ -1102,11 +1257,15 @@ class AbuAlignApp:
                                 self.telemetry_lbl.config(text=f"Stage 3/5: Neural Batch Inference [{b}/{tot}] ({pct:.1f}%)", fg=self.accent_blue)
                         except Exception:
                             pass
-                    elif msg_s.startswith("[TELEMETRY:STAGE5]"):
+                    elif any(k in msg for k in ["Stage 4", "Generating 3D points", "Predicting dense point"]):
+                        self._set_stage(3)
+                    elif msg_s.startswith("[TELEMETRY:STAGE5]") or "Stage 5" in msg:
+                        self._set_stage(4)
                         try:
                             parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
                             pct = float(parts.get("pct", 0))
                             self.progress_bar["value"] = pct
+                            self.pct_lbl.config(text=f"{pct:5.1f}%")
                             if parts.get("status") == "cache_hit":
                                 self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Multi-View Tracks Loaded (Stage 5 Skipped)", fg="#60a5fa")
                                 self.eta_lbl.config(text="Saved ~10-20 min")
@@ -1120,8 +1279,10 @@ class AbuAlignApp:
                                 self.eta_lbl.config(text=f"⏱ ETA: {eta_str}")
                         except Exception:
                             pass
-                    elif "[LichtFeld]" in msg and any(k in msg.lower() for k in ["step", "iter", "export", "loss"]):
-                        self.telemetry_lbl.config(text="Stage 6: LichtFeld 3DGS Training Active", fg=self.accent_cyan)
+                    elif any(k in msg for k in ["[LichtFeld]", "[Nerfstudio]", "[3DGRUT]", "Stage 6", "Starting 3DGS"]):
+                        self._set_stage(5)
+                        if any(k in msg.lower() for k in ["step", "iter", "export", "loss"]):
+                            self.telemetry_lbl.config(text="Stage 6: 3DGS Training Active", fg=self.accent_cyan)
         except queue.Empty:
             pass
         self.root.after(80, self._check_queue)
@@ -1129,15 +1290,34 @@ class AbuAlignApp:
     def _stop_alignment(self):
         if self.worker_process and self.is_running:
             try:
-                self.worker_process.terminate()
+                if psutil is not None:
+                    proc = psutil.Process(self.worker_process.pid)
+                    if self.is_paused:
+                        try:
+                            proc.resume()
+                            for c in proc.children(recursive=True):
+                                c.resume()
+                        except Exception:
+                            pass
+                    for c in proc.children(recursive=True):
+                        try:
+                            c.terminate()
+                        except Exception:
+                            pass
+                    proc.terminate()
+                else:
+                    self.worker_process.terminate()
                 self._log("\n[ABORT] User cancelled process.\n")
-            except Exception:
-                pass
+            except Exception as e:
+                self._log(f"\n[ABORT] Error terminating process: {e}\n")
             self.is_running = False
+            self.is_paused = False
             self.start_btn.config(state=tk.NORMAL)
             self.one_click_btn.config(state=tk.NORMAL)
             self.train_only_btn.config(state=tk.NORMAL)
+            self.pause_btn.config(state=tk.DISABLED, text="⏸  PAUSE", bg="#f59e0b")
             self.stop_btn.config(state=tk.DISABLED)
+            self.telemetry_lbl.config(text="Status: Aborted by user", fg=self.accent_red)
 
     def _open_results_folder(self):
         target = self.latest_output_dir
@@ -1204,7 +1384,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.0.7 - {title}")
+        doc_win.title(f"Abu Align v0.0.1.3 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -1421,7 +1601,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.1.2\n"
+            "Abu Align & Train - Version 0.0.1.3\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT Foundation, VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"

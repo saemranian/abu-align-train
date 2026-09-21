@@ -77,7 +77,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.1.3 - Neural Photogrammetry & 3DGS Training
    Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
