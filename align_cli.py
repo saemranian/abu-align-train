@@ -11,6 +11,7 @@ import re
 import time
 import glob
 import copy
+import shutil
 import argparse
 from datetime import datetime
 
@@ -25,6 +26,8 @@ def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
     eng_lower = engine_name.lower()
     if "ace" in eng_lower:
         engine_suffix = "ace0"
+    elif "cusfm" in eng_lower or "pycusfm" in eng_lower:
+        engine_suffix = "cusfm"
     elif "omega" in eng_lower:
         engine_suffix = "omega"
     else:
@@ -74,8 +77,9 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-     Abu Align v0.0.1.0 - Neural Photogrammetry Alignment Engine
-     Engines: VGGT Foundation | VGGT-Omega | Niantic Labs ACE0
+   Abu Align & Train v0.0.1.2 - Neural Photogrammetry & 3DGS Training
+   Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
+   Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
 """
     print(banner)
@@ -204,27 +208,34 @@ def export_realitycapture_csv(reconstruction, output_dir):
     return csv_path
 
 
-def export_transforms_json(reconstruction, output_dir):
+def export_transforms_json(reconstruction, output_dir, rel_image_dir="images"):
     """
     Exports camera poses and intrinsics in NeRF / 3D Gaussian Splatting transforms.json format.
     Postshot, Nerfstudio, and standard 3DGS pipelines load this natively with zero Euler angle ambiguity.
     """
     import json
     
+    # Check if all cameras share the exact same dimensions
+    all_dims = {(cam.width, cam.height) for cam in reconstruction.cameras.values()}
+    is_uniform_resolution = len(all_dims) == 1
+
     first_cam = next(iter(reconstruction.cameras.values()))
-    w, h = first_cam.width, first_cam.height
-    fx, fy, cx, cy = first_cam.params[0], first_cam.params[1], first_cam.params[2], first_cam.params[3]
-    
     transforms_data = {
         "camera_model": first_cam.model_name,
-        "w": int(w),
-        "h": int(h),
-        "fl_x": float(fx),
-        "fl_y": float(fy),
-        "cx": float(cx),
-        "cy": float(cy),
         "frames": []
     }
+    
+    # If all cameras have identical resolution, root w/h can be included safely.
+    # Otherwise, omit root w/h so parsers (like Nerfstudio) evaluate per-frame dimensions.
+    if is_uniform_resolution:
+        w, h = first_cam.width, first_cam.height
+        fx, fy, cx, cy = first_cam.params[0], first_cam.params[1], first_cam.params[2], first_cam.params[3]
+        transforms_data["w"] = int(w)
+        transforms_data["h"] = int(h)
+        transforms_data["fl_x"] = float(fx)
+        transforms_data["fl_y"] = float(fy)
+        transforms_data["cx"] = float(cx)
+        transforms_data["cy"] = float(cy)
     
     if first_cam.model_name in ["OPENCV", "FULL_OPENCV"] and len(first_cam.params) >= 8:
         transforms_data["k1"] = float(first_cam.params[4])
@@ -233,6 +244,7 @@ def export_transforms_json(reconstruction, output_dir):
         transforms_data["p2"] = float(first_cam.params[7])
     
     for img_id, img in sorted(reconstruction.images.items()):
+        cam = reconstruction.cameras[img.camera_id]
         cfw = img.cam_from_world() if callable(img.cam_from_world) else img.cam_from_world
         R_c = cfw.rotation.matrix()
         t_c = cfw.translation
@@ -249,8 +261,15 @@ def export_transforms_json(reconstruction, output_dir):
         c2w[:3, :3] = R_nerf_c2w
         c2w[:3, 3] = C_c
         
+        fpath = f"{rel_image_dir}/{img.name}" if rel_image_dir else img.name
         frame_dict = {
-            "file_path": img.name,
+            "file_path": fpath,
+            "w": int(cam.width),
+            "h": int(cam.height),
+            "fl_x": float(cam.params[0]),
+            "fl_y": float(cam.params[1] if len(cam.params) > 1 else cam.params[0]),
+            "cx": float(cam.params[2] if len(cam.params) > 2 else cam.width / 2.0),
+            "cy": float(cam.params[3] if len(cam.params) > 3 else cam.height / 2.0),
             "transform_matrix": c2w.tolist()
         }
         transforms_data["frames"].append(frame_dict)
@@ -287,9 +306,10 @@ def rename_colmap_recons_and_rescale_camera(
                 pred_params[2] = pred_params[2] * resize_ratio - left  # cx
                 pred_params[3] = pred_params[3] * resize_ratio - top   # cy
             elif pycamera.model_name == "PINHOLE":
-                pred_params = pred_params * resize_ratio
-                pred_params[2] = pred_params[2] * resize_ratio - left
-                pred_params[3] = pred_params[3] * resize_ratio - top
+                pred_params[0] *= resize_ratio  # fx
+                pred_params[1] *= resize_ratio  # fy
+                pred_params[2] = pred_params[2] * resize_ratio - left  # cx
+                pred_params[3] = pred_params[3] * resize_ratio - top   # cy
             else:
                 pred_params = pred_params * resize_ratio
                 pred_params[-2] = real_image_size[0] / 2.0
@@ -322,9 +342,61 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     img_load_res = args.load_res
     inf_start = time.time()
 
-    if num_frames > 48 and args.auto_chunk:
-        chunk_size = min(args.chunk_size, 32)
-        overlap = 8
+    from cache_manager import (
+        compute_dataset_hash,
+        get_cache_root,
+        save_neural_cache,
+        load_neural_cache,
+        save_tracking_cache,
+        load_tracking_cache,
+        clear_cache,
+    )
+
+    dataset_root = os.path.dirname(image_paths[0])
+    cache_root = get_cache_root(dataset_root, getattr(args, "cache_dir", None))
+    cache_key = compute_dataset_hash(image_paths, engine, img_load_res, args.stride)
+    use_cache = not getattr(args, "no_cache", False)
+
+    if getattr(args, "clear_cache", False):
+        n_cleared, b_freed = clear_cache(cache_root)
+        print(f"      * [Smart Cache] Cleared {n_cleared} cache items ({b_freed/(1024*1024):.1f} MB freed).")
+
+    cached_neural = None
+    if use_cache:
+        cached_neural = load_neural_cache(cache_root, cache_key, device=device, dtype=dtype)
+
+    if cached_neural is not None:
+        print("\n" + "="*70)
+        print(f" [SMART CACHE HIT] Loaded neural poses & 3D points in {cached_neural['load_time_sec']:.2f}s!")
+        print(f"                   Skipping Stage 3 & 4 neural inference (Saved ~5-10 minutes).")
+        print("="*70 + "\n")
+        print("[TELEMETRY:STAGE3] pct=50.0 status=cache_hit", flush=True)
+
+        extrinsic = cached_neural["extrinsic"].float().cpu().numpy()
+        intrinsic = cached_neural["intrinsic"].float().cpu().numpy()
+        points_3d = cached_neural["points_3d"].float().cpu().numpy()
+        depth_conf = cached_neural["depth_conf"].float().cpu().numpy()
+        original_coords = cached_neural["original_coords"]
+        cached_dm = cached_neural.get("depth_map")
+        if cached_dm is not None:
+            depth_map = cached_dm.float().cpu().numpy()
+        else:
+            depth_map = None
+
+        # If cached images exist, use them; otherwise quickly load image batch for RGB colors
+        cached_imgs = cached_neural.get("images")
+        if cached_imgs is not None:
+            images = cached_imgs
+        else:
+            img_list = []
+            for p in image_paths:
+                st, _ = load_and_preprocess_images_square([p], target_size=img_load_res)
+                img_list.append(st)
+            images = torch.cat(img_list, dim=0).to(device)
+
+    elif num_frames > 48 and args.auto_chunk:
+        chunk_size = args.chunk_size
+        overlap = min(args.anchor_size, chunk_size // 2)
         step = max(chunk_size - overlap, 1)
 
         print("\n" + "="*70)
@@ -353,6 +425,8 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
         for c_idx, (c_start, c_end) in enumerate(chunk_ranges):
             c_len = c_end - c_start
+            batch_pct = ((c_idx + 1) / len(chunk_ranges)) * 50.0
+            print(f"[TELEMETRY:STAGE3] batch={c_idx+1} total={len(chunk_ranges)} pct={batch_pct:.1f}", flush=True)
             print(f"   --> Batch [{c_idx+1}/{len(chunk_ranges)}]: Frames {c_start+1} to {c_end} ({c_len} frames)...")
 
             c_paths = image_paths[c_start:c_end]
@@ -493,6 +567,31 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     print(f"      * Inference Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
     print()
 
+    # Save to neural cache if not already cached
+    if cached_neural is None and use_cache:
+        try:
+            saved_dir = save_neural_cache(
+                cache_root,
+                cache_key,
+                extrinsic=torch.from_numpy(extrinsic) if isinstance(extrinsic, np.ndarray) else extrinsic,
+                intrinsic=torch.from_numpy(intrinsic) if isinstance(intrinsic, np.ndarray) else intrinsic,
+                points_3d=torch.from_numpy(points_3d) if isinstance(points_3d, np.ndarray) else points_3d,
+                depth_conf=torch.from_numpy(depth_conf) if isinstance(depth_conf, np.ndarray) else depth_conf,
+                original_coords=original_coords,
+                depth_map=torch.from_numpy(depth_map) if isinstance(depth_map, np.ndarray) else depth_map,
+                points_rgb=None,
+                images=None,
+                metadata={
+                    "engine": engine,
+                    "load_res": img_load_res,
+                    "stride": args.stride,
+                    "num_frames": num_frames,
+                }
+            )
+            print(f"      * [Smart Cache] Saved neural predictions to {saved_dir}")
+        except Exception as ce:
+            print(f"      * [Smart Cache Warning] Failed to save neural cache: {ce}")
+
     # -------------------------------------------------------------
     # Stage 5: COLMAP Conversion & Point Cloud Export
     # -------------------------------------------------------------
@@ -538,21 +637,59 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         reproj_err_thresh = args.max_reproj_error if args.max_reproj_error is not None else (3.5 if is_ultra else 6.0)
         track_vis_thresh = 0.3 if is_ultra else 0.2
 
-        print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_count_str}, {max_query_pts} pts/frame, fine_tracking=False]...")
-        from vggt.dependency.track_predict import predict_tracks
-        from vggt.dependency.np_to_pycolmap import batch_np_matrix_to_pycolmap
-        with torch.no_grad():
-            pred_tracks, pred_vis_scores, pred_confs, points_3d_ba, points_rgb_ba = predict_tracks(
-                images,
-                conf=depth_conf,
-                points_3d=points_3d,
-                masks=None,
-                max_query_pts=max_query_pts,
-                query_frame_num=query_frames,
-                keypoint_extractor="aliked+sp",
-                fine_tracking=False,
+        track_cache_key = f"{cache_key}_{align_mode}_{max_query_pts}"
+        cached_tracks = None
+        if use_cache:
+            cached_tracks = load_tracking_cache(
+                cache_root,
+                track_cache_key,
+                query_frames if isinstance(query_frames, list) else [query_frames]
             )
-            torch.cuda.empty_cache()
+
+        from vggt.dependency.np_to_pycolmap import batch_np_matrix_to_pycolmap
+
+        if cached_tracks is not None:
+            print("\n" + "="*70)
+            print(f" [SMART CACHE HIT] Loaded multi-view tracks & tie points from cache!")
+            print(f"                   Skipping CoTracker feature tracking (Saved ~10-20 minutes).")
+            print("="*70 + "\n")
+            print("[TELEMETRY:STAGE5] pct=85.0 status=cache_hit", flush=True)
+            pred_tracks = cached_tracks["pred_tracks"]
+            pred_vis_scores = cached_tracks["pred_vis_scores"]
+            pred_confs = cached_tracks["pred_confs"]
+            points_3d_ba = cached_tracks["points_3d_ba"]
+            points_rgb_ba = cached_tracks["points_rgb_ba"]
+        else:
+            print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_count_str}, {max_query_pts} pts/frame, fine_tracking=False]...")
+            from vggt.dependency.track_predict import predict_tracks
+            with torch.no_grad():
+                pred_tracks, pred_vis_scores, pred_confs, points_3d_ba, points_rgb_ba = predict_tracks(
+                    images,
+                    conf=depth_conf,
+                    points_3d=points_3d,
+                    masks=None,
+                    max_query_pts=max_query_pts,
+                    query_frame_num=query_frames,
+                    keypoint_extractor="aliked+sp",
+                    fine_tracking=False,
+                )
+                torch.cuda.empty_cache()
+
+            if use_cache:
+                try:
+                    save_tracking_cache(
+                        cache_root,
+                        track_cache_key,
+                        query_indices=query_frames if isinstance(query_frames, list) else [query_frames],
+                        pred_tracks=pred_tracks,
+                        pred_vis_scores=pred_vis_scores,
+                        pred_confs=pred_confs,
+                        points_3d_ba=points_3d_ba,
+                        points_rgb_ba=points_rgb_ba,
+                    )
+                    print(f"      * [Smart Cache] Saved multi-view tracks to cache.")
+                except Exception as te:
+                    print(f"      * [Smart Cache Warning] Failed to save tracking cache: {te}")
 
         scale = img_load_res / vggt_res
         intrinsic_ba = copy.deepcopy(intrinsic)
@@ -723,11 +860,14 @@ def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "-o", type=str, default=None, help="Custom output directory for sparse COLMAP files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt", "vggt_omega", "ace0", "acezero"], default="vggt", help="Model engine: 'vggt', 'vggt_omega', or 'ace0' (Niantic Labs Scene Coordinate Regression)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt", "vggt_omega", "ace0", "acezero", "pycusfm", "cusfm"], default="vggt", help="Model engine: 'vggt', 'vggt_omega', 'ace0', or 'pycusfm' (NVIDIA Isaac cuSFM)")
     parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
     parser.add_argument("--ace_try_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
+    parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
+    parser.add_argument("--cusfm_init", type=str, choices=["omega", "vggt", "ace0", "none"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
+    parser.add_argument("--cusfm_ba_iterations", type=int, default=100, help="Maximum bundle adjustment iterations for PyCuSFM (default: 100)")
     parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Custom checkpoint path (.pt file) for VGGT-Omega")
     parser.add_argument("--stride", "-s", type=int, default=1, help="Stride / keyframe interval (e.g. 2 or 3 for large datasets)")
     parser.add_argument("--max_frames", "-m", type=int, default=None, help="Maximum number of frames to process")
@@ -744,6 +884,23 @@ def main():
     parser.add_argument("--no_shared_camera", dest="shared_camera", action="store_false", help="Calibrate separate camera intrinsics for each view")
     parser.add_argument("--view", "-v", action="store_true", help="Launch interactive 3D browser viewer after alignment")
     parser.add_argument("--port", type=int, default=8080, help="Viser viewer port (default: 8080)")
+
+    parser.add_argument("--anchor_size", type=int, default=8, help="Anchor overlap frames connecting consecutive sliding windows (default: 8)")
+    parser.add_argument("--no_cache", action="store_true", help="Disable reading and writing from .abu_cache")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Custom directory path for .abu_cache")
+    parser.add_argument("--clear_cache", action="store_true", help="Purge .abu_cache before running alignment")
+
+    # 3D Gaussian Splatting Training Suite Options
+    parser.add_argument("--train", action="store_true", help="Automatically train 3D Gaussian Splatting model after alignment finishes")
+    parser.add_argument("--train_engine", type=str, choices=["lichtfeld", "splatfacto", "3dgrut"], default="lichtfeld", help="3DGS training engine (default: lichtfeld)")
+    parser.add_argument("--train_iterations", type=int, default=30000, help="Number of 3DGS training iterations (default: 30000; quick test: 7000)")
+    parser.add_argument("--train_mode", type=str, choices=["interactive", "headless"], default="interactive", help="Training view mode: 'interactive' (live visualizer) or 'headless' (background)")
+    parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT) for enhanced non-linear optics")
+    parser.add_argument("--bilateral_grid", action="store_true", help="Enable bilateral grid color correction in LichtFeld / 3DGS")
+    parser.add_argument("--exposure_correction", action="store_true", help="Enable per-photo auto-exposure and white-balance correction")
+    parser.add_argument("--enable_sparsity", action="store_true", help="Enable ADMM sparsity pruning (60% smaller splat file size)")
+    parser.add_argument("--enable_mip", action="store_true", help="Enable anti-aliased mip-filtering for splats")
+    parser.add_argument("--sh_degree", type=int, default=3, choices=[0, 1, 2, 3], help="Spherical harmonics degree (default: 3)")
 
     args = parser.parse_args()
 
@@ -823,8 +980,12 @@ def main():
     model = None
     vggt_res = 518
 
+    # Determine which model is needed for inference or coarse initialization
+    needs_omega = (engine == "vggt_omega") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "omega")
+    needs_vggt = (engine == "vggt") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "vggt")
+
     # Attempt to load VGGT-Omega if requested
-    if engine == "vggt_omega":
+    if needs_omega:
         possible_ckpts = [
             args.checkpoint,
             r"C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\vggt-omega\vggt_omega_1b_512.pt",
@@ -851,17 +1012,18 @@ def main():
                 print(f"      * Model Loaded:  VGGT-Omega in {time.time()-t_load:.1f}s")
             except Exception as e:
                 print(f"[WARNING] Failed to load VGGT-Omega: {e}. Falling back to VGGT.")
-                engine = "vggt"
+                needs_vggt = True
         else:
-            print("\n" + "="*70)
-            print(" [NOTICE] VGGT-Omega weights (vggt_omega_1b_512.pt) are not yet downloaded.")
-            print("          (Your HuggingFace access request status is currently PENDING)")
-            print("          --> Seamlessly falling back to VGGT-1B (Ready & Cached)!")
-            print("="*70 + "\n")
-            engine = "vggt"
+            if engine == "vggt_omega":
+                print("\n" + "="*70)
+                print(" [NOTICE] VGGT-Omega weights (vggt_omega_1b_512.pt) are not yet downloaded.")
+                print("          (Your HuggingFace access request status is currently PENDING)")
+                print("          --> Seamlessly falling back to VGGT-1B (Ready & Cached)!")
+                print("="*70 + "\n")
+            needs_vggt = True
 
-    # Default to standard VGGT
-    if engine == "vggt":
+    # Default or fallback to standard VGGT
+    if needs_vggt and model is None:
         from vggt.models.vggt import VGGT
         vggt_res = 518
         print(f"      * Engine:        VGGT-1B (Global Attention)")
@@ -871,12 +1033,20 @@ def main():
         model.load_state_dict(torch.hub.load_state_dict_from_url(checkpoint_url))
         model.eval().to(device)
         print(f"      * Model Loaded:  VGGT-1B Transformer in {time.time()-t_load:.1f}s")
+
     # ACE0 Engine initialization
     if engine in ["ace0", "acezero"]:
         print(f"      * Engine:        ACE0 (Scene Coordinate Regression, Niantic Labs)")
         print(f"      * Architecture:  Implicit Coordinate Regression MLP + ZoeDepth Seed")
         print(f"      * Max Rounds:    {args.ace_iterations}")
         print(f"      * Refinement:    {args.ace_refinement.upper()}")
+
+    # NVIDIA PyCuSFM Engine initialization
+    if engine in ["pycusfm", "cusfm"]:
+        print(f"      * Engine:        NVIDIA PyCuSFM (Isaac cuSFM GPU Pipeline)")
+        print(f"      * GPU Features:  {args.cusfm_features.upper()}")
+        print(f"      * Coarse Init:   {args.cusfm_init.upper()}")
+        print(f"      * Max BA Iters:  {args.cusfm_ba_iterations}")
 
     print()
 
@@ -904,6 +1074,55 @@ def main():
         print()
         print(f"      * ACE0 Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
         print()
+    elif engine in ["pycusfm", "cusfm"]:
+        print("[3/5] Starting NVIDIA PyCuSFM GPU Structure-from-Motion Pipeline...")
+        print(f"      * Feature Extractor: {args.cusfm_features.upper()} (GPU Accelerated)")
+        print(f"      * Coarse Initializer: {args.cusfm_init.upper()}")
+        inf_start = time.time()
+
+        initial_poses = None
+        initial_intrinsics = None
+        if args.cusfm_init in ["omega", "vggt"] and model is not None:
+            init_engine = "vggt_omega" if (args.cusfm_init == "omega" and getattr(model, "__class__", None).__name__ == "VGGTOmega") else "vggt"
+            print(f"      * Computing coarse initial camera poses via {init_engine.upper()} (fast feedforward)...")
+            coarse_args = copy.deepcopy(args)
+            coarse_args.use_ba = False
+            coarse_args.align_mode = "none"
+            coarse_rec, _, _ = run_vggt_reconstruction(
+                init_engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, coarse_args
+            )
+            initial_poses = []
+            name_to_im = {im.name: im for im in coarse_rec.images.values()}
+            for p in image_paths:
+                bname = os.path.basename(p)
+                if bname in name_to_im:
+                    im = name_to_im[bname]
+                    cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+                    R_w2c = cfw.rotation.matrix()
+                    t_w2c = cfw.translation
+                    R_c2w = R_w2c.T
+                    t_c2w = -R_c2w @ t_w2c
+                    initial_poses.append((R_c2w, t_c2w))
+                else:
+                    initial_poses.append((np.eye(3), np.array([0.0, 0.0, len(initial_poses) * 0.1])))
+            if coarse_rec.cameras:
+                cam = list(coarse_rec.cameras.values())[0]
+                initial_intrinsics = (cam.params[0], cam.params[1], cam.params[2], cam.params[3])
+
+        from pycusfm_engine import run_pycusfm_reconstruction
+        reconstruction, dense_3d, dense_rgb = run_pycusfm_reconstruction(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            feature_type=args.cusfm_features,
+            initial_poses=initial_poses,
+            initial_intrinsics=initial_intrinsics,
+            output_rgb=True,
+            max_ba_iterations=args.cusfm_ba_iterations,
+        )
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * PyCuSFM Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
+        print()
     else:
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
             engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
@@ -913,6 +1132,33 @@ def main():
     export_start = time.time()
     print_progress_bar(num_frames, num_frames, prefix="Processed", stage="Exporting application packages...", start_time=export_start)
     print()
+
+    # Application Folder 0: Unified 3DGS Standard Dataset (sparse/0/ + images/ + transforms.json)
+    dataset_3dgs_dir = os.path.join(output_dir, "3dgs_dataset")
+    os.makedirs(dataset_3dgs_dir, exist_ok=True)
+    sparse_0_dir = os.path.join(dataset_3dgs_dir, "sparse", "0")
+    os.makedirs(sparse_0_dir, exist_ok=True)
+    reconstruction.write(sparse_0_dir)
+    reconstruction.write_text(sparse_0_dir)
+
+    # Link/stage images folder
+    images_dst = os.path.join(dataset_3dgs_dir, "images")
+    if not os.path.exists(images_dst):
+        try:
+            # Try Windows directory junction first
+            subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(scan_dir)], check=True, capture_output=True)
+        except Exception:
+            os.makedirs(images_dst, exist_ok=True)
+            for src_p in image_paths:
+                dst_p = os.path.join(images_dst, os.path.basename(src_p))
+                if not os.path.exists(dst_p):
+                    try:
+                        os.link(src_p, dst_p)
+                    except Exception:
+                        shutil.copy2(src_p, dst_p)
+
+    export_transforms_json(reconstruction, dataset_3dgs_dir)
+    print(f"      * [3DGS Standard Dataset] Generated sparse/0/, images/, and transforms.json at: {dataset_3dgs_dir}")
 
     # Application Folder 1: COLMAP / Lichtfield
     colmap_dir = os.path.join(output_dir, "COLMAP_Lichtfield")
@@ -948,6 +1194,10 @@ def main():
     ply_path = os.path.join(rc_dir, "points.ply")
     trimesh.PointCloud(dense_3d_rc, colors=dense_rgb).export(ply_path)
     print(f"      * [Postshot / RealityCapture] Exported {len(dense_3d_rc):,} colored points to: {ply_path}")
+    try:
+        shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
+    except Exception:
+        pass
 
     print(f"      * Exported in:   {time.time()-export_start:.2f}s")
     print()
@@ -982,8 +1232,81 @@ def main():
     else:
         report_lines.append(f" Camera Model:         {first_cam.model_name} (Standard Pinhole)")
 
+    # Human-readable labels for selected GUI / CLI settings
+    engine_labels = {
+        "vggt_omega": "VGGT-Omega (Fast, Low VRAM)",
+        "vggt": "VGGT Standard 1B (Global Attention)",
+        "acezero": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
+        "ace0": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
+        "pycusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
+        "cusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
+    }
+    align_engine_label = engine_labels.get(str(args.engine).lower(), str(args.engine))
+
+    align_mode_labels = {
+        "none": "Feedforward (Fast, ~25s)",
+        "fast": "Feedforward (Fast, ~25s)",
+        "standard": "Standard Ceres BA (~1m)",
+        "ultra": "Ultra Sub-Pixel BA (Cauchy+Polish)",
+    }
+    align_mode_label = align_mode_labels.get(str(args.align_mode).lower(), str(args.align_mode))
+
+    lens_model_label = "Pinhole (Ideal, zero distortion)" if args.lens_model == "pinhole" else "Brown Calibration (k1-k2, t1-t2)"
+
+    if args.max_points <= 150000 and args.conf_thresh >= 2.0:
+        density_label = f"Preview (100K pts, Conf {args.conf_thresh})"
+    elif args.max_points <= 400000 and args.conf_thresh >= 1.7:
+        density_label = f"High Quality (300K pts, Conf {args.conf_thresh})"
+    elif args.max_points <= 900000 and args.conf_thresh >= 1.4:
+        density_label = f"Ultra Dense (800K pts, Conf {args.conf_thresh})"
+    elif args.max_points >= 1000000:
+        density_label = f"Max Scan Grade (1.5M pts, Conf {args.conf_thresh})"
+    else:
+        density_label = f"Custom ({args.max_points:,} pts, Conf >= {args.conf_thresh})"
+
+    train_engine_labels = {
+        "lichtfeld": "LichtFeld Studio (Vulkan Real-Time GUI + GUT)",
+        "splatfacto": "Nerfstudio Splatfacto (PyTorch SOTA + PLY)",
+        "nerfstudio": "Nerfstudio Splatfacto (PyTorch SOTA + PLY)",
+        "3dgrut": "NVIDIA 3DGRUT / 3DGUT (Ray Traced & GUT)",
+    }
+    train_engine_label = train_engine_labels.get(str(args.train_engine).lower(), str(args.train_engine))
+    auto_train_label = "Auto-Train Enabled (Active)" if args.train else "Disabled (Standby / Alignment Only)"
+    train_mode_label = "Interactive Viewport (Live 3D GUI)" if args.train_mode == "interactive" else "Headless Background (Fast CLI)"
+    gut_label = "Enabled (Unscented Transform)" if args.gut else "Disabled"
+
+    report_lines.extend([
+        "----------------------------------------------------------------------",
+        " SELECTED ALIGNMENT SETTINGS:",
+        f"   * Photogrammetry Engine:   {align_engine_label}",
+        f"   * Canvas Resolution:       {args.load_res} px",
+        f"   * Keyframe Stride:         {args.stride} ({'All photos' if args.stride == 1 else f'Every {args.stride}th photo'})",
+        f"   * Camera Alignment Acc.:   {align_mode_label}",
+        f"   * Point Cloud Density:     {density_label}",
+        f"   * Lens Distortion Model:   {lens_model_label}",
+        f"   * PyCuSFM Features:        {args.cusfm_features if hasattr(args, 'cusfm_features') else 'aliked'}",
+        f"   * Smart Cache (.abu_cache): {'Disabled (--no_cache)' if getattr(args, 'no_cache', False) else 'Active'}",
+        "----------------------------------------------------------------------",
+        " 3DGS TRAINING SUITE (ABU TRAIN) SETTINGS:",
+        f"   * Auto-Train Status:       {auto_train_label}",
+        f"   * Training Engine:         {train_engine_label}",
+        f"   * Training Iterations:     {args.train_iterations:,}",
+        f"   * Training Viewport Mode:  {train_mode_label}",
+        f"   * GUT Optics:              {gut_label}",
+        f"   * Bilateral Grid:          {'Enabled' if getattr(args, 'bilateral_grid', False) else 'Disabled'}",
+        f"   * Exposure Correction:     {'Enabled' if getattr(args, 'exposure_correction', False) else 'Disabled'}",
+        f"   * Sparsity Pruning (ADMM): {'Enabled' if getattr(args, 'enable_sparsity', False) else 'Disabled'}",
+        f"   * Mip-Filtering:           {'Enabled' if getattr(args, 'enable_mip', False) else 'Disabled'}",
+        f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
+        "----------------------------------------------------------------------",
+    ])
+
     report_lines.extend([
         f" Output Directory:     {output_dir}",
+        f"   |-- 3dgs_dataset/              (Universal input for LichtFeld, Nerfstudio, 3DGRUT)",
+        f"   |     |-- images/              (Direct link/staged photos)",
+        f"   |     |-- sparse/0/            (COLMAP cameras, images, points3D)",
+        f"   |     \\-- transforms.json      (Standard NeRF / 3DGS camera transforms)",
         f"   |-- COLMAP_Lichtfield/         (For Lichtfield, COLMAP, NeRFstudio)",
         f"   |     |-- cameras.bin / .txt   (Camera intrinsics)",
         f"   |     |-- images.bin / .txt    (Camera poses & 2D-3D tracks)",
@@ -1004,6 +1327,34 @@ def main():
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(report_text)
     print(f"\nSaved report to: {report_file}")
+
+    # Stage 6: Automated 3D Gaussian Splatting Training (if requested)
+    if args.train:
+        print()
+        from train_engine import run_3dgs_training
+        train_out = os.path.join(output_dir, "3dgs_models")
+        try:
+            trained_model_path = run_3dgs_training(
+                engine=args.train_engine,
+                dataset_dir=dataset_3dgs_dir,
+                output_dir=train_out,
+                iterations=args.train_iterations,
+                mode=args.train_mode,
+                gut=args.gut,
+                sh_degree=getattr(args, "sh_degree", 3),
+                bilateral_grid=getattr(args, "bilateral_grid", False),
+                exposure_correction=getattr(args, "exposure_correction", False),
+                enable_sparsity=getattr(args, "enable_sparsity", False),
+                enable_mip=getattr(args, "enable_mip", False),
+            )
+            print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
+            try:
+                with open(report_file, "a", encoding="utf-8") as rf:
+                    rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n======================================================================\n")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"\n[ERROR] 3DGS Training failed: {e}")
 
     if args.view:
         print("\nStarting Interactive 3D Viewer...")
