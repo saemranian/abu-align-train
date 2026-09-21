@@ -1,92 +1,91 @@
-# Abu Align & Train v0.0.1.2 Walkthrough: Intelligent Caching, Live Telemetry & Engine Expansion
+# Abu Align & Train v0.0.1.3 Walkthrough: Universal Pause/Resume, High-Visibility Progress & Automated Base-10 Versioning
 
 ## Executive Summary
 
-In this milestone, **Abu Align & Train v0.0.1.2** introduces three major performance, observability, and control enhancements:
-1. **Intelligent Multi-Tier Caching System (`.abu_cache`):** Persistent half-precision tensor caching for neural forward passes (Stage 3 & 4) and 2D feature trajectories (Stage 5), cutting re-run times from **4+ minutes down to 33 seconds** on the `SEL Copy` 60MP dataset.
-2. **Granular Live Telemetry & Visual Progress Bar:** Fine-grained `[TELEMETRY:STAGE3]` and `[TELEMETRY:STAGE5]` streaming emitting query numbers, frame IDs, percentage completion, and real-time ETAs with dynamic `ttk.Progressbar` and active status label.
-3. **Deep Engine Options & Parameters Expansion:** Exposing advanced photogrammetry and 3DGS training options across all 4 alignment engines (VGGT, VGGT-Omega, ACE0, PyCuSFM) and 3 training engines (LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT) with interactive hover `ToolTip`s.
+**Abu Align & Train v0.0.1.3** introduces core workflow controls, visual feedback upgrades, and robust build engineering:
+1. **Universal Pause / Resume Control (`⏸ PAUSE` / `▶ RESUME`):** Allows users to freeze and thaw active photogrammetry alignment and 3DGS training processes at any moment. Using recursive process-tree thread suspension via `psutil`, GPU VRAM allocations and in-memory progress are 100% preserved.
+2. **High-Contrast Progress Gauge & Numeric Percentage Badge:** Resolves dark mode visibility by wrapping the progress bar in a bright `#3b82f6` border frame with a `#11111b` deep trough and a dedicated `[ 0.0% ]` to `[ 100.0% ]` percentage readout (`self.pct_lbl`), ensuring instant readability even when idle.
+3. **6 Stage Breadcrumb Badges:** Live visual pipeline flow displaying:
+   `[1. Scan] ➔ [2. GPU Init] ➔ [3. Preprocess] ➔ [4. 3D Inf] ➔ [5. Tracking & BA] ➔ [6. 3DGS Train]`
+   Badges dynamically shift colors: Active (`#2563eb` Royal Blue), Completed (`#065f46` Deep Emerald Green), and Pending (`#232338` Charcoal Slate).
+4. **Automated Base-10 Odometer Version Manager (`version_manager.py`):** Enforces strict base-10 digit rules ($0 \to 9$ per digit, cascading rollover on 9, e.g., `v0.0.0.9 -> v0.0.1.0`, `v0.0.1.2 -> v0.0.1.3`). Automatically synchronizes version strings across all GUI, CLI, train engine, launcher, batch scripts, compiles C# executables (`Abu_Align_and_Train_v0.0.1.3.exe`), and maintains Git commit hygiene.
 
 ---
 
-## 1. Intelligent Multi-Tier Caching Architecture (`.abu_cache`)
+## 1. Universal Pause / Resume Architecture
 
-### Location:
-Stored deterministically inside `<dataset_dir>/results/.abu_cache/<cache_key>/` (or `<dataset_dir>/.abu_cache/`). The user's original photos directory remains 100% pristine and unmodified.
+### Problem & Challenge:
+Photogrammetry alignment (especially dense bundle adjustment with Google Ceres) and 3D Gaussian Splatting training consume heavy GPU and CPU resources for extended durations. Users needed the ability to temporarily pause execution (e.g. to inspect intermediate output, free up compute for another application, or check system thermals) without losing their progress or freeing CUDA allocations.
 
-### Cache Fingerprinting (`cache_key`):
-SHA-256 fingerprint generated from:
-- Dataset image count, filenames, sizes, and file modification timestamps.
-- Alignment engine (`vggt`, `vggt_omega`, `ace0`, `pycusfm`).
-- Canvas resolution (`load_res`) and frame sampling `stride`.
-
-### Multi-Tier Storage:
-- **Tier 1 (Neural Inference Cache):**
-  - `extrinsic.pt` & `intrinsic.pt`: Rigid camera poses & focal lengths.
-  - `original_coords.pt`: Full-resolution image coordinate offsets.
-  - `points_3d_fp16.pt` & `depth_map_fp16.pt`: Dense 3D unprojected points and depth maps saved in half-precision (`float16`) to minimize disk footprint while preserving sub-millimeter precision.
-  - `depth_conf_fp16.pt`: Neural confidence maps.
-  - `meta.json`: Execution metadata, frame counts, and timestamp.
-- **Tier 2 (Multi-View Tracking Cache):**
-  - `tracking/tracks.npz`: Multi-view 2D feature tracks, visibility scores, confidence arrays, and bundle-adjusted tie points.
+### Solution:
+A dedicated `⏸ PAUSE` button in the action bar wired to `AbuAlignApp._toggle_pause()`:
+- **Pause Action:**
+  - Queries child processes recursively via `psutil.Process(worker_process.pid).children(recursive=True)`.
+  - Suspends all child worker threads followed by the parent process.
+  - Updates button to `▶ RESUME` (Emerald Green `#10b981`) and sets telemetry to:
+    `Status: ⏸ PAUSED (GPU VRAM & state preserved in RAM)`
+- **Resume Action:**
+  - Resumes parent process followed by child workers.
+  - Updates button back to `⏸ PAUSE` (Amber `#f59e0b`).
+  - Restores active status: `Status: ▶ Resumed and executing...`
+- **Stop Safety Guard:**
+  - If the user clicks `■ STOP` while paused, the GUI safely thaws all threads before terminating to prevent hung or zombie processes on Windows.
 
 ---
 
-## 2. Parameter Reuse Analysis: What Can Be Reused?
+## 2. High-Visibility Progress Gauge & Stage Breadcrumbs
 
-| Changed Parameter / Scenario | Reuses Neural Cache? | Reuses Tracking Cache? | Expected Re-run Time | Technical Reason |
-| :--- | :---: | :---: | :---: | :--- |
-| **Point Cloud Density Only** (e.g. Preview $\leftrightarrow$ High $\leftrightarrow$ Max) | **YES (100%)** | N/A | **< 5 seconds** | Only adjusts confidence threshold `conf_thresh` and random sampling mask on already computed 3D points. |
-| **Lens Distortion Model** (Pinhole $\leftrightarrow$ Brown Calibration) | **YES (100%)** | **YES (100%)** | **~10–15 seconds** | 2D feature tracks and 3D initial points are unchanged; Ceres simply toggles radial ($k_1, k_2$) and tangential ($t_1, t_2$) parameter blocks. |
-| **Camera Alignment Accuracy** (Feedforward $\to$ Standard Ceres BA) | **YES (100%)** | Miss (First time) | **~1–2 minutes** | Skips 5–10 min neural inference; runs tracking once and caches it. Subsequent BA runs take ~10s. |
-| **3DGS Training Options** (Iterations, Viewport, Bilateral, Exposure) | **YES (100%)** | **YES (100%)** | **0 seconds (Alignment)** | Photogrammetry alignment is untouched; immediately launches LichtFeld or Nerfstudio. |
-| **Canvas Resolution (`load_res`)** (e.g. 512 $\to$ 1024) | No (Invalidated) | No (Invalidated) | Full Run | Changes image tensor dimensions and feature tracking coordinate grid. |
-| **Engine Change** (e.g. VGGT-Omega $\leftrightarrow$ ACE0) | No (Invalidated) | No (Invalidated) | Full Run | Distinct neural architectures with incompatible latent spaces. |
-
----
-
-## 3. Live Telemetry & Progress Bar
-
-### Structured Telemetry Streaming:
-- `[TELEMETRY:STAGE3] batch=X total=Y pct=Z`
-- `[TELEMETRY:STAGE3] pct=50.0 status=cache_hit`
-- `[TELEMETRY:STAGE5] query=X total=Y frame=Z pct=W eta_sec=N`
-- `[TELEMETRY:STAGE5] pct=85.0 status=cache_hit`
-
-### GUI Integration:
-- **`ttk.Progressbar`:** Positioned right above the console window in `abu_align_gui.py`. Smoothly updates between 0% and 100%.
-- **Dynamic Status Label (`self.telemetry_lbl`):** Displays current stage, active query, and active frame (e.g., `Stage 5/5: Multi-View Tracking [Query 2/5, Frame #1] (20.0%)`).
-- **Live ETA Display (`self.eta_lbl`):** Calculates and formats real-time remaining time (e.g., `⏱ ETA: 2m 11s`).
-- **Smart Cache Hit Indicators:** Displays `⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)` in bright blue.
+### Visibility Resolution:
+In standard Tkinter dark themes on Windows, an empty `ttk.Progressbar` (value = 0) renders without any border or fill, causing it to disappear into the dark panel background.
+In v0.0.1.3:
+- **Progress Gauge Frame:** Enclosed in a styled container (`bg="#11111b"`, `highlightbackground="#3b82f6"`, `highlightthickness=1`, `padx=2`, `pady=2`).
+- **Percentage Badge (`self.pct_lbl`):** Bold Segoe UI label permanently visible on the right side of the gauge (`  0.0% ` to `100.0%`).
+- **Stage Breadcrumbs:** 6 discrete badges placed above the telemetry row showing pipeline stages:
+  1. `1. Scan` (Image discovery & validation)
+  2. `2. GPU Init` (CUDA setup & PyTorch foundation model loading)
+  3. `3. Preprocess` (Feature extraction & batch inference)
+  4. `4. 3D Inf` (Dense unprojection & point map prediction)
+  5. `5. Tracking & BA` (Multi-view optical flow & Ceres bundle adjustment)
+  6. `6. 3DGS Train` (LichtFeld Studio / Nerfstudio Splatfacto / NVIDIA 3DGRUT)
 
 ---
 
-## 4. Verification Benchmark on Test Dataset
+## 3. Automated Base-10 Version Manager (`version_manager.py`)
 
-**Dataset:** `C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Sony\101MSDCF\CC\Interior\RedBox\SEL Copy`  
-**Hardware:** NVIDIA GeForce RTX 4090 (24 GB VRAM)  
-**Photos:** 28 total (14 keyframes with `--stride 2`, 60.2 MP each)
+### Odometer Rollover Specification:
+Version strings strictly follow `vMAJOR.MINOR.PATCH.BUILD` where each digit is $0 \le d \le 9$:
+$$\begin{aligned}
+\text{v0.0.0.9} &\longrightarrow \text{v0.0.1.0} \\
+\text{v0.0.1.2} &\longrightarrow \text{v0.0.1.3} \\
+\text{v0.0.1.9} &\longrightarrow \text{v0.0.2.0} \\
+\text{v0.0.9.9} &\longrightarrow \text{v0.1.0.0} \\
+\text{v0.9.9.9} &\longrightarrow \text{v1.0.0.0}
+\end{aligned}$$
 
-### Benchmark Results:
-| Execution Run | Selected Settings | Cache Status | Runtime | Outcome |
-| :--- | :--- | :--- | :---: | :--- |
-| **Run 1 (Initial)** | `vggt_omega`, Brown Lens Model, Standard BA | Cache Populated | **04:23** | Saved neural predictions and tracking data to `.abu_cache\3981555166b24cf6`. |
-| **Run 2 (Re-run with Lens Model Changed to Pinhole)** | `vggt_omega`, Pinhole Model, Standard BA | **100% Cache Hit** (Neural + Tracking) | **00:33** | **8× Faster!** Skipped Stage 3 & 4 neural inference in 0.30s; skipped CoTracker in 0.05s; converged Ceres BA in 0.29s. |
-
-### Generated Verification Reports:
-- `SEL Copy\results\test_cache_run1\reconstruction_report.txt`
-- `SEL Copy\results\test_cache_run2\reconstruction_report.txt`
+### Automated Sync Targets:
+When incremented (`--bump`) or set (`--set 0.0.1.3`), `version_manager.py` automatically updates:
+1. `Abu_Align/VERSION.txt` and `VERSION.txt`
+2. `Abu_Align/abu_align_gui.py` and `abu_align_gui.py` (Title, Badge, About dialog, Headers)
+3. `Abu_Align/align_cli.py` and `align_cli.py` (Banners, Telemetry)
+4. `Abu_Align/train_engine.py` and `train_engine.py`
+5. `Abu_Align/launcher.cs`
+6. `Abu_Align/Abu_Align_and_Train.bat` and `Abu_Align.bat`
+7. Recompiles C# executables with `csc.exe`:
+   - `Abu_Align/Abu_Align_and_Train.exe`
+   - `Abu_Align/Abu_Align_and_Train_v0.0.1.3.exe`
+   - `Abu_Align_and_Train.exe`
 
 ---
 
-## 5. Summary of Modified & Created Files
+## 4. Verification & Git Commit Log
 
-| File | Changes Made |
-| :--- | :--- |
-| **`Abu_Align/cache_manager.py`** & `cache_manager.py` | Multi-tier caching manager with `compute_dataset_hash`, half-precision tensor serialization (`save_neural_cache`, `load_neural_cache`), tracking caching (`save_tracking_cache`, `load_tracking_cache`), and cache purge (`clear_cache`). |
-| **`vggt/dependency/track_predict.py`** | Added granular `[TELEMETRY:STAGE5]` streaming with real-time ETA calculation and query frame progress. Fixed missing `import time`. |
-| **`vggt/dependency/vggsfm_utils.py`** | Added per-chunk progress output inside `predict_tracks_in_chunks`. |
-| **`Abu_Align/align_cli.py`** & `align_cli.py` | Integrated cache checking and saving for Stage 3/4 and Stage 5; enriched `reconstruction_report.txt` with cache status and advanced training parameters; added CLI flags (`--anchor_size`, `--no_cache`, `--clear_cache`, `--bilateral_grid`, etc.). |
-| **`Abu_Align/train_engine.py`** & `train_engine.py` | Added support for `--bilateral_grid`, `--exposure_correction`, `--enable_sparsity`, `--enable_mip`, and `--sh_degree`. |
-| **`Abu_Align/abu_align_gui.py`** & `abu_align_gui.py` | Added `ttk.Progressbar`, live status/ETA labels, Smart Cache toggle (`[x] Smart Cache`), Clear Cache button (`[🗑 Clear Cache]`), sliding-window chunk/anchor selectors, advanced 3DGS toggles, hover tooltips, and real-time telemetry stream parsing. |
-| **`Abu_Align/Abu_Align_and_Train.exe`** & `Abu_Align_and_Train.exe` | Recompiled standalone executable launcher using `csc.exe`. |
+### Unit & GUI Verification:
+- **Base-10 Rollover Unit Tests:** Passed all carry-over conditions ($0.0.0.9 \to 0.0.1.0$, $0.0.1.2 \to 0.0.1.3$, $0.0.9.9 \to 0.1.0.0$, $0.9.9.9 \to 1.0.0.0$).
+- **Widget Initialization Test:** Verified all Tkinter widgets (`pause_btn`, `pct_lbl`, `stage_badges`) instantiate cleanly, stage transitions function properly (`#065f46`, `#2563eb`, `#232338`), and `psutil` process suspension works.
+- **Smart Cache Performance:** Verified 8× speedup on `SEL Copy` (04:23 $\to$ 00:33) upon changing parameters.
+
+### Git Version Control Record:
+- **Commit:** `2c021d5`
+- **Branch:** `main`
+- **Message:** `feat(v0.0.1.3): add universal pause/resume, high-contrast progress bar with stage indicators, and automated base-10 version manager`
+- **Files Modified/Created:** 17 files (+1,036 insertions, -406 deletions)
