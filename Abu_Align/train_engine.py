@@ -84,6 +84,7 @@ def train_lichtfeld(
     headless: bool = False,
     gut: bool = False,
     sh_degree: int = 3,
+    export_spz: bool = False,
     bilateral_grid: bool = False,
     exposure_correction: bool = False,
     enable_sparsity: bool = False,
@@ -99,6 +100,7 @@ def train_lichtfeld(
     :param headless: Run headless in background vs live interactive Vulkan window
     :param gut: Enable Gaussian Unscented Transform
     :param sh_degree: Spherical harmonics degree
+    :param export_spz: Whether to export compressed .spz (10x smaller) in addition to .ply
     :param bilateral_grid: Enable bilateral grid color correction
     :param exposure_correction: Enable per-photo auto-exposure correction
     :param enable_sparsity: Enable ADMM sparsity pruning
@@ -125,18 +127,21 @@ def train_lichtfeld(
     log(f"      * Output Dir: {output_dir}")
     log(f"      * Iterations: {iterations:,}")
     log(f"      * GUT Optics: {'Enabled (Gaussian Unscented Transform)' if gut else 'Disabled'}")
+    log(f"      * SH Degree:  {sh_degree}")
+    log(f"      * Format:     {'.spz (Compressed Splat)' if export_spz else '.ply (Standard 3DGS)'}")
     log(f"      * Bilateral:  {'Enabled' if bilateral_grid else 'Disabled'}")
     log(f"      * Exposure:   {'Enabled' if exposure_correction else 'Disabled'}")
     log(f"      * Sparsity:   {'Enabled' if enable_sparsity else 'Disabled'}")
     log(f"      * Mip-Filter: {'Enabled' if enable_mip else 'Disabled'}")
     log(f"      * Mode:       {'Headless Background' if headless else 'Live Vulkan Viewport'}")
 
+    export_fmt = "spz" if export_spz else "ply"
     cmd = [
         lfs_exe,
         "-d", os.path.abspath(dataset_dir),
         "-o", os.path.abspath(output_dir),
         "-i", str(iterations),
-        "--export", "ply",
+        "--export", export_fmt,
     ]
 
     if headless:
@@ -208,6 +213,10 @@ def train_nerfstudio_splatfacto(
     output_dir: str,
     iterations: int = 30000,
     model_type: str = "splatfacto",
+    camera_optimizer: str = "none",
+    bilateral_grid: bool = False,
+    enable_mip: bool = False,
+    sh_degree: int = 3,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -217,6 +226,10 @@ def train_nerfstudio_splatfacto(
     :param output_dir: Destination directory for trained model
     :param iterations: Max training iterations (e.g. 30,000)
     :param model_type: 'splatfacto' or 'splatfacto-big'
+    :param camera_optimizer: Camera optimizer mode ('none', 'so3_x_r3', 'se3')
+    :param bilateral_grid: Whether to train with bilateral grid color correction
+    :param enable_mip: Whether to enable anti-aliased mip-filtering
+    :param sh_degree: Spherical harmonics degree (0..4)
     :param progress_callback: Telemetry callback
     :return: Path to exported Gaussian splat .ply file
     """
@@ -237,6 +250,10 @@ def train_nerfstudio_splatfacto(
     log(f"      * Initializing Nerfstudio Splatfacto Engine...")
     log(f"      * ns-train:   {ns_train_exe}")
     log(f"      * Model:      {model_type.upper()}")
+    log(f"      * Cam Opt:    {camera_optimizer.upper()}")
+    log(f"      * Bilateral:  {'Enabled' if bilateral_grid else 'Disabled'}")
+    log(f"      * Mip-Filter: {'Enabled' if enable_mip else 'Disabled'}")
+    log(f"      * SH Degree:  {sh_degree}")
     log(f"      * Dataset:    {dataset_dir}")
     log(f"      * Output Dir: {output_dir}")
     log(f"      * Max Steps:  {iterations:,}")
@@ -262,7 +279,6 @@ def train_nerfstudio_splatfacto(
             if frames:
                 frame_dims = {(f.get("w"), f.get("h")) for f in frames if "w" in f and "h" in f}
                 if len(frame_dims) > 1:
-                    # Mixed resolutions: ensure root w/h/cx/cy are removed so per-frame settings are used
                     for key in ["w", "h", "fl_x", "fl_y", "cx", "cy"]:
                         tf_data.pop(key, None)
                     with open(transforms_json, "w", encoding="utf-8") as f:
@@ -280,6 +296,13 @@ def train_nerfstudio_splatfacto(
         "--vis", "tensorboard",
         "--logging.steps-per-log=50",
     ]
+
+    if camera_optimizer and camera_optimizer.lower() != "none":
+        cmd.append(f"--pipeline.model.camera-optimizer.mode={camera_optimizer.lower()}")
+    if sh_degree is not None:
+        cmd.append(f"--pipeline.model.sh-degree={sh_degree}")
+    if enable_mip:
+        cmd.append("--pipeline.model.antialiased=True")
 
     log(f"      * Launching Nerfstudio Training: {' '.join(cmd)}")
     start_time = time.time()
@@ -367,9 +390,13 @@ def train_3dgrut(
     dataset_dir: str,
     output_dir: str,
     variant: str = "3dgut",
+    bvh_backend: str = "optix",
     iterations: int = 30000,
     downsample_factor: int = 1,
     with_viser_gui: bool = True,
+    exposure_correction: bool = False,
+    enable_sparsity: bool = False,
+    sh_degree: int = 3,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -378,9 +405,13 @@ def train_3dgrut(
     :param dataset_dir: Directory containing 3dgs_dataset (sparse/0/ and images/)
     :param output_dir: Destination directory for trained model
     :param variant: '3dgut' (Gaussian Unscented Transform) or '3dgrt' (Gaussian Ray Tracing)
+    :param bvh_backend: 'optix' (Hardware RT Cores) or 'cuda' (CUDA Linear BVH)
     :param iterations: Max iterations
     :param downsample_factor: Image downsample factor (1, 2, 4)
     :param with_viser_gui: Launch interactive browser GUI
+    :param exposure_correction: Affine exposure appearance correction
+    :param enable_sparsity: ADMM sparsity pruning
+    :param sh_degree: Spherical harmonics degree (0..3)
     :param progress_callback: Telemetry callback
     :return: Output directory path
     """
@@ -399,12 +430,16 @@ def train_3dgrut(
     os.makedirs(output_dir, exist_ok=True)
     config_name = "apps/colmap_3dgut.yaml" if variant == "3dgut" else "apps/colmap_3dgrt.yaml"
     log(f"      * Initializing NVIDIA 3DGRUT / 3DGUT Engine...")
-    log(f"      * Repository: {repo_dir}")
-    log(f"      * Config:     {config_name}")
-    log(f"      * Dataset:    {dataset_dir}")
-    log(f"      * Output Dir: {output_dir}")
+    log(f"      * Repository:  {repo_dir}")
+    log(f"      * Variant:     {variant.upper()}")
+    log(f"      * BVH Backend: {bvh_backend.upper()}")
+    log(f"      * Config:      {config_name}")
+    log(f"      * Exposure:    {'Enabled' if exposure_correction else 'Disabled'}")
+    log(f"      * Sparsity:    {'Enabled (ADMM lambda=0.001)' if enable_sparsity else 'Disabled'}")
+    log(f"      * SH Degree:   {sh_degree}")
+    log(f"      * Dataset:     {dataset_dir}")
+    log(f"      * Output Dir:  {output_dir}")
 
-    # Use python environment with torch and hydra
     python_exe = sys.executable
     cmd = [
         python_exe,
@@ -457,28 +492,19 @@ def run_3dgs_training(
     mode: str = "interactive",
     gut: bool = False,
     sh_degree: int = 3,
+    export_spz: bool = False,
+    ns_model: str = "splatfacto",
+    camera_optimizer: str = "none",
     bilateral_grid: bool = False,
     exposure_correction: bool = False,
     enable_sparsity: bool = False,
     enable_mip: bool = False,
+    representation: str = "3dgut",
+    bvh_backend: str = "optix",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
     Unified entrypoint to trigger 3DGS training on any standardized dataset folder.
-    
-    :param engine: 'lichtfeld', 'splatfacto', or '3dgrut'
-    :param dataset_dir: Standardized 3dgs_dataset directory (containing images/ and sparse/0/)
-    :param output_dir: Base directory for 3dgs_models
-    :param iterations: Number of iterations
-    :param mode: 'interactive' or 'headless'
-    :param gut: Gaussian Unscented Transform toggle
-    :param sh_degree: Spherical harmonics degree
-    :param bilateral_grid: Bilateral grid color correction
-    :param exposure_correction: Per-photo exposure correction
-    :param enable_sparsity: ADMM sparsity pruning
-    :param enable_mip: Anti-aliased mip-filtering
-    :param progress_callback: Callable for live status logs
-    :return: Path to output directory or exported .ply file
     """
     engine_clean = engine.lower().strip()
     target_models_dir = os.path.join(output_dir, f"{engine_clean}_models")
@@ -494,6 +520,9 @@ def run_3dgs_training(
         progress_callback(f" Iterations:  {iterations:,}")
         progress_callback(f" Viewport:    {mode.upper()}")
         progress_callback(f" GUT Optics:  {'Enabled' if gut else 'Disabled'}")
+        progress_callback(f" Format/Spz:  {'.spz' if export_spz else '.ply'}")
+        progress_callback(f" Model/Rep:   {ns_model if 'splat' in engine_clean else representation}")
+        progress_callback(f" Cam Opt:     {camera_optimizer}")
         progress_callback(f" Bilateral:   {'Enabled' if bilateral_grid else 'Disabled'}")
         progress_callback(f" Exposure:    {'Enabled' if exposure_correction else 'Disabled'}")
         progress_callback(f" Sparsity:    {'Enabled' if enable_sparsity else 'Disabled'}")
@@ -510,6 +539,7 @@ def run_3dgs_training(
             headless=is_headless,
             gut=gut,
             sh_degree=sh_degree,
+            export_spz=export_spz,
             bilateral_grid=bilateral_grid,
             exposure_correction=exposure_correction,
             enable_sparsity=enable_sparsity,
@@ -521,17 +551,25 @@ def run_3dgs_training(
             dataset_dir=dataset_dir,
             output_dir=target_models_dir,
             iterations=iterations,
-            model_type="splatfacto",
+            model_type=ns_model,
+            camera_optimizer=camera_optimizer,
+            bilateral_grid=bilateral_grid,
+            enable_mip=enable_mip,
+            sh_degree=sh_degree,
             progress_callback=progress_callback
         )
     elif engine_clean in ["3dgrut", "3dgut", "grut"]:
-        variant = "3dgut" if gut else "3dgrt"
+        variant = representation if representation in ["3dgut", "3dgrut", "3dgrt"] else ("3dgut" if gut else "3dgrt")
         return train_3dgrut(
             dataset_dir=dataset_dir,
             output_dir=target_models_dir,
             variant=variant,
+            bvh_backend=bvh_backend,
             iterations=iterations,
             with_viser_gui=(mode == "interactive"),
+            exposure_correction=exposure_correction,
+            enable_sparsity=enable_sparsity,
+            sh_degree=sh_degree,
             progress_callback=progress_callback
         )
     else:
@@ -550,10 +588,15 @@ if __name__ == "__main__":
     parser.add_argument("--iterations", "-i", type=int, default=30000, help="Max training iterations (default: 30000; quick test: 7000)")
     parser.add_argument("--mode", "-m", choices=["interactive", "headless"], default="interactive", help="Viewport mode")
     parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT)")
+    parser.add_argument("--export_spz", action="store_true", default=False, help="Export compressed .spz format in LichtFeld Studio")
+    parser.add_argument("--ns_model", choices=["splatfacto", "splatfacto-big"], default="splatfacto", help="Model variant for Nerfstudio (default: splatfacto)")
+    parser.add_argument("--camera_optimizer", choices=["none", "so3_x_r3", "se3"], default="none", help="Camera optimizer for Nerfstudio (default: none)")
     parser.add_argument("--bilateral_grid", action="store_true", help="Enable bilateral grid color correction")
     parser.add_argument("--exposure_correction", action="store_true", help="Enable per-photo auto-exposure correction")
     parser.add_argument("--enable_sparsity", action="store_true", help="Enable ADMM sparsity pruning")
     parser.add_argument("--enable_mip", action="store_true", help="Enable anti-aliased mip-filtering")
+    parser.add_argument("--representation", choices=["3dgut", "3dgrut"], default="3dgut", help="Representation mode for 3DGRUT")
+    parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, help="Spherical Harmonics degree")
 
     args = parser.parse_args()
@@ -601,10 +644,15 @@ if __name__ == "__main__":
             mode=args.mode,
             gut=args.gut,
             sh_degree=args.sh_degree,
+            export_spz=args.export_spz,
+            ns_model=args.ns_model,
+            camera_optimizer=args.camera_optimizer,
             bilateral_grid=args.bilateral_grid,
             exposure_correction=args.exposure_correction,
             enable_sparsity=args.enable_sparsity,
             enable_mip=args.enable_mip,
+            representation=args.representation,
+            bvh_backend=args.bvh_backend,
             progress_callback=print
         )
     except Exception as e:

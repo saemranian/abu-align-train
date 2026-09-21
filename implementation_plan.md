@@ -1,124 +1,100 @@
-# Implementation Plan - Version v0.0.1.3: Automated Versioning, Visual Telemetry & Universal Pause/Resume
+# Implementation Plan: Dynamic Engine-Specific Parameter Panels & Repository Alignment (v0.0.1.4)
 
-This plan addresses:
-1. **Automated Base-10 Version Management (`v0.0.1.3`):** Strict single-digit rollover logic ($0 \to 9$, rolling over into the left digit like an odometer) with automated version bumping and synchronization across all GUI, CLI, engine, launcher, and batch files before each Git commit.
-2. **High-Visibility Visual Progress Bar & Stage Indicator:** Fix the dark-mode invisibility issue seen in the user's screenshot by replacing the flat 0-value progress bar with an accented high-contrast progress gauge, stage step indicators (1 to 6), and an embedded percentage readout.
-3. **Universal Pause / Resume Engine:** Cross-engine execution freeze and unfreeze supporting all 4 alignment engines (VGGT, VGGT-Omega, ACE0, PyCuSFM) and all 3 training engines (LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT) using recursive Windows process tree thread suspension via `psutil`.
+Make the configuration options in **Abu Align** and **Abu Train** accurately match their respective official repositories. When the user changes an engine, the options must dynamically switch to show only the precise parameters native to that engine, complete with interactive hover tooltips and backend CLI wiring. The version will be updated to **`v0.0.1.4`** with automated Git commit logging.
 
 ---
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **Universal Pause / Resume Mechanism:**
-> Process thread suspension (`psutil.Process(pid).suspend()` and `.resume()`) freezes all OS threads and CUDA kernel queues of the running worker and child processes without losing GPU VRAM allocations or state. This works universally across python scripts and compiled C++/Vulkan binaries (like `LichtFeld-Studio.exe`) without needing engine-specific source code modifications.
+> **Dynamic Parameter Panels Behavior:**
+> Currently, the GUI presents static parameters (e.g. VGGT's point cloud density and bundle adjustment) regardless of whether ACE0, PyCuSFM, or VGGT is active. With this update:
+> - Switching **Alignment Engine** will dynamically morph the options area into the exact controls native to that engine (ACE0 mapping rounds/refinement/seeds; PyCuSFM GPU features/matchers/cuDSS iterations; VGGT confidence/density/Ceres BA/distortion).
+> - Switching **Training Engine** will dynamically morph the training options into the exact controls native to that engine (LichtFeld Vulkan GUI/GUT/SPZ; Nerfstudio Splatfacto model variant/camera optimizer/bilateral grid/mip-filtering; NVIDIA 3DGRUT 3DGUT vs 3DGRUT/OptiX BVH/ADMM sparsity).
 
 ---
 
-## Proposed Architecture & Changes
+## Proposed Changes
 
-### 1. Automated Base-10 Version Management (`version_manager.py`)
+### 1. Research & Parameter Mapping
 
-#### Base-10 Rollover Specification:
-Format: `vMAJOR.MINOR.PATCH.BUILD` (e.g. `v0.0.1.3`)
-- Each digit $d \in \{0, 1, 2, 3, 4, 5, 6, 7, 8, 9\}$.
-- When `bump()` is called:
-  - If `BUILD < 9`: `BUILD += 1`.
-  - If `BUILD == 9`: `BUILD = 0`, and `PATCH` increments.
-  - If `PATCH == 9`: `PATCH = 0`, and `MINOR` increments.
-  - If `MINOR == 9`: `MINOR = 0`, and `MAJOR` increments.
-- Examples:
-  - `v0.0.0.9` $\to$ `v0.0.1.0`
-  - `v0.0.1.2` $\to$ `v0.0.1.3`
-  - `v0.0.1.9` $\to$ `v0.0.2.0`
-  - `v0.0.9.9` $\to$ `v0.1.0.0`
+#### A. Alignment Engines (Abu Align)
 
-#### Component: [NEW] `version_manager.py` & `Abu_Align/version_manager.py`
-- Stores current canonical version.
-- Provides CLI commands:
-  - `python version_manager.py --current`
-  - `python version_manager.py --bump` (bumps version and automatically updates all files)
-  - `python version_manager.py --set 0.0.1.3`
-- Updates version constants in:
-  - `abu_align_gui.py` (window title, badge, about box, console banner)
-  - `align_cli.py` (CLI banner, report headers)
-  - `train_engine.py` (banner)
-  - `launcher.cs` (app name)
-  - Batch scripts (`Abu_Align.bat`, `Abu_Align_and_Train.bat`)
-  - Compiles binary `Abu_Align_and_Train.exe` and `Abu_Align_and_Train_v0.0.1.3.exe`
+| Engine | Official Repository | Precise Native Parameters | GUI Controls & Tooltip Guidance |
+| :--- | :--- | :--- | :--- |
+| **VGGT & VGGT-Omega** | `facebookresearch/vggt` & VGGT-Omega | • Canvas Res: `512, 1024, 1536, 2048`<br>• Stride: `1, 2, 3`<br>• Alignment Acc.: `Feedforward, Standard Ceres BA, Ultra Sub-Pixel BA`<br>• Lens Model: `Pinhole, Brown (k1-k2, t1-t2)`<br>• Point Density: `Preview (100k), High (300k), Ultra (800k), Max (1.5M)`<br>• VRAM Guard: `Chunk size & Anchor size` | Radio buttons & dropdowns with tooltips explaining neural transformer token limits, Cauchy loss, and self-calibrating radial/tangential distortion. |
+| **ACE0** | `nianticlabs/acezero` (ECCV 2024 Oral) | • Mapping Rounds: `15 (Quick), 30 (Standard), 50 (Deep)`<br>• Pose Refinement: `MLP ('mlp'), Naive PnP ('naive'), None ('none')`<br>• Initialization Seeds: `1, 3, 5`<br>• Calibration: `Refine Focal Length vs Fixed 70% heuristic`<br>• Point Cloud Filter: `Filtered Reprojection vs Dense Unfiltered` | Radio buttons & checkbuttons tailored to Scene Coordinate Regression, ZoeDepth seeds, and differentiable MLP backprop. |
+| **NVIDIA PyCuSFM** | `nvidia-isaac/pyCuSFM` (Isaac GPU SfM) | • GPU Feature Extractor: `ALIKED, SuperPoint, SIFT`<br>• Matcher: `LightGlue (GPU Transformer), SuperGlue`<br>• Pose Initializer: `VGGT-Omega Coarse Prior (Hybrid) vs Sequential`<br>• cuDSS Bundle Adjustment: `50, 100, 200 Iterations`<br>• Cloud Colorization: `RGB Colorized Tie Points vs Geometric` | Radio buttons & dropdowns for GPU-accelerated sparse linear solver (cuDSS), neural descriptor extraction, and coarse-to-fine hybrid initialization. |
+
+#### B. Training Engines (Abu Train)
+
+| Engine | Official Repository | Precise Native Parameters | GUI Controls & Tooltip Guidance |
+| :--- | :--- | :--- | :--- |
+| **LichtFeld Studio** | `LichtFeld-Studio` | • Viewport Mode: `Interactive Vulkan Live 3D GUI vs Headless CLI`<br>• Optics Model: `Standard Rectilinear 3DGS vs GUT (Gaussian Unscented Transform)`<br>• SH Degree: `SH 0 (Diffuse), SH 1, SH 2, SH 3 (Full SOTA Specularity)`<br>• Export Format: `Standard .ply vs Compressed .spz (10x smaller)`<br>• Iterations: `7,000, 15,000, 30,000` | Real-time Vulkan window toggle, Unscented Transform optics, spherical harmonics specularity, and Scaniverse `.spz` web compression. |
+| **Nerfstudio Splatfacto** | `nerfstudio-project/nerfstudio` | • Model Variant: `splatfacto (Standard) vs splatfacto-big (High Detail)`<br>• Camera Optimizer: `None, SO3xR3 (Pose Refinement), SE3 (Lie Group)`<br>• Bilateral Grid: `Learned 3D color grid for exposure/WB differences`<br>• Anti-Aliased Mip-Filtering: `Mip-Splatting for multi-scale view`<br>• SH Degree: `0, 1, 2, 3, 4`<br>• Iterations: `7,000, 15,000, 30,000` | Model scale dropdown, camera optimization mode, Bilateral appearance grid, and anti-aliasing mip-filtering. |
+| **NVIDIA 3DGRUT / 3DGUT** | `nv-tlabs/3dgrut` | • Representation: `3DGUT (Unscented Transform) vs 3DGRUT (Ray Tracing)`<br>• BVH Backend: `OptiX Hardware RT Cores vs CUDA Linear BVH`<br>• Appearance: `Affine Exposure / Lighting Correction`<br>• ADMM Sparsity: `Active (λ=0.001) for ~60% file compression`<br>• SH Degree: `0, 1, 2, 3`<br>• Iterations: `7,000, 15,000, 30,000` | Ray-tracing architecture selection, hardware OptiX BVH traversal, per-photo affine appearance, and ADMM sparsity pruning. |
 
 ---
 
-### 2. High-Visibility Progress Bar & Stage Step Badges in GUI
+### 2. GUI Dynamic Panel Architecture (`abu_align_gui.py`)
 
-#### Why it was not clearly visible in the screenshot:
-- In dark mode (`#1e1e2e`), the flat `ttk.Progressbar` with a zero value has no fill and blends into the dark frame.
-- There was no border or numeric percentage text inside the idle bar.
-
-#### Redesigned Visual Telemetry Card in `Abu_Align/abu_align_gui.py`:
-1. **Stage Step Breadcrumbs:**
-   `[1. Scan] ➔ [2. GPU Init] ➔ [3. Preprocess] ➔ [4. 3D Inference] ➔ [5. Tracking & BA] ➔ [6. 3DGS Train]`
-   Highlights the active stage in bright accent colors (Blue/Cyan/Green).
-2. **High-Contrast Progress Bar:**
-   - Crisp 1px neon border (`#3b82f6`).
-   - Distinct dark slate trough (`#11111b`).
-   - Vibrant gradient fill (`#3b82f6` to `#60a5fa`).
-   - Prominent height (18px) with a centered bold percentage label (`0%` when idle, live `XX.X%` when running).
-3. **Live Telemetry Strip:**
-   - Active Stage text with query number and photo ID.
-   - ETA countdown (`⏱ ETA: 1m 45s`).
-   - Smart Cache indicator badges (`⚡ Neural Cache Hit`, `⚡ Tracking Cache Hit`).
+#### [MODIFY] [abu_align_gui.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/abu_align_gui.py)
+- Refactor the middle/right portions of `Alignment Configuration` into a dynamic switcher frame `self.align_dynamic_container`:
+  - Hook `self.engine_var.trace_add("write", self._on_align_engine_changed)`
+  - Methods:
+    - `_build_vggt_align_panel(parent)`
+    - `_build_ace0_align_panel(parent)`
+    - `_build_pycusfm_align_panel(parent)`
+- Refactor the right portion of `3D Gaussian Splatting Training Suite` into a dynamic switcher frame `self.train_dynamic_container`:
+  - Hook `self.train_engine_var.trace_add("write", self._on_train_engine_changed)`
+  - Methods:
+    - `_build_lichtfeld_train_panel(parent)`
+    - `_build_nerfstudio_train_panel(parent)`
+    - `_build_3dgrut_train_panel(parent)`
+- Attach detailed `ToolTip` instances to every single radio button, checkbutton, and combobox.
+- Update parameter gathering in `_start_alignment` and `_start_train_only` to pass the active engine's specific flags to `align_cli.py` and `train_engine.py`.
 
 ---
 
-### 3. Universal Pause / Resume Engine
+### 3. CLI & Engine Adapter Synchronization
 
-#### Workflow:
-```mermaid
-sequenceDiagram
-    participant User as User (GUI)
-    participant App as AbuAlignApp (GUI)
-    participant PS as psutil Process Tree
-    participant Engine as Alignment / Training Engine (CUDA/Vulkan)
+#### [MODIFY] [align_cli.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/align_cli.py)
+- Ensure all arguments for ACE0 (`--ace_iterations`, `--ace_refinement`, `--ace_try_seeds`, `--ace_refine_calib`, `--ace_dense_pc`) and PyCuSFM (`--cusfm_features`, `--cusfm_matcher`, `--cusfm_init`, `--cusfm_ba_iterations`, `--cusfm_rgb`) are parsed and routed cleanly to `acezero_engine.py` and `pycusfm_engine.py`.
+- Update final `reconstruction_report.txt` generation to format engine-specific parameter sections accurately.
 
-    User->>App: Clicks "⏸ PAUSE"
-    App->>PS: proc.children(recursive=True).suspend() & proc.suspend()
-    PS-->>Engine: OS thread freeze (All CPU/GPU kernels paused)
-    App->>User: UI updates: Button -> "▶ RESUME" (Amber), Status -> "[PAUSED]"
-    Note over Engine: Zero memory loss, VRAM preserved, 0% CPU/GPU consumed
+#### [MODIFY] [train_engine.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/train_engine.py)
+- Ensure all engine-specific flags are accepted and passed:
+  - LichtFeld: `--headless`, `--gut`, `--sh_degree`, `--export_spz`
+  - Nerfstudio: `--ns_model` (`splatfacto`/`splatfacto-big`), `--camera_optimizer`, `--bilateral_grid`, `--enable_mip`, `--sh_degree`
+  - 3DGRUT: `--representation` (`3dgut`/`3dgrut`), `--bvh_backend` (`optix`/`cuda`), `--exposure_correction`, `--enable_sparsity`, `--sh_degree`
 
-    User->>App: Clicks "▶ RESUME"
-    App->>PS: proc.resume() & proc.children(recursive=True).resume()
-    PS-->>Engine: OS thread resume (Execution continues immediately)
-    App->>User: UI updates: Button -> "⏸ PAUSE" (Yellow), Status -> Live Telemetry
-```
+---
 
-#### Files to Modify:
-- **`Abu_Align/abu_align_gui.py` & `abu_align_gui.py`:**
-  - Add `self.pause_btn` to Action Bar between `ONE-CLICK` / `ALIGNMENT ONLY` and `■ STOP`.
-  - State variables: `self.is_paused = False`.
-  - Method `self._toggle_pause()`:
-    - Suspends process tree if running.
-    - Resumes process tree if already paused.
-  - Handle `■ STOP` when paused (resumes before killing to prevent zombie processes).
+### 4. Automated Version Management (`v0.0.1.4`) & Git Commit
+
+#### [EXECUTE] [version_manager.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/vggt/Abu_Align/version_manager.py)
+- Execute `version_manager.py --set 0.0.1.4` (or `--bump`) to synchronize version `v0.0.1.4` across:
+  - `VERSION.txt`
+  - GUI headers, window title, badges, About box
+  - CLI banner & headers
+  - Training engine banner
+  - Batch files
+  - Recompiles `Abu_Align_and_Train_v0.0.1.4.exe` and `Abu_Align_and_Train.exe` with `csc.exe`
+- Git commit on `main` logging the complete release:
+  `feat(v0.0.1.4): add dynamic engine-specific parameter panels matching official repositories with interactive tooltips`
 
 ---
 
 ## Verification Plan
 
-### Automated & Unit Tests:
-1. **Version Rollover Verification:**
-   - Test `version_manager.py` with test versions `0.0.0.9 -> 0.0.1.0`, `0.0.1.2 -> 0.0.1.3`, `0.0.1.9 -> 0.0.2.0`, `0.0.9.9 -> 0.1.0.0`.
-   - Verify `v0.0.1.3` is written to all files.
-2. **Pause / Resume Functionality:**
-   - Launch a run on `SEL Copy` with `vggt_omega`.
-   - Trigger `⏸ PAUSE` during Stage 5 tracking.
-   - Verify in `nvidia-smi` that GPU utilization drops to 0% and VRAM remains intact.
-   - Trigger `▶ RESUME`.
-   - Verify that tracking picks up at the exact same query frame and finishes successfully.
-3. **GUI Visibility Verification:**
-   - Launch GUI and verify that the progress bar, stage indicator, and `0%` label are immediately visible in the idle state.
-
-### Git Version Control:
-- Bump version to `v0.0.1.3`.
-- Commit all changes to `main` with detailed commit logs.
+### Automated Tests
+1. **Python Compilation & Syntax Test:**
+   ```powershell
+   C:\Users\USer\miniconda3\envs\vggt\python.exe -c "import py_compile; py_compile.compile('Abu_Align/abu_align_gui.py', doraise=True); py_compile.compile('Abu_Align/align_cli.py', doraise=True); py_compile.compile('Abu_Align/train_engine.py', doraise=True); print('Syntax Verified')"
+   ```
+2. **GUI Dynamic Panel Switching Verification:**
+   Script tests instantiating Tkinter, switching `engine_var` between `vggt_omega`, `ace0`, and `pycusfm`, and verifying that the dynamic alignment panel displays the correct subwidgets. Then switches `train_engine_var` between `lichtfeld`, `nerfstudio`, and `3dgrut` and verifies that the dynamic training panel displays the correct subwidgets.
+3. **Version Manager & Standalone Executables Check:**
+   Verify `version_manager.py` increments to `v0.0.1.4` and builds `Abu_Align_and_Train_v0.0.1.4.exe`.
+4. **Git Commit Hygiene:**
+   Verify `git status` is clean with all changes committed.

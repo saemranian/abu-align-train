@@ -77,7 +77,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.3 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.1.4 - Neural Photogrammetry & 3DGS Training
    Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
@@ -865,9 +865,15 @@ def main():
     parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
     parser.add_argument("--ace_try_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
+    parser.add_argument("--ace_refine_calib", dest="ace_refine_calib", action="store_true", default=True, help="Optimize camera focal length during ACE0 mapping (default: True)")
+    parser.add_argument("--no_ace_refine_calib", dest="ace_refine_calib", action="store_false", help="Keep camera focal length fixed during ACE0 mapping")
+    parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
+    parser.add_argument("--cusfm_matcher", type=str, choices=["lightglue", "superglue"], default="lightglue", help="Keypoint matcher for PyCuSFM (default: lightglue)")
     parser.add_argument("--cusfm_init", type=str, choices=["omega", "vggt", "ace0", "none"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
     parser.add_argument("--cusfm_ba_iterations", type=int, default=100, help="Maximum bundle adjustment iterations for PyCuSFM (default: 100)")
+    parser.add_argument("--cusfm_rgb", dest="cusfm_rgb", action="store_true", default=True, help="Generate colorized RGB 3D point cloud for PyCuSFM")
+    parser.add_argument("--no_cusfm_rgb", dest="cusfm_rgb", action="store_false", help="Generate geometric sparse point cloud for PyCuSFM")
     parser.add_argument("--checkpoint", "-c", type=str, default=None, help="Custom checkpoint path (.pt file) for VGGT-Omega")
     parser.add_argument("--stride", "-s", type=int, default=1, help="Stride / keyframe interval (e.g. 2 or 3 for large datasets)")
     parser.add_argument("--max_frames", "-m", type=int, default=None, help="Maximum number of frames to process")
@@ -896,10 +902,15 @@ def main():
     parser.add_argument("--train_iterations", type=int, default=30000, help="Number of 3DGS training iterations (default: 30000; quick test: 7000)")
     parser.add_argument("--train_mode", type=str, choices=["interactive", "headless"], default="interactive", help="Training view mode: 'interactive' (live visualizer) or 'headless' (background)")
     parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT) for enhanced non-linear optics")
+    parser.add_argument("--export_spz", action="store_true", default=False, help="Export compressed .spz format in LichtFeld Studio")
+    parser.add_argument("--ns_model", choices=["splatfacto", "splatfacto-big"], default="splatfacto", help="Model variant for Nerfstudio (default: splatfacto)")
+    parser.add_argument("--camera_optimizer", choices=["none", "so3_x_r3", "se3"], default="none", help="Camera optimizer for Nerfstudio (default: none)")
     parser.add_argument("--bilateral_grid", action="store_true", help="Enable bilateral grid color correction in LichtFeld / 3DGS")
     parser.add_argument("--exposure_correction", action="store_true", help="Enable per-photo auto-exposure and white-balance correction")
     parser.add_argument("--enable_sparsity", action="store_true", help="Enable ADMM sparsity pruning (60% smaller splat file size)")
     parser.add_argument("--enable_mip", action="store_true", help="Enable anti-aliased mip-filtering for splats")
+    parser.add_argument("--representation", choices=["3dgut", "3dgrut"], default="3dgut", help="Representation mode for 3DGRUT")
+    parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, choices=[0, 1, 2, 3], help="Spherical harmonics degree (default: 3)")
 
     args = parser.parse_args()
@@ -1065,9 +1076,10 @@ def main():
             refinement=args.ace_refinement,
             try_seeds=args.ace_try_seeds,
             external_focal_length=args.ace_focal,
-            refine_calibration=True,
+            refine_calibration=getattr(args, "ace_refine_calib", True),
             image_resolution=min(args.load_res, 640) if args.load_res else 480,
             export_point_cloud=True,
+            dense_point_cloud=getattr(args, "ace_dense_pc", False),
             shared_camera=args.shared_camera,
         )
         inf_elapsed = time.time() - inf_start
@@ -1077,7 +1089,8 @@ def main():
     elif engine in ["pycusfm", "cusfm"]:
         print("[3/5] Starting NVIDIA PyCuSFM GPU Structure-from-Motion Pipeline...")
         print(f"      * Feature Extractor: {args.cusfm_features.upper()} (GPU Accelerated)")
-        print(f"      * Coarse Initializer: {args.cusfm_init.upper()}")
+        print(f"      * Matcher:           {getattr(args, 'cusfm_matcher', 'lightglue').upper()} (GPU Transformer)")
+        print(f"      * Coarse Initializer:{args.cusfm_init.upper()}")
         inf_start = time.time()
 
         initial_poses = None
@@ -1116,7 +1129,7 @@ def main():
             feature_type=args.cusfm_features,
             initial_poses=initial_poses,
             initial_intrinsics=initial_intrinsics,
-            output_rgb=True,
+            output_rgb=getattr(args, "cusfm_rgb", True),
             max_ba_iterations=args.cusfm_ba_iterations,
         )
         inf_elapsed = time.time() - inf_start
@@ -1281,27 +1294,66 @@ def main():
         f"   * Photogrammetry Engine:   {align_engine_label}",
         f"   * Canvas Resolution:       {args.load_res} px",
         f"   * Keyframe Stride:         {args.stride} ({'All photos' if args.stride == 1 else f'Every {args.stride}th photo'})",
-        f"   * Camera Alignment Acc.:   {align_mode_label}",
-        f"   * Point Cloud Density:     {density_label}",
-        f"   * Lens Distortion Model:   {lens_model_label}",
-        f"   * PyCuSFM Features:        {args.cusfm_features if hasattr(args, 'cusfm_features') else 'aliked'}",
-        f"   * Smart Cache (.abu_cache): {'Disabled (--no_cache)' if getattr(args, 'no_cache', False) else 'Active'}",
-        "----------------------------------------------------------------------",
-        " 3DGS TRAINING SUITE (ABU TRAIN) SETTINGS:",
-        f"   * Auto-Train Status:       {auto_train_label}",
-        f"   * Training Engine:         {train_engine_label}",
-        f"   * Training Iterations:     {args.train_iterations:,}",
-        f"   * Training Viewport Mode:  {train_mode_label}",
-        f"   * GUT Optics:              {gut_label}",
-        f"   * Bilateral Grid:          {'Enabled' if getattr(args, 'bilateral_grid', False) else 'Disabled'}",
-        f"   * Exposure Correction:     {'Enabled' if getattr(args, 'exposure_correction', False) else 'Disabled'}",
-        f"   * Sparsity Pruning (ADMM): {'Enabled' if getattr(args, 'enable_sparsity', False) else 'Disabled'}",
-        f"   * Mip-Filtering:           {'Enabled' if getattr(args, 'enable_mip', False) else 'Disabled'}",
-        f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
-        "----------------------------------------------------------------------",
     ])
 
+    if engine in ["ace0", "acezero"]:
+        report_lines.extend([
+            f"   * ACE0 Mapping Rounds:     {args.ace_iterations} rounds",
+            f"   * Pose Refinement Mode:    {args.ace_refinement.upper()}",
+            f"   * Initialization Seeds:    {args.ace_try_seeds} candidate seeds",
+            f"   * Focal Calibration:       {'Refine Focal Length (Active)' if getattr(args, 'ace_refine_calib', True) else 'Fixed Initial Heuristic'}",
+            f"   * Point Cloud Filter:      {'Dense Unfiltered' if getattr(args, 'ace_dense_pc', False) else 'Filtered Reprojection Points'}",
+        ])
+    elif engine in ["pycusfm", "cusfm"]:
+        report_lines.extend([
+            f"   * GPU Feature Extractor:   {args.cusfm_features.upper()}",
+            f"   * Keypoint Matcher:        {getattr(args, 'cusfm_matcher', 'lightglue').upper()} (GPU Transformer)",
+            f"   * Pose Initializer:        {args.cusfm_init.upper()}",
+            f"   * cuDSS BA Iterations:     {args.cusfm_ba_iterations}",
+            f"   * Point Cloud Output:      {'Colorized RGB Tie Points' if getattr(args, 'cusfm_rgb', True) else 'Geometric Sparse'}",
+        ])
+    else:
+        report_lines.extend([
+            f"   * Camera Alignment Acc.:   {align_mode_label}",
+            f"   * Point Cloud Density:     {density_label}",
+            f"   * Lens Distortion Model:   {lens_model_label}",
+            f"   * Auto-Chunking VRAM:      Chunk {args.chunk_size}, Anchor {args.anchor_size}",
+        ])
+
+    report_lines.append(f"   * Smart Cache (.abu_cache): {'Disabled (--no_cache)' if getattr(args, 'no_cache', False) else 'Active'}")
+    report_lines.append("----------------------------------------------------------------------")
+    report_lines.append(" 3DGS TRAINING SUITE (ABU TRAIN) SETTINGS:")
+    report_lines.append(f"   * Auto-Train Status:       {auto_train_label}")
+    report_lines.append(f"   * Training Engine:         {train_engine_label}")
+    report_lines.append(f"   * Training Iterations:     {args.train_iterations:,}")
+
+    train_eng_clean = str(args.train_engine).lower()
+    if "lichtfeld" in train_eng_clean:
+        report_lines.extend([
+            f"   * Training Viewport Mode:  {train_mode_label}",
+            f"   * GUT Optics:              {gut_label}",
+            f"   * Export Format:           {'.spz (Compressed Splat)' if getattr(args, 'export_spz', False) else '.ply (Standard 3DGS)'}",
+            f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
+        ])
+    elif "splatfacto" in train_eng_clean or "nerfstudio" in train_eng_clean:
+        report_lines.extend([
+            f"   * Model Architecture:      {getattr(args, 'ns_model', 'splatfacto').upper()}",
+            f"   * Camera Optimizer:        {getattr(args, 'camera_optimizer', 'none').upper()}",
+            f"   * Bilateral Grid:          {'Enabled' if getattr(args, 'bilateral_grid', False) else 'Disabled'}",
+            f"   * Mip-Filtering:           {'Enabled' if getattr(args, 'enable_mip', False) else 'Disabled'}",
+            f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
+        ])
+    elif "3dgrut" in train_eng_clean or "3dgut" in train_eng_clean:
+        report_lines.extend([
+            f"   * Representation Mode:     {getattr(args, 'representation', '3dgut').upper()}",
+            f"   * BVH Ray-Tracing Backend: {getattr(args, 'bvh_backend', 'optix').upper()}",
+            f"   * Exposure Correction:     {'Enabled' if getattr(args, 'exposure_correction', False) else 'Disabled'}",
+            f"   * Sparsity Pruning (ADMM): {'Enabled (lambda=0.001)' if getattr(args, 'enable_sparsity', False) else 'Disabled'}",
+            f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
+        ])
+
     report_lines.extend([
+        "----------------------------------------------------------------------",
         f" Output Directory:     {output_dir}",
         f"   |-- 3dgs_dataset/              (Universal input for LichtFeld, Nerfstudio, 3DGRUT)",
         f"   |     |-- images/              (Direct link/staged photos)",
@@ -1342,10 +1394,15 @@ def main():
                 mode=args.train_mode,
                 gut=args.gut,
                 sh_degree=getattr(args, "sh_degree", 3),
+                export_spz=getattr(args, "export_spz", False),
+                ns_model=getattr(args, "ns_model", "splatfacto"),
+                camera_optimizer=getattr(args, "camera_optimizer", "none"),
                 bilateral_grid=getattr(args, "bilateral_grid", False),
                 exposure_correction=getattr(args, "exposure_correction", False),
                 enable_sparsity=getattr(args, "enable_sparsity", False),
                 enable_mip=getattr(args, "enable_mip", False),
+                representation=getattr(args, "representation", "3dgut"),
+                bvh_backend=getattr(args, "bvh_backend", "optix"),
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:

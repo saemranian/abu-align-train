@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.1.3
+Abu Align & Train Version 0.0.1.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
@@ -120,9 +120,9 @@ class ToolTip:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.1.3 (Neural Photogrammetry & 3DGS Training Suite)")
-        self.root.geometry("1060x860")
-        self.root.minsize(880, 680)
+        self.root.title("Abu Align & Train - Version 0.0.1.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.geometry("1100x870")
+        self.root.minsize(920, 700)
 
         # Style configuration (Modern Dark Palette)
         self.bg_dark = "#181825"
@@ -168,6 +168,72 @@ class AbuAlignApp:
         self.latest_output_dir = None
         self.active_log_path = None
         self._ensure_logs_dir()
+
+        # ----------------------------------------------------
+        # Alignment Engine & Parameter Variables
+        # ----------------------------------------------------
+        self.engine_var = tk.StringVar(value="vggt_omega")
+        self.res_var = tk.StringVar(value="1024")
+        self.stride_var = tk.StringVar(value="1")
+
+        # VGGT Specific Options
+        self.density_var = tk.StringVar(value="high")
+        self.align_var = tk.StringVar(value="ultra")
+        self.lens_var = tk.StringVar(value="brown")
+
+        # ACE0 Specific Options
+        self.ace_iter_var = tk.StringVar(value="30")
+        self.ace_refine_var = tk.StringVar(value="mlp")
+        self.ace_seeds_var = tk.StringVar(value="3")
+        self.ace_calib_var = tk.BooleanVar(value=True)
+        self.ace_dense_var = tk.BooleanVar(value=True)
+
+        # PyCuSFM Specific Options
+        self.cusfm_feat_var = tk.StringVar(value="aliked")
+        self.cusfm_matcher_var = tk.StringVar(value="lightglue")
+        self.cusfm_init_var = tk.StringVar(value="omega")
+        self.cusfm_ba_var = tk.StringVar(value="100")
+        self.cusfm_rgb_var = tk.BooleanVar(value=True)
+
+        # Cache & Windowing Options
+        self.cache_var = tk.BooleanVar(value=True)
+        self.chunk_size_var = tk.StringVar(value="32")
+        self.anchor_var = tk.StringVar(value="8")
+
+        # ----------------------------------------------------
+        # Training Engine & Parameter Variables
+        # ----------------------------------------------------
+        self.auto_train_var = tk.BooleanVar(value=True)
+        self.train_engine_var = tk.StringVar(value="lichtfeld")
+        self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
+
+        # LichtFeld Studio Specific Options
+        self.lf_mode_var = tk.StringVar(value="interactive")
+        self.lf_gut_var = tk.BooleanVar(value=True)
+        self.lf_sh_var = tk.StringVar(value="3")
+        self.lf_format_var = tk.StringVar(value="ply")
+
+        # Nerfstudio Splatfacto Specific Options
+        self.ns_model_var = tk.StringVar(value="splatfacto")
+        self.ns_cam_opt_var = tk.StringVar(value="so3_x_r3")
+        self.ns_bilateral_var = tk.BooleanVar(value=True)
+        self.ns_mip_var = tk.BooleanVar(value=True)
+        self.ns_sh_var = tk.StringVar(value="3")
+
+        # NVIDIA 3DGRUT Specific Options
+        self.grut_repr_var = tk.StringVar(value="3dgut")
+        self.grut_bvh_var = tk.StringVar(value="optix")
+        self.grut_exposure_var = tk.BooleanVar(value=True)
+        self.grut_sparsity_var = tk.BooleanVar(value=False)
+        self.grut_sh_var = tk.StringVar(value="3")
+
+        # Legacy aliases for backward compatibility
+        self.train_mode_var = self.lf_mode_var
+        self.gut_var = self.lf_gut_var
+        self.bilateral_var = self.ns_bilateral_var
+        self.exposure_var = self.grut_exposure_var
+        self.sparsity_var = self.grut_sparsity_var
+        self.mip_var = self.ns_mip_var
 
         self._build_menu()
         self._build_ui()
@@ -215,7 +281,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.3",
+            text="v0.0.1.4",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -305,16 +371,15 @@ class AbuAlignApp:
         )
         browse_btn.pack(side=tk.RIGHT)
 
-        # Options Grid: 4 Clean Columns
+        # Options Grid: Fixed Left Column + Dynamic Right Panel
         opts_grid = tk.Frame(control_card, bg=self.panel_bg)
         opts_grid.pack(fill=tk.X, pady=(8, 4))
 
-        # Column 1: Engine & Canvas
+        # Column 1: Engine Selection & Canvas / Stride (Fixed)
         col1 = tk.Frame(opts_grid, bg=self.panel_bg)
-        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(4, 12))
 
-        tk.Label(col1, text="Engine & Canvas:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.engine_var = tk.StringVar(value="vggt_omega")
+        tk.Label(col1, text="Alignment Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
         rb_omega = tk.Radiobutton(col1, text="VGGT-Omega (Fast, Low VRAM)", variable=self.engine_var, value="vggt_omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_omega.pack(anchor="w")
         rb_vggt = tk.Radiobutton(col1, text="VGGT Standard 1B", variable=self.engine_var, value="vggt", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
@@ -324,73 +389,35 @@ class AbuAlignApp:
         rb_cusfm = tk.Radiobutton(col1, text="NVIDIA PyCuSFM (cuSFM GPU)", variable=self.engine_var, value="pycusfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_cusfm.pack(anchor="w")
 
-        ToolTip(rb_omega, "VGGT-Omega: Next-Gen Visual Geometry Transformer with Register Attention. Blazing fast, low VRAM footprint.")
+        ToolTip(rb_omega, "VGGT-Omega (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
         ToolTip(rb_vggt, "VGGT-1B: Standard 1-Billion parameter foundation model. Full global attention cross-frame tracking.")
-        ToolTip(rb_ace0, "ACE0 (ECCV 2024 Oral): Learning-based Structure-from-Motion by Niantic Labs. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
-        ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA Structure-from-Motion framework by NVIDIA Isaac. Combines learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and global bundle adjustment with cuDSS sparse GPU solver.")
+        ToolTip(rb_ace0, "ACE0 (Niantic Labs ECCV 2024): Learning-based Structure-from-Motion. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
+        ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA SfM framework by NVIDIA Isaac. Learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and cuDSS sparse bundle adjustment.")
 
         sub_row = tk.Frame(col1, bg=self.panel_bg)
         sub_row.pack(anchor="w", pady=(4, 0))
         tk.Label(sub_row, text="Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        self.res_var = tk.StringVar(value="1024")
         res_cb = ttk.Combobox(sub_row, textvariable=self.res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
         res_cb.pack(side=tk.LEFT, padx=(2, 6))
+        ToolTip(res_cb, "Canvas Resolution: 512 is fastest for preview/low VRAM; 1024/1536/2048 offers finer spatial detail for feature tracking on 40MP-60MP cameras.")
 
         tk.Label(sub_row, text="Stride:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        self.stride_var = tk.StringVar(value="1")
         stride_cb = ttk.Combobox(sub_row, textvariable=self.stride_var, values=["1", "2", "3", "4", "5"], state="readonly", width=4)
         stride_cb.pack(side=tk.LEFT, padx=2)
+        ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
 
-        # Column 2: Point Cloud Density (Quality)
-        col2 = tk.Frame(opts_grid, bg=self.panel_bg)
-        col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        # Dynamic Options Container for Selected Alignment Engine
+        self.align_dynamic_container = tk.Frame(opts_grid, bg=self.panel_bg)
+        self.align_dynamic_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        tk.Label(col2, text="Point Cloud Density:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.density_var = tk.StringVar(value="high")
-        rb_q1 = tk.Radiobutton(col2, text="Preview (100K pts, Conf 2.2)", variable=self.density_var, value="preview", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_q1.pack(anchor="w")
-        rb_q2 = tk.Radiobutton(col2, text="High Quality (300K pts, Conf 1.8)", variable=self.density_var, value="high", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_q2.pack(anchor="w")
-        rb_q3 = tk.Radiobutton(col2, text="Ultra Dense (800K pts, Conf 1.5)", variable=self.density_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_q3.pack(anchor="w")
-        rb_q4 = tk.Radiobutton(col2, text="Max Scan Grade (1.5M pts, Conf 1.2)", variable=self.density_var, value="max", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_q4.pack(anchor="w")
-
-        # Column 3: Camera Alignment Accuracy
-        col3 = tk.Frame(opts_grid, bg=self.panel_bg)
-        col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-
-        tk.Label(col3, text="Camera Alignment Accuracy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.align_var = tk.StringVar(value="ultra")
-        rb_a1 = tk.Radiobutton(col3, text="Feedforward (Fast, ~25s)", variable=self.align_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_a1.pack(anchor="w")
-        rb_a2 = tk.Radiobutton(col3, text="Standard Ceres BA (~1m)", variable=self.align_var, value="standard", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_a2.pack(anchor="w")
-        rb_a3 = tk.Radiobutton(col3, text="Ultra Sub-Pixel BA (Cauchy+Polish)", variable=self.align_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_a3.pack(anchor="w")
-
-        # Column 4: Lens Distortion Calibration
-        col4 = tk.Frame(opts_grid, bg=self.panel_bg)
-        col4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-
-        tk.Label(col4, text="Lens Distortion Model:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.lens_var = tk.StringVar(value="brown")
-        rb_l1 = tk.Radiobutton(col4, text="Pinhole (Ideal, zero distortion)", variable=self.lens_var, value="pinhole", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_l1.pack(anchor="w")
-        rb_l2 = tk.Radiobutton(col4, text="Brown Calibration (k1-k2, t1-t2)", variable=self.lens_var, value="brown", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_l2.pack(anchor="w")
-
-        tk.Label(col4, text="PyCuSFM Features:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w", pady=(6, 0))
-        self.cusfm_feat_var = tk.StringVar(value="aliked")
-        feat_cb = ttk.Combobox(col4, textvariable=self.cusfm_feat_var, values=["aliked", "superpoint", "sift"], state="readonly", width=12)
-        feat_cb.pack(anchor="w", padx=2, pady=2)
-        ToolTip(feat_cb, "Feature extractor for PyCuSFM engine: ALIKED (default, fast neural keypoints), SuperPoint (robust), or SIFT (classical CUDA).")
+        self._build_align_panels()
+        self.engine_var.trace_add("write", lambda *args: self._update_align_panel())
+        self._update_align_panel()
 
         # Smart Cache & Memory Controls Row
         cache_row = tk.Frame(control_card, bg=self.panel_bg)
         cache_row.pack(fill=tk.X, pady=(6, 0))
 
-        self.cache_var = tk.BooleanVar(value=True)
         cache_chk = tk.Checkbutton(
             cache_row,
             text="⚡ Smart Persistent Cache (.abu_cache) - Instant Re-runs (< 5s)",
@@ -421,13 +448,11 @@ class AbuAlignApp:
         ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
 
         tk.Label(cache_row, text="Chunk:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        self.chunk_size_var = tk.StringVar(value="32")
         chunk_cb = ttk.Combobox(cache_row, textvariable=self.chunk_size_var, values=["16", "24", "32", "48", "64"], state="readonly", width=4)
         chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
         ToolTip(chunk_cb, "Sliding-window chunk size for large datasets (> 48 photos). Caps VRAM usage.")
 
         tk.Label(cache_row, text="Anchor:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        self.anchor_var = tk.StringVar(value="8")
         anchor_cb = ttk.Combobox(cache_row, textvariable=self.anchor_var, values=["4", "6", "8", "12", "16"], state="readonly", width=4)
         anchor_cb.pack(side=tk.LEFT, padx=2)
         ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows for seamless Umeyama trajectory alignment.")
@@ -447,11 +472,10 @@ class AbuAlignApp:
         train_grid = tk.Frame(train_card, bg=self.panel_bg)
         train_grid.pack(fill=tk.X, pady=(2, 4))
 
-        # Train Col 1: Auto-Train & Engine Selection
+        # Train Col 1: Auto-Train, Engine Selection & Common Iterations (Fixed)
         tcol1 = tk.Frame(train_grid, bg=self.panel_bg)
-        tcol1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tcol1.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(4, 12))
 
-        self.auto_train_var = tk.BooleanVar(value=True)
         auto_chk = tk.Checkbutton(
             tcol1,
             text="⚡ Auto-Train 3DGS after Alignment finishes",
@@ -466,8 +490,7 @@ class AbuAlignApp:
         ToolTip(auto_chk, "When checked, Abu Align automatically kicks off 3DGS training immediately after photogrammetry alignment finishes.")
 
         tk.Label(tcol1, text="Training Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.train_engine_var = tk.StringVar(value="lichtfeld")
-        rb_t_lf = tk.Radiobutton(tcol1, text="LichtFeld Studio (Vulkan Real-Time GUI + GUT)", variable=self.train_engine_var, value="lichtfeld", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_t_lf = tk.Radiobutton(tcol1, text="LichtFeld Studio (Vulkan Live GUI + GUT)", variable=self.train_engine_var, value="lichtfeld", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_t_lf.pack(anchor="w")
         rb_t_ns = tk.Radiobutton(tcol1, text="Nerfstudio Splatfacto (PyTorch SOTA + PLY)", variable=self.train_engine_var, value="splatfacto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_t_ns.pack(anchor="w")
@@ -478,14 +501,11 @@ class AbuAlignApp:
         ToolTip(rb_t_ns, "Nerfstudio Splatfacto: State-of-the-Art PyTorch 3DGS optimizer with automatic standalone Gaussian Splatting PLY exporter.")
         ToolTip(rb_t_gr, "NVIDIA 3DGRUT / 3DGUT: NVIDIA Research framework for Gaussian ray tracing and unscented transform handling complex non-linear optics.")
 
-        # Train Col 2: Training Iterations
-        tcol2 = tk.Frame(train_grid, bg=self.panel_bg)
-        tcol2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-
-        tk.Label(tcol2, text="Training Iterations:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
+        t_iter_row = tk.Frame(tcol1, bg=self.panel_bg)
+        t_iter_row.pack(anchor="w", pady=(4, 0))
+        tk.Label(t_iter_row, text="Iterations:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
         iter_cb = ttk.Combobox(
-            tcol2,
+            t_iter_row,
             textvariable=self.train_iter_var,
             values=[
                 "7,000 (Fast Preview)",
@@ -493,60 +513,18 @@ class AbuAlignApp:
                 "30,000 (Production High-Fidelity)"
             ],
             state="readonly",
-            width=28
+            width=26
         )
-        iter_cb.pack(anchor="w", pady=(2, 6))
+        iter_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(iter_cb, "Training duration: 7,000 steps (~1-2 min preview); 15,000 steps (~3-5 min standard); 30,000 steps (~7-10 min full production quality).")
 
-        # Train Col 3: Viewport Mode & Optics
-        tcol3 = tk.Frame(train_grid, bg=self.panel_bg)
-        tcol3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        # Dynamic Options Container for Selected Training Engine
+        self.train_dynamic_container = tk.Frame(train_grid, bg=self.panel_bg)
+        self.train_dynamic_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        tk.Label(tcol3, text="Training Viewport Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.train_mode_var = tk.StringVar(value="interactive")
-        rb_m_gui = tk.Radiobutton(tcol3, text="Interactive Viewport (Live 3D GUI)", variable=self.train_mode_var, value="interactive", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_m_gui.pack(anchor="w")
-        rb_m_cli = tk.Radiobutton(tcol3, text="Headless Background (Fast CLI)", variable=self.train_mode_var, value="headless", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_m_cli.pack(anchor="w")
-
-        self.gut_var = tk.BooleanVar(value=True)
-        gut_chk = tk.Checkbutton(
-            tcol3,
-            text="Enable GUT Optics (Unscented Transform)",
-            variable=self.gut_var,
-            font=("Segoe UI", 8),
-            fg=self.text_secondary,
-            bg=self.panel_bg,
-            selectcolor=self.bg_dark,
-            activebackground=self.panel_bg
-        )
-        gut_chk.pack(anchor="w", pady=(4, 0))
-        ToolTip(gut_chk, "Gaussian Unscented Transform (GUT): Corrects camera ray curvature and optical distortion for sharper splats.")
-
-        # Train Col 4: Advanced Optics & Sparsity
-        tcol4 = tk.Frame(train_grid, bg=self.panel_bg)
-        tcol4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-
-        tk.Label(tcol4, text="Advanced Opts & Compression:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        self.bilateral_var = tk.BooleanVar(value=False)
-        bilat_chk = tk.Checkbutton(tcol4, text="Bilateral Grid Color Correct", variable=self.bilateral_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        bilat_chk.pack(anchor="w")
-        ToolTip(bilat_chk, "Bilateral Grid: Corrects complex non-linear lighting variations, dynamic shadows, and color shifts.")
-
-        self.exposure_var = tk.BooleanVar(value=False)
-        expo_chk = tk.Checkbutton(tcol4, text="Auto Exposure / WB Align", variable=self.exposure_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        expo_chk.pack(anchor="w")
-        ToolTip(expo_chk, "Per-camera auto-exposure and white-balance calibration across differing camera sensor captures.")
-
-        self.sparsity_var = tk.BooleanVar(value=False)
-        sparse_chk = tk.Checkbutton(tcol4, text="ADMM Sparsity Pruning (-60% MB)", variable=self.sparsity_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        sparse_chk.pack(anchor="w")
-        ToolTip(sparse_chk, "ADMM Sparsity Pruning: Removes near-zero opacity Gaussians during training, reducing PLY file size by up to 60%.")
-
-        self.mip_var = tk.BooleanVar(value=False)
-        mip_chk = tk.Checkbutton(tcol4, text="Anti-Aliased Mip-Filtering", variable=self.mip_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        mip_chk.pack(anchor="w")
-        ToolTip(mip_chk, "Mip-Splats: Anti-aliasing filter that prevents aliasing and high-frequency noise in fine textures.")
+        self._build_train_panels()
+        self.train_engine_var.trace_add("write", lambda *args: self._update_train_panel())
+        self._update_train_panel()
 
         # 4. Action Buttons
         action_bar = tk.Frame(content_frame, bg=self.bg_dark)
@@ -683,23 +661,6 @@ class AbuAlignApp:
         # Attach interactive parameter tooltips
         ToolTip(self.path_entry, "Dataset Folder: Directory containing JPG/PNG photos to align.")
         ToolTip(browse_btn, "Browse: Open folder selector to pick your photoscanning dataset.")
-
-        ToolTip(rb_omega, "VGGT-Omega Engine (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
-        ToolTip(rb_vggt, "VGGT Standard 1B Engine: Original 1.18B-parameter vision foundation model. Predicts 3D point maps and camera poses in a single forward pass.")
-        ToolTip(res_cb, "Canvas Resolution: 512 is fastest for preview/low VRAM; 1024/1536/2048 offers finer spatial detail for feature tracking on 40MP-60MP cameras.")
-        ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
-
-        ToolTip(rb_q1, "Preview (100K pts, Conf >= 2.2): High neural confidence filter. Fastest point cloud for quick visual checks.")
-        ToolTip(rb_q2, "High Quality (300K pts, Conf >= 1.8): Optimal balance of density and surface cleanliness. Recommended seed for 3D Gaussian Splatting (Postshot).")
-        ToolTip(rb_q3, "Ultra Dense (800K pts, Conf >= 1.5): Deep surface coverage, capturing intricate recesses, background geometry, and secondary objects.")
-        ToolTip(rb_q4, "Max Scan Grade (1.5M pts, Conf >= 1.2): Maximum geometric fidelity. Retains fine edges, wires, corners, and foliage.")
-
-        ToolTip(rb_a1, "Feedforward Pose (~25s): 100% Pure Deep Learning. Predicts camera positions and rotations in a single forward pass without bundle adjustment (~2-4px reprojection error).")
-        ToolTip(rb_a2, "Standard Ceres BA (~1m): Hybrid pipeline. ALIKED neural feature tracking + Google Ceres Levenberg-Marquardt bundle adjustment.")
-        ToolTip(rb_a3, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]: Solves 3,072 multi-view tracks with Cauchy robust loss to downweight outliers, followed by pruning and a 2nd polish pass to reach 0.35 px error.")
-
-        ToolTip(rb_l1, "Pinhole Model: Ideal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0). Native to VGGT training prior. Recommended for pre-undistorted imagery.")
-        ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]: Self-calibrates physical radial (k1, k2) and tangential (t1, t2) lens curvature in Google Ceres. Essential for wide-angle lenses.")
 
         ToolTip(self.one_click_btn, "One-Click Pipeline: Runs complete photogrammetry alignment and immediately launches 3DGS training automatically.")
         ToolTip(self.start_btn, "Start Alignment Only: Runs photogrammetry and exports COLMAP, RealityCapture CSV, transforms.json, and 3dgs_dataset/.")
@@ -863,7 +824,329 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.1.3 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.1.4 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+
+    def _build_align_panels(self):
+        """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
+        # =========================================================================
+        # 1. VGGT / VGGT-Omega Subpanel
+        # =========================================================================
+        self.panel_align_vggt = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Point Cloud Density
+        v_col1 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
+        v_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(v_col1, text="Point Cloud Density:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_q1 = tk.Radiobutton(v_col1, text="Preview (100K pts, Conf 2.2)", variable=self.density_var, value="preview", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q1.pack(anchor="w")
+        rb_q2 = tk.Radiobutton(v_col1, text="High Quality (300K pts, Conf 1.8)", variable=self.density_var, value="high", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q2.pack(anchor="w")
+        rb_q3 = tk.Radiobutton(v_col1, text="Ultra Dense (800K pts, Conf 1.5)", variable=self.density_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q3.pack(anchor="w")
+        rb_q4 = tk.Radiobutton(v_col1, text="Max Scan Grade (1.5M pts, Conf 1.2)", variable=self.density_var, value="max", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_q4.pack(anchor="w")
+        ToolTip(rb_q1, "Preview (100K pts, Conf >= 2.2):\nHigh confidence filter for fastest point cloud generation (~15-20s).\nBest for quick spatial checks.")
+        ToolTip(rb_q2, "High Quality (300K pts, Conf >= 1.8) [Recommended]:\nOptimal balance of surface density and cleanliness.\nRecommended initial point cloud seed for 3DGS training.")
+        ToolTip(rb_q3, "Ultra Dense (800K pts, Conf >= 1.5):\nDeep surface coverage capturing complex recesses, background geometry, and secondary objects.")
+        ToolTip(rb_q4, "Max Scan Grade (1.5M pts, Conf >= 1.2):\nMaximum geometric fidelity. Preserves thin wires, sharp corners, and foliage.")
+
+        # Col B: Camera Alignment Accuracy
+        v_col2 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
+        v_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(v_col2, text="Camera Alignment Accuracy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_a1 = tk.Radiobutton(v_col2, text="Feedforward (Fast, ~25s)", variable=self.align_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a1.pack(anchor="w")
+        rb_a2 = tk.Radiobutton(v_col2, text="Standard Ceres BA (~1m)", variable=self.align_var, value="standard", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a2.pack(anchor="w")
+        rb_a3 = tk.Radiobutton(v_col2, text="Ultra Sub-Pixel BA (Cauchy+Polish)", variable=self.align_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a3.pack(anchor="w")
+        ToolTip(rb_a1, "Feedforward (~25s):\nPure deep-learning prediction directly from VGGT model forward pass.\nNo non-linear bundle adjustment (~2-4px reprojection error).")
+        ToolTip(rb_a2, "Standard Ceres BA (~1m):\nALIKED neural feature tracks refined by Ceres Levenberg-Marquardt optimizer.")
+        ToolTip(rb_a3, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]:\nSolves 3,072 multi-view tracks with Cauchy robust loss to reject outliers,\nfollowed by outlier pruning and a 2nd Polish pass reaching 0.35 px error.")
+
+        # Col C: Lens Distortion Calibration
+        v_col3 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
+        v_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(v_col3, text="Lens Distortion Model:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_l1 = tk.Radiobutton(v_col3, text="Pinhole (Ideal, zero distortion)", variable=self.lens_var, value="pinhole", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_l1.pack(anchor="w")
+        rb_l2 = tk.Radiobutton(v_col3, text="Brown Calibration (k1-k2, t1-t2)", variable=self.lens_var, value="brown", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_l2.pack(anchor="w")
+        ToolTip(rb_l1, "Pinhole Model:\nIdeal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0).\nNative to VGGT training prior. Recommended for pre-undistorted images.")
+        ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]:\nJointly solves physical radial (k1, k2) and tangential (t1, t2) lens curvature in Ceres.\nEssential for wide-angle and smartphone photoscans.")
+
+        # =========================================================================
+        # 2. ACE0 Subpanel (Niantic Labs Scene Coordinate Regression)
+        # =========================================================================
+        self.panel_align_ace0 = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Mapping Rounds (Iterations)
+        ace_col1 = tk.Frame(self.panel_align_ace0, bg=self.panel_bg)
+        ace_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ace_col1, text="ACE0 Mapping Rounds:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_ace_r1 = tk.Radiobutton(ace_col1, text="15 Rounds (Fast Draft)", variable=self.ace_iter_var, value="15", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_r1.pack(anchor="w")
+        rb_ace_r2 = tk.Radiobutton(ace_col1, text="30 Rounds (Standard Default)", variable=self.ace_iter_var, value="30", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_r2.pack(anchor="w")
+        rb_ace_r3 = tk.Radiobutton(ace_col1, text="50 Rounds (High-Fidelity)", variable=self.ace_iter_var, value="50", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_r3.pack(anchor="w")
+        ToolTip(rb_ace_r1, "15 Rounds (~30s):\nRapid training of the ACE0 scene coordinate MLP.\nBest for quick checks of camera coverage and scene geometry.")
+        ToolTip(rb_ace_r2, "30 Rounds [Niantic Official Default]:\nOptimal balance between training speed and sub-millimeter pose convergence.")
+        ToolTip(rb_ace_r3, "50 Rounds (High-Fidelity):\nExtended training iterations for large multi-room spaces, complex objects, or weak texture scenes.")
+
+        # Col B: Pose Refinement Mode
+        ace_col2 = tk.Frame(self.panel_align_ace0, bg=self.panel_bg)
+        ace_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ace_col2, text="Pose Refinement Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_ace_m1 = tk.Radiobutton(ace_col2, text="MLP Refinement (Learned)", variable=self.ace_refine_var, value="mlp", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_m1.pack(anchor="w")
+        rb_ace_m2 = tk.Radiobutton(ace_col2, text="Naive Direct Refinement", variable=self.ace_refine_var, value="naive", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_m2.pack(anchor="w")
+        rb_ace_m3 = tk.Radiobutton(ace_col2, text="None (Feedforward Regression)", variable=self.ace_refine_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ace_m3.pack(anchor="w")
+        ToolTip(rb_ace_m1, "MLP Refinement [Recommended]:\nJointly optimizes 6DoF camera poses and ACE0 scene coordinates by propagating reprojection gradients through the MLP.")
+        ToolTip(rb_ace_m2, "Naive Refinement:\nClassic Levenberg-Marquardt PnP reprojection minimization against fixed predicted coordinates.")
+        ToolTip(rb_ace_m3, "None:\nUses direct RANSAC PnP poses without non-linear gradient bundle optimization.")
+
+        # Col C: Seeds & Calibration Refinement
+        ace_col3 = tk.Frame(self.panel_align_ace0, bg=self.panel_bg)
+        ace_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ace_col3, text="Init Seeds & Calibration:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        seeds_row = tk.Frame(ace_col3, bg=self.panel_bg)
+        seeds_row.pack(anchor="w", pady=(2, 4))
+        tk.Label(seeds_row, text="Init Seeds:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        seeds_cb = ttk.Combobox(seeds_row, textvariable=self.ace_seeds_var, values=["1", "3", "5"], state="readonly", width=4)
+        seeds_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(seeds_cb, "Initialization Seeds:\nNumber of relative pose seeds evaluated during mapping.\n3 seeds provides high robustness against local minima in unordered photos.")
+
+        ace_calib_chk = tk.Checkbutton(ace_col3, text="Refine Focal Length Calib", variable=self.ace_calib_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ace_calib_chk.pack(anchor="w")
+        ToolTip(ace_calib_chk, "Refine Focal Length Calibration:\nOptimizes camera focal length during mapping rounds.\nCrucial when image EXIF focal length is missing or uncalibrated.")
+
+        ace_dense_chk = tk.Checkbutton(ace_col3, text="Export Dense Point Cloud", variable=self.ace_dense_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ace_dense_chk.pack(anchor="w")
+        ToolTip(ace_dense_chk, "Export Dense Point Cloud:\nEvaluates ACE0 MLP predictions over all valid pixels to produce a dense 3D point cloud seed for 3DGS training.")
+
+        # =========================================================================
+        # 3. NVIDIA PyCuSFM Subpanel (cuSFM CUDA Framework)
+        # =========================================================================
+        self.panel_align_pycusfm = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Features & Matcher
+        cu_col1 = tk.Frame(self.panel_align_pycusfm, bg=self.panel_bg)
+        cu_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(cu_col1, text="Feature Extractor & Matcher:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        f_row = tk.Frame(cu_col1, bg=self.panel_bg)
+        f_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(f_row, text="Features:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        cu_feat_cb = ttk.Combobox(f_row, textvariable=self.cusfm_feat_var, values=["aliked", "superpoint", "sift"], state="readonly", width=10)
+        cu_feat_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(cu_feat_cb, "Feature Extractor:\n• ALIKED (default): Ultra-fast neural keypoints, deformable kernel, sharp corners.\n• SuperPoint: Highly robust under dynamic lighting.\n• SIFT: Classical scale-invariant feature transform on CUDA.")
+
+        m_row = tk.Frame(cu_col1, bg=self.panel_bg)
+        m_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(m_row, text="Matcher:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        cu_match_cb = ttk.Combobox(m_row, textvariable=self.cusfm_matcher_var, values=["lightglue", "superglue"], state="readonly", width=10)
+        cu_match_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(cu_match_cb, "Keypoint Matcher:\n• LightGlue: SOTA deep transformer matcher with adaptive depth. 3x faster than SuperGlue.\n• SuperGlue: Attentional Graph Neural Network matcher.")
+
+        # Col B: Pose Initializer Prior
+        cu_col2 = tk.Frame(self.panel_align_pycusfm, bg=self.panel_bg)
+        cu_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(cu_col2, text="Pose Initialization Prior:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_cu_i1 = tk.Radiobutton(cu_col2, text="VGGT-Omega Coarse Prior", variable=self.cusfm_init_var, value="omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cu_i1.pack(anchor="w")
+        rb_cu_i2 = tk.Radiobutton(cu_col2, text="Visual Odometry (Ego)", variable=self.cusfm_init_var, value="ego", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cu_i2.pack(anchor="w")
+        ToolTip(rb_cu_i1, "VGGT-Omega Prior [Recommended]:\nSeeds PyCuSFM bundle adjustment with global foundation model poses for instant convergence and zero drift.")
+        ToolTip(rb_cu_i2, "Visual Odometry (Ego):\nSequential pairwise epipolar chaining. Ideal for continuous video captures and smooth drone fly-throughs.")
+
+        # Col C: cuDSS Sparse Solver & Colorization
+        cu_col3 = tk.Frame(self.panel_align_pycusfm, bg=self.panel_bg)
+        cu_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(cu_col3, text="cuDSS GPU Sparse Solver:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        ba_row = tk.Frame(cu_col3, bg=self.panel_bg)
+        ba_row.pack(anchor="w", pady=(2, 4))
+        tk.Label(ba_row, text="BA Iterations:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        cu_ba_cb = ttk.Combobox(ba_row, textvariable=self.cusfm_ba_var, values=["50", "100", "200"], state="readonly", width=6)
+        cu_ba_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(cu_ba_cb, "Global Bundle Adjustment Iterations:\ncuDSS GPU direct sparse solver iterations for global landmark and camera pose optimization.")
+
+        cu_rgb_chk = tk.Checkbutton(cu_col3, text="Dense RGB Point Colorization", variable=self.cusfm_rgb_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        cu_rgb_chk.pack(anchor="w")
+        ToolTip(cu_rgb_chk, "Dense RGB Colorization:\nProjects aligned 3D points back onto source photos to extract accurate RGB colors for 3DGS seed initialization.")
+
+    def _update_align_panel(self):
+        engine = self.engine_var.get()
+        self.panel_align_vggt.pack_forget()
+        self.panel_align_ace0.pack_forget()
+        self.panel_align_pycusfm.pack_forget()
+
+        if engine in ["vggt_omega", "vggt"]:
+            self.panel_align_vggt.pack(fill=tk.BOTH, expand=True)
+        elif engine == "ace0":
+            self.panel_align_ace0.pack(fill=tk.BOTH, expand=True)
+        elif engine == "pycusfm":
+            self.panel_align_pycusfm.pack(fill=tk.BOTH, expand=True)
+
+    def _build_train_panels(self):
+        """Creates the 3 engine-specific training panels inside self.train_dynamic_container."""
+        # =========================================================================
+        # 1. LichtFeld Studio Subpanel
+        # =========================================================================
+        self.panel_train_lichtfeld = tk.Frame(self.train_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Viewport & GUI Mode
+        lf_col1 = tk.Frame(self.panel_train_lichtfeld, bg=self.panel_bg)
+        lf_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(lf_col1, text="Training Viewport Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_lf_m1 = tk.Radiobutton(lf_col1, text="Interactive Viewport (Live 3D GUI)", variable=self.lf_mode_var, value="interactive", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_lf_m1.pack(anchor="w")
+        rb_lf_m2 = tk.Radiobutton(lf_col1, text="Headless Background (Fast CLI)", variable=self.lf_mode_var, value="headless", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_lf_m2.pack(anchor="w")
+        ToolTip(rb_lf_m1, "Interactive Viewport [Default]:\nOpens LichtFeld Studio's Vulkan window with real-time camera controls and live splat rasterization at 120+ FPS.")
+        ToolTip(rb_lf_m2, "Headless Background:\nRuns high-throughput headless CLI training in the background without launching the GUI window.")
+
+        # Col B: Optics & Format
+        lf_col2 = tk.Frame(self.panel_train_lichtfeld, bg=self.panel_bg)
+        lf_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(lf_col2, text="Optics & Export Format:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        gut_chk = tk.Checkbutton(lf_col2, text="Enable GUT Optics (Unscented)", variable=self.lf_gut_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        gut_chk.pack(anchor="w")
+        ToolTip(gut_chk, "Gaussian Unscented Transform (GUT):\nPropagates ray bundles through camera lens models to eliminate ray distortion and blur in peripheral splats.")
+
+        fmt_row = tk.Frame(lf_col2, bg=self.panel_bg)
+        fmt_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(fmt_row, text="Format:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        fmt_cb = ttk.Combobox(fmt_row, textvariable=self.lf_format_var, values=["ply", "spz"], state="readonly", width=8)
+        fmt_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(fmt_cb, "Export Format:\n• PLY: Universal standard 3DGS point format.\n• SPZ: Compressed splat format (~10x smaller, FP16 packed quaternions).")
+
+        # Col C: Spherical Harmonics
+        lf_col3 = tk.Frame(self.panel_train_lichtfeld, bg=self.panel_bg)
+        lf_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(lf_col3, text="Spherical Harmonics (SH):", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        sh_row = tk.Frame(lf_col3, bg=self.panel_bg)
+        sh_row.pack(anchor="w", pady=(2, 4))
+        tk.Label(sh_row, text="Degree:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        lf_sh_cb = ttk.Combobox(sh_row, textvariable=self.lf_sh_var, values=["0", "1", "2", "3"], state="readonly", width=4)
+        lf_sh_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(lf_sh_cb, "Spherical Harmonics Degree:\n• 0: Diffuse only (fastest, flat lighting).\n• 1-2: Directional highlights.\n• 3 [Recommended]: Full view-dependent specular reflections and realistic sheen.")
+
+        # =========================================================================
+        # 2. Nerfstudio Splatfacto Subpanel
+        # =========================================================================
+        self.panel_train_nerfstudio = tk.Frame(self.train_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Model Architecture
+        ns_col1 = tk.Frame(self.panel_train_nerfstudio, bg=self.panel_bg)
+        ns_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ns_col1, text="Model Architecture:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_ns_m1 = tk.Radiobutton(ns_col1, text="Splatfacto Standard", variable=self.ns_model_var, value="splatfacto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ns_m1.pack(anchor="w")
+        rb_ns_m2 = tk.Radiobutton(ns_col1, text="Splatfacto Big (High Res)", variable=self.ns_model_var, value="splatfacto-big", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ns_m2.pack(anchor="w")
+        ToolTip(rb_ns_m1, "Splatfacto Standard:\nBalanced PyTorch optimizer with fast densification and gradient thresholding. Recommended for standard scenes.")
+        ToolTip(rb_ns_m2, "Splatfacto Big:\nHigh-capacity variant with larger Gaussian point budgets. Recommended for 40-60MP DSLR captures and massive scenes.")
+
+        # Col B: Camera Optimizer
+        ns_col2 = tk.Frame(self.panel_train_nerfstudio, bg=self.panel_bg)
+        ns_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ns_col2, text="Camera Optimizer:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_ns_o1 = tk.Radiobutton(ns_col2, text="SO(3) x R(3) Pose Refine", variable=self.ns_cam_opt_var, value="so3_x_r3", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ns_o1.pack(anchor="w")
+        rb_ns_o2 = tk.Radiobutton(ns_col2, text="SE(3) Lie Algebra", variable=self.ns_cam_opt_var, value="se3", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ns_o2.pack(anchor="w")
+        rb_ns_o3 = tk.Radiobutton(ns_col2, text="None (Locked Poses)", variable=self.ns_cam_opt_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_ns_o3.pack(anchor="w")
+        ToolTip(rb_ns_o1, "SO(3) x R(3) [Recommended]:\nRefines rotation and translation during training to absorb small SfM residual errors.")
+        ToolTip(rb_ns_o2, "SE(3) Lie Algebra:\nFull manifold pose optimization for continuous trajectories.")
+        ToolTip(rb_ns_o3, "None:\nFreezes camera poses strictly as produced by the alignment stage.")
+
+        # Col C: Filters & SH Degree
+        ns_col3 = tk.Frame(self.panel_train_nerfstudio, bg=self.panel_bg)
+        ns_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ns_col3, text="Filters & Spherical Harmonics:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        ns_bilat_chk = tk.Checkbutton(ns_col3, text="Bilateral Grid Color Correct", variable=self.ns_bilateral_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ns_bilat_chk.pack(anchor="w")
+        ToolTip(ns_bilat_chk, "Bilateral Grid:\nCorrects non-linear exposure shifts, dynamic lighting, and white balance across photos.")
+
+        ns_mip_chk = tk.Checkbutton(ns_col3, text="Anti-Aliased Mip-Filtering", variable=self.ns_mip_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ns_mip_chk.pack(anchor="w")
+        ToolTip(ns_mip_chk, "Anti-Aliased Mip-Filtering:\nMip-Splatting eliminates high-frequency moire and sparkling artifacts when viewing at lower zoom levels.")
+
+        ns_sh_row = tk.Frame(ns_col3, bg=self.panel_bg)
+        ns_sh_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(ns_sh_row, text="SH Degree:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        ns_sh_cb = ttk.Combobox(ns_sh_row, textvariable=self.ns_sh_var, values=["0", "1", "2", "3", "4"], state="readonly", width=4)
+        ns_sh_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(ns_sh_cb, "Spherical Harmonics Degree:\nDegree 3 is standard. Degree 4 provides ultra-rich specular highlights.")
+
+        # =========================================================================
+        # 3. NVIDIA 3DGRUT / 3DGUT Subpanel
+        # =========================================================================
+        self.panel_train_3dgrut = tk.Frame(self.train_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Representation Type
+        gr_col1 = tk.Frame(self.panel_train_3dgrut, bg=self.panel_bg)
+        gr_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(gr_col1, text="Representation Model:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_gr_r1 = tk.Radiobutton(gr_col1, text="3DGUT (Unscented Transform)", variable=self.grut_repr_var, value="3dgut", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_gr_r1.pack(anchor="w")
+        rb_gr_r2 = tk.Radiobutton(gr_col1, text="3DGRUT (Ray Traced & GUT)", variable=self.grut_repr_var, value="3dgrut", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_gr_r2.pack(anchor="w")
+        ToolTip(rb_gr_r1, "3DGUT [Default]:\nGaussian Unscented Transform handles non-linear camera projections and lens distortion during splat rendering.")
+        ToolTip(rb_gr_r2, "3DGRUT:\nNVIDIA Research Gaussian Ray Tracing formulation with BVH hardware acceleration.")
+
+        # Col B: BVH RT Acceleration Backend
+        gr_col2 = tk.Frame(self.panel_train_3dgrut, bg=self.panel_bg)
+        gr_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(gr_col2, text="BVH RT Backend:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_gr_b1 = tk.Radiobutton(gr_col2, text="OptiX RT Cores (Hardware)", variable=self.grut_bvh_var, value="optix", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_gr_b1.pack(anchor="w")
+        rb_gr_b2 = tk.Radiobutton(gr_col2, text="CUDA Linear BVH (Universal)", variable=self.grut_bvh_var, value="cuda", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_gr_b2.pack(anchor="w")
+        ToolTip(rb_gr_b1, "OptiX RT Cores [Recommended]:\nAccelerates bounding volume hierarchy traversal using NVIDIA RTX ray-tracing hardware.")
+        ToolTip(rb_gr_b2, "CUDA Linear BVH:\nSoftware BVH traversal executable on all CUDA-capable NVIDIA GPUs.")
+
+        # Col C: Exposure, Sparsity & SH
+        gr_col3 = tk.Frame(self.panel_train_3dgrut, bg=self.panel_bg)
+        gr_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(gr_col3, text="Optics, Sparsity & SH:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        gr_expo_chk = tk.Checkbutton(gr_col3, text="Auto Exposure / WB Align", variable=self.grut_exposure_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        gr_expo_chk.pack(anchor="w")
+        ToolTip(gr_expo_chk, "Auto Exposure / White Balance:\nNVIDIA affine color correction optimizing exposure and gain per camera view.")
+
+        gr_sparse_chk = tk.Checkbutton(gr_col3, text="ADMM Sparsity (-60% MB)", variable=self.grut_sparsity_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        gr_sparse_chk.pack(anchor="w")
+        ToolTip(gr_sparse_chk, "ADMM Sparsity Pruning:\nAlternating Direction Method of Multipliers regularizer. Removes near-zero opacity Gaussians to shrink file size by 50-60%.")
+
+        gr_sh_row = tk.Frame(gr_col3, bg=self.panel_bg)
+        gr_sh_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(gr_sh_row, text="SH Degree:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        gr_sh_cb = ttk.Combobox(gr_sh_row, textvariable=self.grut_sh_var, values=["0", "1", "2", "3"], state="readonly", width=4)
+        gr_sh_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(gr_sh_cb, "Spherical Harmonics Degree:\nDegree 3 is standard for realistic directional shine and reflections.")
+
+    def _update_train_panel(self):
+        engine = self.train_engine_var.get()
+        self.panel_train_lichtfeld.pack_forget()
+        self.panel_train_nerfstudio.pack_forget()
+        self.panel_train_3dgrut.pack_forget()
+
+        if engine == "lichtfeld":
+            self.panel_train_lichtfeld.pack(fill=tk.BOTH, expand=True)
+        elif engine == "splatfacto":
+            self.panel_train_nerfstudio.pack(fill=tk.BOTH, expand=True)
+        elif engine == "3dgrut":
+            self.panel_train_3dgrut.pack(fill=tk.BOTH, expand=True)
 
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1030,16 +1313,15 @@ class AbuAlignApp:
             fg=self.accent_green
         )
 
+        align_engine = self.engine_var.get()
         cmd = [
             self.conda_python,
             "-u",
             self.cli_script,
             "--input", dataset_path,
-            "--engine", self.engine_var.get(),
+            "--engine", align_engine,
             "--stride", str(self.stride_var.get()),
             "--load_res", str(self.res_var.get()),
-            "--align_mode", self.align_var.get(),
-            "--lens_model", self.lens_var.get(),
         ]
 
         if not self.cache_var.get():
@@ -1050,33 +1332,81 @@ class AbuAlignApp:
             "--anchor_size", str(self.anchor_var.get())
         ])
 
-        if self.engine_var.get() == "pycusfm":
-            cmd.extend(["--cusfm_features", self.cusfm_feat_var.get()])
+        # Active Alignment Engine Options
+        if align_engine in ["vggt_omega", "vggt"]:
+            cmd.extend([
+                "--align_mode", self.align_var.get(),
+                "--lens_model", self.lens_var.get(),
+            ])
+            density = self.density_var.get()
+            if density == "preview":
+                cmd.extend(["--conf_thresh", "2.2", "--max_points", "100000"])
+            elif density == "high":
+                cmd.extend(["--conf_thresh", "1.8", "--max_points", "300000"])
+            elif density == "ultra":
+                cmd.extend(["--conf_thresh", "1.5", "--max_points", "800000"])
+            elif density == "max":
+                cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
+        elif align_engine == "ace0":
+            cmd.extend([
+                "--ace_iter", str(self.ace_iter_var.get()),
+                "--ace_refine", self.ace_refine_var.get(),
+                "--ace_seeds", str(self.ace_seeds_var.get()),
+            ])
+            if self.ace_calib_var.get():
+                cmd.append("--ace_refine_calib")
+            else:
+                cmd.append("--no_ace_refine_calib")
+            if self.ace_dense_var.get():
+                cmd.append("--ace_dense_pc")
+        elif align_engine == "pycusfm":
+            cmd.extend([
+                "--cusfm_features", self.cusfm_feat_var.get(),
+                "--cusfm_matcher", self.cusfm_matcher_var.get(),
+                "--cusfm_init", self.cusfm_init_var.get(),
+                "--cusfm_ba_iter", str(self.cusfm_ba_var.get()),
+            ])
+            if self.cusfm_rgb_var.get():
+                cmd.append("--cusfm_rgb")
+            else:
+                cmd.append("--no_cusfm_rgb")
 
-        density = self.density_var.get()
-        if density == "preview":
-            cmd.extend(["--conf_thresh", "2.2", "--max_points", "100000"])
-        elif density == "high":
-            cmd.extend(["--conf_thresh", "1.8", "--max_points", "300000"])
-        elif density == "ultra":
-            cmd.extend(["--conf_thresh", "1.5", "--max_points", "800000"])
-        elif density == "max":
-            cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
+        # Active 3DGS Training Engine Options (logged in report, executed if auto-train enabled)
+        train_engine = self.train_engine_var.get()
+        cmd.extend([
+            "--train_engine", train_engine,
+            "--train_iterations", str(self._parse_train_iterations()),
+        ])
 
-        # 3DGS Training Suite settings (logged in report, executed if auto-train enabled)
-        cmd.extend(["--train_engine", self.train_engine_var.get()])
-        cmd.extend(["--train_iterations", str(self._parse_train_iterations())])
-        cmd.extend(["--train_mode", self.train_mode_var.get()])
-        if self.gut_var.get():
-            cmd.append("--gut")
-        if self.bilateral_var.get():
-            cmd.append("--bilateral_grid")
-        if self.exposure_var.get():
-            cmd.append("--exposure_correction")
-        if self.sparsity_var.get():
-            cmd.append("--enable_sparsity")
-        if self.mip_var.get():
-            cmd.append("--enable_mip")
+        if train_engine == "lichtfeld":
+            cmd.extend([
+                "--train_mode", self.lf_mode_var.get(),
+                "--sh_degree", str(self.lf_sh_var.get()),
+            ])
+            if self.lf_gut_var.get():
+                cmd.append("--gut")
+            if self.lf_format_var.get() == "spz":
+                cmd.append("--export_spz")
+        elif train_engine == "splatfacto":
+            cmd.extend([
+                "--ns_model", self.ns_model_var.get(),
+                "--camera_optimizer", self.ns_cam_opt_var.get(),
+                "--sh_degree", str(self.ns_sh_var.get()),
+            ])
+            if self.ns_bilateral_var.get():
+                cmd.append("--bilateral_grid")
+            if self.ns_mip_var.get():
+                cmd.append("--enable_mip")
+        elif train_engine == "3dgrut":
+            cmd.extend([
+                "--representation", self.grut_repr_var.get(),
+                "--bvh_backend", self.grut_bvh_var.get(),
+                "--sh_degree", str(self.grut_sh_var.get()),
+            ])
+            if self.grut_exposure_var.get():
+                cmd.append("--exposure_correction")
+            if self.grut_sparsity_var.get():
+                cmd.append("--enable_sparsity")
 
         if force_auto_train or self.auto_train_var.get():
             cmd.append("--train")
@@ -1128,25 +1458,45 @@ class AbuAlignApp:
             fg=self.accent_green
         )
 
+        train_engine = self.train_engine_var.get()
         cmd = [
             self.conda_python,
             "-u",
             self.train_script,
             "--dataset", dataset_path,
-            "--engine", self.train_engine_var.get(),
+            "--engine", train_engine,
             "--iterations", str(self._parse_train_iterations()),
-            "--mode", self.train_mode_var.get(),
         ]
-        if self.gut_var.get():
-            cmd.append("--gut")
-        if self.bilateral_var.get():
-            cmd.append("--bilateral_grid")
-        if self.exposure_var.get():
-            cmd.append("--exposure_correction")
-        if self.sparsity_var.get():
-            cmd.append("--enable_sparsity")
-        if self.mip_var.get():
-            cmd.append("--enable_mip")
+
+        if train_engine == "lichtfeld":
+            cmd.extend([
+                "--mode", self.lf_mode_var.get(),
+                "--sh_degree", str(self.lf_sh_var.get()),
+            ])
+            if self.lf_gut_var.get():
+                cmd.append("--gut")
+            if self.lf_format_var.get() == "spz":
+                cmd.append("--export_spz")
+        elif train_engine == "splatfacto":
+            cmd.extend([
+                "--ns_model", self.ns_model_var.get(),
+                "--camera_optimizer", self.ns_cam_opt_var.get(),
+                "--sh_degree", str(self.ns_sh_var.get()),
+            ])
+            if self.ns_bilateral_var.get():
+                cmd.append("--bilateral_grid")
+            if self.ns_mip_var.get():
+                cmd.append("--enable_mip")
+        elif train_engine == "3dgrut":
+            cmd.extend([
+                "--representation", self.grut_repr_var.get(),
+                "--bvh_backend", self.grut_bvh_var.get(),
+                "--sh_degree", str(self.grut_sh_var.get()),
+            ])
+            if self.grut_exposure_var.get():
+                cmd.append("--exposure_correction")
+            if self.grut_sparsity_var.get():
+                cmd.append("--enable_sparsity")
 
         self._log(f"Executing Standalone 3DGS Training: {' '.join(cmd)}\n")
         self._log(f"Session Log: {self.active_log_path}\n\n")
@@ -1162,7 +1512,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.1.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.1.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -1384,7 +1734,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.1.3 - {title}")
+        doc_win.title(f"Abu Align v0.0.1.4 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -1601,7 +1951,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.1.3\n"
+            "Abu Align & Train - Version 0.0.1.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT Foundation, VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"
