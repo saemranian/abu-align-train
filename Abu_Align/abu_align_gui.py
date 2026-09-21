@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.1.5
+Abu Align & Train Version 0.0.1.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
@@ -199,7 +199,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.1.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.1.6 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -364,7 +364,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.5",
+            text="v0.0.1.6",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -528,14 +528,29 @@ class AbuAlignApp:
         ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
 
         tk.Label(cache_row, text="Chunk:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        chunk_cb = ttk.Combobox(cache_row, textvariable=self.chunk_size_var, values=["16", "24", "32", "48", "64", "96", "128"], state="readonly", width=4)
+        chunk_cb = ttk.Combobox(
+            cache_row,
+            textvariable=self.chunk_size_var,
+            values=[
+                "16", "24", "32", "48", "64", "96", "128", 
+                "160", "192", "224", "256", "320", "384", "448", "512", "768", "1024"
+            ],
+            width=5
+        )
         chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
-        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets (> 48 photos). Default 96 for VGGT-Omega maximizes global alignment stability.")
+        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets. Select a preset (up to 1,024) or type any custom number directly into the box.")
 
         tk.Label(cache_row, text="Anchor:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        anchor_cb = ttk.Combobox(cache_row, textvariable=self.anchor_var, values=["4", "8", "12", "16", "24", "32"], state="readonly", width=4)
+        anchor_cb = ttk.Combobox(
+            cache_row,
+            textvariable=self.anchor_var,
+            values=[
+                "4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256"
+            ],
+            width=5
+        )
         anchor_cb.pack(side=tk.LEFT, padx=2)
-        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows for seamless 3D landmark Umeyama trajectory alignment.")
+        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows. Select a preset or type any custom number directly into the box.")
 
         # 3. 3D Gaussian Splatting Training Suite Card (Abu Train)
         train_card = tk.LabelFrame(
@@ -996,7 +1011,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.1.5 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.1.6 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1499,9 +1514,18 @@ class AbuAlignApp:
         if not self.cache_var.get():
             cmd.append("--no_cache")
 
+        try:
+            chunk_val = max(int(str(self.chunk_size_var.get()).strip()), 8)
+        except Exception:
+            chunk_val = 96
+        try:
+            anchor_val = max(int(str(self.anchor_var.get()).strip()), 2)
+        except Exception:
+            anchor_val = 24
+
         cmd.extend([
-            "--chunk_size", str(self.chunk_size_var.get()),
-            "--anchor_size", str(self.anchor_var.get())
+            "--chunk_size", str(chunk_val),
+            "--anchor_size", str(anchor_val)
         ])
 
         # Active Alignment Engine Options
@@ -1684,7 +1708,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.1.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.1.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -1981,7 +2005,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.1.5 - {title}")
+        doc_win.title(f"Abu Align v0.0.1.6 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -2198,7 +2222,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.1.5\n"
+            "Abu Align & Train - Version 0.0.1.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT Foundation, VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"

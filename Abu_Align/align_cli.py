@@ -77,7 +77,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.1.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
@@ -406,14 +406,8 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             overlap = user_anchor
         else:
             overlap = 24 if engine == "vggt_omega" else 12
-        overlap = min(overlap, chunk_size // 2)
+        overlap = min(overlap, max(chunk_size // 2, 1))
         step = max(chunk_size - overlap, 1)
-
-        print("\n" + "="*70)
-        print(f" [SMART VRAM GUARD] Large dataset detected: {num_frames} frames (> 48).")
-        print(f"                   Auto-chunking into {chunk_size}-frame windows with {overlap}-frame anchors.")
-        print(f"                   3D Landmark-Enriched Umeyama: Enabled (Zero axial roll drift).")
-        print("="*70 + "\n")
 
         chunk_ranges = []
         start_idx = 0
@@ -423,6 +417,17 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             if end_idx == num_frames:
                 break
             start_idx += step
+
+        print("\n" + "="*70)
+        if len(chunk_ranges) == 1:
+            print(f" [SMART VRAM GUARD] Dataset: {num_frames} frames.")
+            print(f"                   Running single unified window ({chunk_size}-frame capacity).")
+            print(f"                   Zero stitching needed - 100% globally consistent geometry.")
+        else:
+            print(f" [SMART VRAM GUARD] Large dataset detected: {num_frames} frames.")
+            print(f"                   Auto-chunking into {len(chunk_ranges)} windows of {chunk_size} frames ({overlap}-frame anchors).")
+            print(f"                   3D Landmark-Enriched Umeyama: Enabled (Zero axial roll drift).")
+        print("="*70 + "\n")
 
         all_extrinsics = []
         all_intrinsics = []
