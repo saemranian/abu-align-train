@@ -168,6 +168,7 @@ def recompile_executables(version_str: str) -> None:
         os.path.join(ABU_ALIGN_DIR, "Abu_Align_and_Train.exe"),
         os.path.join(ABU_ALIGN_DIR, f"Abu_Align_and_Train_v{version_str}.exe"),
         os.path.join(ROOT_DIR, "Abu_Align_and_Train.exe"),
+        os.path.join(ROOT_DIR, f"Abu_Align_and_Train_v{version_str}.exe"),
     ]
 
     for exe_out in exe_targets:

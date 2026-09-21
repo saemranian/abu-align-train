@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.1.4
+Abu Align & Train Version 0.0.1.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
@@ -117,10 +117,89 @@ class ToolTip:
             self.tip_window = None
 
 
+class SystemHardwareMonitor:
+    """
+    Direct low-overhead hardware telemetry reader for CPU, RAM, and GPU.
+    Uses psutil for CPU/RAM and direct ctypes calls to Windows nvml.dll for GPU telemetry
+    (GPU core util %, dedicated VRAM, shared memory paging detection, and GPU temperature).
+    """
+    def __init__(self):
+        self.nvml_available = False
+        self.nvml_handle = None
+        self.nvml_lib = None
+        self._init_nvml()
+
+    def _init_nvml(self):
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            nvml = ctypes.CDLL("nvml.dll")
+            if nvml.nvmlInit_v2() == 0:
+                dev = ctypes.c_void_p()
+                if nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(dev)) == 0:
+                    self.nvml_lib = nvml
+                    self.nvml_handle = dev
+                    self.nvml_available = True
+        except Exception:
+            self.nvml_available = False
+
+    def query(self):
+        telemetry = {
+            "cpu_pct": 0.0,
+            "ram_used_gb": 0.0,
+            "ram_total_gb": 0.0,
+            "ram_pct": 0.0,
+            "gpu_name": "NVIDIA GPU",
+            "gpu_util": 0,
+            "gpu_temp": 0,
+            "vram_used_gb": 0.0,
+            "vram_total_gb": 24.0,
+            "vram_pct": 0.0,
+            "paging_risk": False,
+        }
+        if psutil is not None:
+            try:
+                telemetry["cpu_pct"] = psutil.cpu_percent(interval=None)
+                vm = psutil.virtual_memory()
+                telemetry["ram_used_gb"] = vm.used / (1024**3)
+                telemetry["ram_total_gb"] = vm.total / (1024**3)
+                telemetry["ram_pct"] = vm.percent
+            except Exception:
+                pass
+
+        if self.nvml_available and self.nvml_lib and self.nvml_handle:
+            try:
+                import ctypes
+                temp = ctypes.c_uint()
+                if self.nvml_lib.nvmlDeviceGetTemperature(self.nvml_handle, 0, ctypes.byref(temp)) == 0:
+                    telemetry["gpu_temp"] = int(temp.value)
+
+                class nvmlUtilization_t(ctypes.Structure):
+                    _fields_ = [('gpu', ctypes.c_uint), ('memory', ctypes.c_uint)]
+                util = nvmlUtilization_t()
+                if self.nvml_lib.nvmlDeviceGetUtilizationRates(self.nvml_handle, ctypes.byref(util)) == 0:
+                    telemetry["gpu_util"] = int(util.gpu)
+
+                class nvmlMemory_t(ctypes.Structure):
+                    _fields_ = [('total', ctypes.c_ulonglong), ('free', ctypes.c_ulonglong), ('used', ctypes.c_ulonglong)]
+                mem = nvmlMemory_t()
+                if self.nvml_lib.nvmlDeviceGetMemoryInfo(self.nvml_handle, ctypes.byref(mem)) == 0:
+                    used_gb = mem.used / (1024**3)
+                    total_gb = mem.total / (1024**3)
+                    telemetry["vram_used_gb"] = used_gb
+                    telemetry["vram_total_gb"] = total_gb
+                    telemetry["vram_pct"] = (used_gb / max(total_gb, 0.1)) * 100.0
+                    telemetry["paging_risk"] = telemetry["vram_pct"] > 92.0
+            except Exception:
+                pass
+        return telemetry
+
+
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.1.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.1.5 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -197,8 +276,11 @@ class AbuAlignApp:
 
         # Cache & Windowing Options
         self.cache_var = tk.BooleanVar(value=True)
-        self.chunk_size_var = tk.StringVar(value="32")
-        self.anchor_var = tk.StringVar(value="8")
+        self.chunk_size_var = tk.StringVar(value="96")
+        self.anchor_var = tk.StringVar(value="24")
+
+        # Hardware Resource & Telemetry Monitor
+        self.hw_monitor = SystemHardwareMonitor()
 
         # ----------------------------------------------------
         # Training Engine & Parameter Variables
@@ -238,6 +320,7 @@ class AbuAlignApp:
         self._build_menu()
         self._build_ui()
         self._check_queue()
+        self.root.after(500, self._update_hardware_telemetry)
 
     def _build_menu(self):
         menubar = tk.Menu(self.root, bg=self.panel_bg, fg=self.text_primary)
@@ -281,7 +364,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.4",
+            text="v0.0.1.5",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -382,15 +465,12 @@ class AbuAlignApp:
         tk.Label(col1, text="Alignment Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
         rb_omega = tk.Radiobutton(col1, text="VGGT-Omega (Fast, Low VRAM)", variable=self.engine_var, value="vggt_omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_omega.pack(anchor="w")
-        rb_vggt = tk.Radiobutton(col1, text="VGGT Standard 1B", variable=self.engine_var, value="vggt", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_vggt.pack(anchor="w")
         rb_ace0 = tk.Radiobutton(col1, text="ACE0 (Niantic Labs SfM)", variable=self.engine_var, value="ace0", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_ace0.pack(anchor="w")
         rb_cusfm = tk.Radiobutton(col1, text="NVIDIA PyCuSFM (cuSFM GPU)", variable=self.engine_var, value="pycusfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_cusfm.pack(anchor="w")
 
         ToolTip(rb_omega, "VGGT-Omega (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
-        ToolTip(rb_vggt, "VGGT-1B: Standard 1-Billion parameter foundation model. Full global attention cross-frame tracking.")
         ToolTip(rb_ace0, "ACE0 (Niantic Labs ECCV 2024): Learning-based Structure-from-Motion. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
         ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA SfM framework by NVIDIA Isaac. Learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and cuDSS sparse bundle adjustment.")
 
@@ -448,14 +528,14 @@ class AbuAlignApp:
         ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
 
         tk.Label(cache_row, text="Chunk:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        chunk_cb = ttk.Combobox(cache_row, textvariable=self.chunk_size_var, values=["16", "24", "32", "48", "64"], state="readonly", width=4)
+        chunk_cb = ttk.Combobox(cache_row, textvariable=self.chunk_size_var, values=["16", "24", "32", "48", "64", "96", "128"], state="readonly", width=4)
         chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
-        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets (> 48 photos). Caps VRAM usage.")
+        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets (> 48 photos). Default 96 for VGGT-Omega maximizes global alignment stability.")
 
         tk.Label(cache_row, text="Anchor:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        anchor_cb = ttk.Combobox(cache_row, textvariable=self.anchor_var, values=["4", "6", "8", "12", "16"], state="readonly", width=4)
+        anchor_cb = ttk.Combobox(cache_row, textvariable=self.anchor_var, values=["4", "8", "12", "16", "24", "32"], state="readonly", width=4)
         anchor_cb.pack(side=tk.LEFT, padx=2)
-        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows for seamless Umeyama trajectory alignment.")
+        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows for seamless 3D landmark Umeyama trajectory alignment.")
 
         # 3. 3D Gaussian Splatting Training Suite Card (Abu Train)
         train_card = tk.LabelFrame(
@@ -787,6 +867,98 @@ class AbuAlignApp:
         )
         self.pct_lbl.pack(side=tk.RIGHT, padx=(0, 4))
 
+        # Real-Time System Hardware Telemetry Bar (CPU, RAM, GPU Core, VRAM Dedicated, Shared Paging, GPU Temp)
+        self.hw_bar = tk.Frame(
+            console_card,
+            bg="#161622",
+            highlightbackground="#2e2e44",
+            highlightcolor="#3b82f6",
+            highlightthickness=1,
+            padx=8,
+            pady=3
+        )
+        self.hw_bar.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(
+            self.hw_bar,
+            text="⚡ HARDWARE:",
+            font=("Segoe UI", 8, "bold"),
+            fg="#38bdf8",
+            bg="#161622"
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.hw_cpu_lbl = tk.Label(
+            self.hw_bar,
+            text="CPU: --%",
+            font=("Segoe UI", 8, "bold"),
+            fg="#e2e8f0",
+            bg="#232338",
+            padx=6,
+            pady=1
+        )
+        self.hw_cpu_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_cpu_lbl, "Total CPU Processor Utilization % across all cores.")
+
+        self.hw_ram_lbl = tk.Label(
+            self.hw_bar,
+            text="RAM: --/-- GB",
+            font=("Segoe UI", 8, "bold"),
+            fg="#e2e8f0",
+            bg="#232338",
+            padx=6,
+            pady=1
+        )
+        self.hw_ram_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_ram_lbl, "System Host RAM (Used / Total in GB and percentage).")
+
+        self.hw_gpu_lbl = tk.Label(
+            self.hw_bar,
+            text="GPU: --%",
+            font=("Segoe UI", 8, "bold"),
+            fg="#34d399",
+            bg="#232338",
+            padx=6,
+            pady=1
+        )
+        self.hw_gpu_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_gpu_lbl, "NVIDIA GPU Core Compute Utilization %.")
+
+        self.hw_temp_lbl = tk.Label(
+            self.hw_bar,
+            text="GPU Temp: --°C",
+            font=("Segoe UI", 8, "bold"),
+            fg="#fbbf24",
+            bg="#232338",
+            padx=6,
+            pady=1
+        )
+        self.hw_temp_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_temp_lbl, "NVIDIA GPU Core Temperature (°C).")
+
+        self.hw_vram_lbl = tk.Label(
+            self.hw_bar,
+            text="VRAM: --/-- GB",
+            font=("Segoe UI", 8, "bold"),
+            fg="#a78bfa",
+            bg="#232338",
+            padx=6,
+            pady=1
+        )
+        self.hw_vram_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_vram_lbl, "Dedicated GPU Video RAM (Used / Total in GB and percentage).")
+
+        self.hw_page_lbl = tk.Label(
+            self.hw_bar,
+            text="Paging: OK",
+            font=("Segoe UI", 8, "bold"),
+            fg="#10b981",
+            bg="#1e293b",
+            padx=6,
+            pady=1
+        )
+        self.hw_page_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        ToolTip(self.hw_page_lbl, "Windows WDDM Shared Memory Paging Guard:\n• 'Paging: OK': Dedicated VRAM is within safe margins (<92%). Full 1,008 GB/s bandwidth.\n• '⚠️ VRAM SPILL': VRAM overcommitted, spilling into Shared GPU Memory over PCIe bus (~40x slower).")
+
         console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
         console_toolbar.pack(fill=tk.X, pady=(0, 4))
 
@@ -824,7 +996,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.1.4 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.1.5 Ready.\nQuad Alignment Engines: VGGT Foundation, VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1512,7 +1684,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.1.4 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.1.5 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -1527,8 +1699,20 @@ class AbuAlignApp:
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 )
 
+                last_hw_log = time.time()
                 for line in iter(self.worker_process.stdout.readline, ""):
                     if line:
+                        now = time.time()
+                        if now - last_hw_log >= 15.0:
+                            last_hw_log = now
+                            try:
+                                hw = self.hw_monitor.query()
+                                hw_str = f"[TELEMETRY:HARDWARE] CPU: {hw['cpu_pct']:.0f}% | RAM: {hw['ram_used_gb']:.1f}/{hw['ram_total_gb']:.0f}GB | GPU: {hw['gpu_util']}% ({hw['gpu_temp']}°C) | VRAM: {hw['vram_used_gb']:.1f}/{hw['vram_total_gb']:.0f}GB\n"
+                                lf.write(hw_str)
+                                self.output_queue.put(hw_str)
+                            except Exception:
+                                pass
+
                         lf.write(line)
                         lf.flush()
                         self.output_queue.put(line)
@@ -1637,6 +1821,69 @@ class AbuAlignApp:
             pass
         self.root.after(80, self._check_queue)
 
+    def _update_hardware_telemetry(self):
+        try:
+            data = self.hw_monitor.query()
+            self.hw_cpu_lbl.config(text=f"CPU: {data['cpu_pct']:.0f}%")
+            self.hw_ram_lbl.config(text=f"RAM: {data['ram_used_gb']:.1f}/{data['ram_total_gb']:.0f} GB ({data['ram_pct']:.0f}%)")
+            self.hw_gpu_lbl.config(text=f"GPU: {data['gpu_util']}%")
+            if data["gpu_temp"] > 0:
+                self.hw_temp_lbl.config(text=f"GPU Temp: {data['gpu_temp']}°C")
+                if data["gpu_temp"] >= 80:
+                    self.hw_temp_lbl.config(fg="#ef4444")
+                elif data["gpu_temp"] >= 70:
+                    self.hw_temp_lbl.config(fg="#f59e0b")
+                else:
+                    self.hw_temp_lbl.config(fg="#fbbf24")
+            else:
+                self.hw_temp_lbl.config(text="GPU Temp: --")
+
+            self.hw_vram_lbl.config(text=f"VRAM: {data['vram_used_gb']:.1f}/{data['vram_total_gb']:.0f} GB ({data['vram_pct']:.0f}%)")
+            if data["paging_risk"]:
+                self.hw_page_lbl.config(text="⚠️ VRAM SPILL (PCIe Paging)", fg="#ffffff", bg="#dc2626")
+            else:
+                self.hw_page_lbl.config(text="Paging: OK", fg="#10b981", bg="#1e293b")
+        except Exception:
+            pass
+
+        # Schedule next update in 1 second
+        self.root.after(1000, self._update_hardware_telemetry)
+
+    def _toggle_pause(self):
+        if not self.worker_process or not self.is_running:
+            return
+
+        try:
+            if psutil is not None:
+                parent = psutil.Process(self.worker_process.pid)
+                children = parent.children(recursive=True)
+                all_procs = [parent] + children
+
+                if not self.is_paused:
+                    for p in all_procs:
+                        try:
+                            p.suspend()
+                        except Exception:
+                            pass
+                    self.is_paused = True
+                    self.pause_btn.config(text="▶  RESUME", bg=self.accent_green)
+                    self.telemetry_lbl.config(text="Status: Paused (Process tree suspended)", fg="#f59e0b")
+                    self._log("\n[PAUSE] Alignment/Training process suspended by user.\n")
+                else:
+                    for p in all_procs:
+                        try:
+                            p.resume()
+                        except Exception:
+                            pass
+                    self.is_paused = False
+                    self.pause_btn.config(text="⏸  PAUSE", bg="#f59e0b")
+                    self.telemetry_lbl.config(text="Status: Resumed", fg=self.accent_blue)
+                    self._log("\n[RESUME] Alignment/Training process resumed by user.\n")
+            else:
+                self._log("\n[WARNING] psutil is required for pause/resume.\n")
+        except Exception as e:
+            self._log(f"\n[ERROR] Failed to toggle pause: {e}\n")
+
     def _stop_alignment(self):
         if self.worker_process and self.is_running:
             try:
@@ -1734,7 +1981,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.1.4 - {title}")
+        doc_win.title(f"Abu Align v0.0.1.5 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -1951,7 +2198,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.1.4\n"
+            "Abu Align & Train - Version 0.0.1.5\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT Foundation, VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"

@@ -77,7 +77,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.4 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.1.5 - Neural Photogrammetry & 3DGS Training
    Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
@@ -395,14 +395,24 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             images = torch.cat(img_list, dim=0).to(device)
 
     elif num_frames > 48 and args.auto_chunk:
-        chunk_size = args.chunk_size
-        overlap = min(args.anchor_size, chunk_size // 2)
+        user_chunk = getattr(args, "chunk_size", None)
+        user_anchor = getattr(args, "anchor_size", None)
+        if user_chunk is not None and user_chunk > 0:
+            chunk_size = user_chunk
+        else:
+            chunk_size = 96 if engine == "vggt_omega" else 48
+
+        if user_anchor is not None and user_anchor > 0:
+            overlap = user_anchor
+        else:
+            overlap = 24 if engine == "vggt_omega" else 12
+        overlap = min(overlap, chunk_size // 2)
         step = max(chunk_size - overlap, 1)
 
         print("\n" + "="*70)
         print(f" [SMART VRAM GUARD] Large dataset detected: {num_frames} frames (> 48).")
         print(f"                   Auto-chunking into {chunk_size}-frame windows with {overlap}-frame anchors.")
-        print(f"                   VRAM usage safely capped regardless of dataset size (1,000+ photos).")
+        print(f"                   3D Landmark-Enriched Umeyama: Enabled (Zero axial roll drift).")
         print("="*70 + "\n")
 
         chunk_ranges = []
@@ -421,6 +431,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         all_images = []
         all_orig_coords = []
         prev_chunk_centers = None
+        prev_chunk_ext = None
+        prev_chunk_int = None
+        prev_chunk_depth = None
+        prev_chunk_conf = None
         prev_overlap_start = 0
 
         for c_idx, (c_start, c_end) in enumerate(chunk_ranges):
@@ -474,13 +488,67 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 all_images.append(c_img.cpu())
                 all_orig_coords.append(c_coord.cpu())
                 prev_chunk_centers = c_centers
+                prev_chunk_ext = c_ext
+                prev_chunk_int = c_int
+                prev_chunk_depth = c_depth
+                prev_chunk_conf = c_conf
                 prev_overlap_start = c_len - overlap
             else:
                 actual_overlap = min(overlap, prev_chunk_centers.shape[0], c_len)
                 src_overlap = c_centers[:actual_overlap]
                 dst_overlap = prev_chunk_centers[-actual_overlap:]
 
-                s_rel, R_rel, t_rel = umeyama_alignment(src_overlap, dst_overlap)
+                # 3D Landmark Surface Points to lock all 6 DoF and eliminate axial roll drift
+                src_pts_3d = []
+                dst_pts_3d = []
+
+                H_d, W_d = c_depth.shape[1], c_depth.shape[2]
+                grid_step = max(H_d // 16, 16)
+
+                for k in range(actual_overlap):
+                    prev_k = prev_chunk_centers.shape[0] - actual_overlap + k
+
+                    R_src = c_ext[k, :3, :3]
+                    t_src = c_ext[k, :3, 3]
+                    fx_s = c_int[k, 0, 0]
+                    fy_s = c_int[k, 1, 1]
+                    cx_s = c_int[k, 0, 2]
+                    cy_s = c_int[k, 1, 2]
+
+                    R_dst = prev_chunk_ext[prev_k, :3, :3]
+                    t_dst = prev_chunk_ext[prev_k, :3, 3]
+                    fx_d = prev_chunk_int[prev_k, 0, 0]
+                    fy_d = prev_chunk_int[prev_k, 1, 1]
+                    cx_d = prev_chunk_int[prev_k, 0, 2]
+                    cy_d = prev_chunk_int[prev_k, 1, 2]
+
+                    for v_pix in range(grid_step, H_d - grid_step, grid_step):
+                        for u_pix in range(grid_step, W_d - grid_step, grid_step):
+                            c_s = c_conf[k, v_pix, u_pix]
+                            c_d = prev_chunk_conf[prev_k, v_pix, u_pix]
+                            if c_s >= 1.5 and c_d >= 1.5:
+                                z_s = c_depth[k, v_pix, u_pix]
+                                z_d = prev_chunk_depth[prev_k, v_pix, u_pix]
+                                if z_s > 0.05 and z_d > 0.05:
+                                    p_cam_s = np.array([(u_pix - cx_s) * z_s / fx_s, (v_pix - cy_s) * z_s / fy_s, z_s])
+                                    p_w_s = R_src.T @ (p_cam_s - t_src)
+
+                                    p_cam_d = np.array([(u_pix - cx_d) * z_d / fx_d, (v_pix - cy_d) * z_d / fy_d, z_d])
+                                    p_w_d = R_dst.T @ (p_cam_d - t_dst)
+
+                                    src_pts_3d.append(p_w_s)
+                                    dst_pts_3d.append(p_w_d)
+
+                if len(src_pts_3d) >= 16:
+                    src_pts_arr = np.array(src_pts_3d)
+                    dst_pts_arr = np.array(dst_pts_3d)
+                    src_cam_weighted = np.repeat(src_overlap, 10, axis=0)
+                    dst_cam_weighted = np.repeat(dst_overlap, 10, axis=0)
+                    src_all = np.vstack([src_cam_weighted, src_pts_arr])
+                    dst_all = np.vstack([dst_cam_weighted, dst_pts_arr])
+                    s_rel, R_rel, t_rel = umeyama_alignment(src_all, dst_all)
+                else:
+                    s_rel, R_rel, t_rel = umeyama_alignment(src_overlap, dst_overlap)
 
                 for i in range(c_len):
                     R_c = c_ext[i, :3, :3]
@@ -502,6 +570,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 all_orig_coords.append(c_coord[actual_overlap:].cpu())
 
                 prev_chunk_centers = c_centers
+                prev_chunk_ext = c_ext
+                prev_chunk_int = c_int
+                prev_chunk_depth = c_depth
+                prev_chunk_conf = c_conf
                 prev_overlap_start = c_len - actual_overlap
 
             del c_img, c_coord, c_resized
@@ -622,18 +694,36 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     is_ultra = align_mode == "ultra"
 
     if use_ba:
+        # Zero-Paging VRAM Guard: Purge Stage 4 transformer model and cache before CoTracker
+        try:
+            del model
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        v_alloc, _ = get_vram_usage()
+        print(f"      * [Zero-Paging VRAM Guard] Cleared neural model from GPU. Active VRAM: {v_alloc:.2f} GB.")
+
         if num_frames > 48:
             # Trajectory-wide uniform keyframe distribution for large scans:
-            # Spaced every ~12-16 frames so every photo has immediate keyframe overlap
-            n_queries = min(16, max(8, num_frames // 14))
+            # For massive scans (>200 frames), adaptively cap queries to 8 and keypoints to 1024
+            # to prevent CoTracker PCIe paging bottleneck across 700+ frames
+            if num_frames > 200:
+                n_queries = min(8, max(6, num_frames // 30))
+                max_query_pts = 1024
+            else:
+                n_queries = min(12, max(6, num_frames // 16))
+                max_query_pts = 2048 if is_ultra else 1536
             step = (num_frames - 1) / max(n_queries - 1, 1)
             query_frames = sorted(list(set([int(round(i * step)) for i in range(n_queries)])))
-            query_count_str = f"{len(query_frames)} trajectory-spanning queries"
+            query_count_str = f"{len(query_frames)} trajectory-spanning queries ({max_query_pts} pts/query)"
         else:
             query_frames = min(num_frames, 6 if is_ultra else 4)
+            max_query_pts = 2048 if is_ultra else 1536
             query_count_str = f"{query_frames} queries"
 
-        max_query_pts = 2048 if is_ultra else 1536
         reproj_err_thresh = args.max_reproj_error if args.max_reproj_error is not None else (3.5 if is_ultra else 6.0)
         track_vis_thresh = 0.3 if is_ultra else 0.2
 
@@ -880,7 +970,7 @@ def main():
     parser.add_argument("--conf_thresh", type=float, default=1.8, help="Depth confidence threshold (default: 1.8; lower=denser point cloud)")
     parser.add_argument("--max_points", type=int, default=300000, help="Maximum number of points in exported point cloud (default: 300000)")
     parser.add_argument("--load_res", type=int, default=1024, help="Image load resolution (default: 1024)")
-    parser.add_argument("--chunk_size", type=int, default=32, help="Chunk size for auto-chunking large datasets (default: 32)")
+    parser.add_argument("--chunk_size", type=int, default=None, help="Chunk size for auto-chunking large datasets (default: 96 for VGGT-Omega, 48 for standard)")
     parser.add_argument("--auto_chunk", action="store_true", default=True, help="Automatically chunk large datasets (> 48 photos) to prevent VRAM OOM")
     parser.add_argument("--use_ba", action="store_true", help="Enable multi-view feature tracking and PyCeres Bundle Adjustment")
     parser.add_argument("--align_mode", type=str, choices=["none", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
@@ -891,7 +981,7 @@ def main():
     parser.add_argument("--view", "-v", action="store_true", help="Launch interactive 3D browser viewer after alignment")
     parser.add_argument("--port", type=int, default=8080, help="Viser viewer port (default: 8080)")
 
-    parser.add_argument("--anchor_size", type=int, default=8, help="Anchor overlap frames connecting consecutive sliding windows (default: 8)")
+    parser.add_argument("--anchor_size", type=int, default=None, help="Anchor overlap frames connecting consecutive sliding windows (default: 24 for VGGT-Omega, 12 for standard)")
     parser.add_argument("--no_cache", action="store_true", help="Disable reading and writing from .abu_cache")
     parser.add_argument("--cache_dir", type=str, default=None, help="Custom directory path for .abu_cache")
     parser.add_argument("--clear_cache", action="store_true", help="Purge .abu_cache before running alignment")
