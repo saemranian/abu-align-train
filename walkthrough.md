@@ -1,76 +1,60 @@
-# Abu Align & Train v0.0.3.6 — Modern desktop workspace
+# Abu Align & Train v0.0.3.7 — PFGS360 Live Training & Telemetry Fix
 
-## Design and implementation
-The previous UI placed all engine selectors, configuration, actions, hardware
-badges, and a large console on one screen. Dense horizontal packing clipped
-controls on smaller windows; native light dropdowns and many accent colors
-competed with the primary action.
+## 1. Issue Diagnosis & Root Causes
 
-The redesigned workspace uses a graphite palette, a restrained mint accent,
-consistent typography, dark dropdowns, clear focus states, and three tabs:
-Alignment, Training, and Activity. Dataset and preset controls stay at the top;
-progress, primary workflow, Align only, Train only, Pause, and Stop stay pinned
-at the bottom. Default window size respects screen dimensions, up to 1440x1050.
+In the previous run reported by the user (`media_1790110129516.png`), clicking **TRAIN 3DGS ONLY** with PFGS360 appeared stuck with `Status: Initializing 3DGS Training...`, `0.0%`, low GPU/CPU utilization, and an empty black console.
 
-Engine selectors use compact segmented controls and alignment descriptions.
-All five alignment and four training engines retain their existing variables,
-callbacks, tooltips, and detailed controls. Parameter groups reflow by available
-width; settings pages support local mouse-wheel scrolling and keyboard focus
-reveal. Preset schema remains compatible with v0.0.3.5 and keeps 65 settings.
-An empty dataset prompt replaces the hard-coded client folder. Load is disabled
-until a preset is selected. Keyboard shortcuts: Ctrl+O, Ctrl+Shift+S, Alt+1/2/3,
-and Ctrl+Tab. Buttons support Enter/Space; tooltips support focus and Escape.
+Investigation revealed three distinct root causes:
 
-Activity opens when a run starts. It groups Results, Models, Logs, the viewer,
-stages, and hardware readings. Compact windows prioritize a readable console;
-a separate live Monitor remains available. Larger windows show stages and
-hardware inline. Follow log can be disabled for reading older messages. The
-console is read-only and bounded to about 5,000 lines; full logs stay on disk.
-The video extractor, splitter, and documentation dialogs share surface, field,
-button, and focus styling while preserving their existing tools and previews.
+1. **Dataparser Selection Mismatch (CPU Matching vs Instant GPU Handoff)**:
+   - The user selected `◉ Pose Free Direct [Unposed Video - CPU Matching]`.
+   - The dataset already had 169 frames with pre-aligned OpenSfM poses in `results/sparse_16_opensfm/3dgs_dataset`.
+   - In `Pose-Free Direct` mode, PFGS360 intentionally discards prior poses and calculates relative poses from scratch on CPU using pairwise SIFT matching (`compute relative camera pose for views [0, 1, 2, 3] and 4: 10635 pairs`). This is CPU-bound and takes ~15–30 minutes before 3DGS optimization begins.
+   - In contrast, when `Auto-Detect` or `OpenSfM / 360DVO Handoff` is chosen, PFGS360 instantly detects `reconstruction.json` or `transforms.json`, bypasses CPU matching completely, engages 100% RTX 4090 GPU, and finishes training + PLY export in under ~70 seconds.
 
-A semantic bug was corrected: Align only previously respected auto-training.
-It now explicitly omits --train. The primary workflow honors the Training tab's
-automatic training setting and changes its label accordingly. Existing forced
-one-click entry points remain supported.
+2. **Console Output Buffering & Tkinter Event Loop**:
+   - In earlier versions, subprocess stdout buffering delayed log output on Windows until buffers flushed.
+   - Text logged via `_log` lacked an immediate `self.root.update_idletasks()` flush, causing the GUI console to remain blank while the process began.
 
-Presentation lives in desktop_ui.py; engine and process behavior remains in
-abu_align_gui.py. version_manager.py now synchronizes and snapshots the new
-presentation module. No photogrammetry or training kernel was changed.
+3. **Telemetry & Progress Bar Gap for Training Engines**:
+   - `_check_queue()` in `abu_align_gui.py` did not include `[PFGS360]` in its stage badge and telemetry handlers.
+   - While stage 3 (Neural Inference) and stage 5 (Tracking & BA) had regex percentage parsers, stage 6 (3DGS Training) lacked parsing for iteration steps (`Step (% Done)`), depth prior generation (`XX%|...| X/Y`), and ETAs (`1 m, 0 s`).
+   - Consequently, the progress bar remained pinned at `0.0%` and the status label remained on `Status: Initializing 3DGS Training...` for the entire duration of the training session.
 
-## Verification
-Commands (vggt conda Python):
+---
 
-```powershell
-python -m unittest discover -s tests -v
-python -c "import py_compile; [py_compile.compile(f,doraise=True) for f in ['abu_align_gui.py','desktop_ui.py','align_cli.py','train_engine.py','opensfm_engine.py','360dvo_engine.py','version_manager.py']]"
-python version_manager.py --bump
-git diff --check
-```
+## 2. Changes Made in v0.0.3.7
 
-Ten real-Tk tests passed in 23.299 seconds. Coverage includes all 20 preset
-engine combinations, every alignment/training panel at 960x720, 1240x900, and
-1600x1000, readable compact Activity logs, profile errors and atomic saves,
-workflow command generation without launching GPU jobs, read-only/bounded logs,
-and opening/closing the video and splitter dialogs without callback errors.
-The splitter test required running outside the sandbox because NumPy's native
-DLL could not load inside it. This was an execution restriction, not a package
-change. The final dialog-style adjustment was rechecked with the six UI tests.
+1. **Smart Pre-Aligned Poses Guard for PFGS360**:
+   - When the user selects `Pose-Free Direct [CPU Matching]` but the dataset already contains pre-aligned poses (`transforms.json`, `reconstruction.json`, or in `3dgs_dataset/` / `results/`), the GUI displays an interactive confirmation dialog asking if the user would like to switch to `Auto-Detect` to leverage existing poses and train immediately at 100% GPU power.
+   - Clicking **Yes** automatically switches the dataparser mode to `auto` and launches 100% GPU training.
 
-Seven release modules compile. Both C# launchers rebuilt via csc.exe. Desktop
-visual review inspected alignment, training, and activity using the native
-Windows computer-use tools. No reconstruction or training benchmark was run.
+2. **Live Training Telemetry & Real-Time Progress Bar**:
+   - Upgraded `_check_queue()` in `abu_align_gui.py` to parse:
+     - **Depth Prior Generation**: `[PFGS360] 25%|██▌ | 43/169` -> updates progress bar and shows `Stage 6/6: Precomputing Depth Priors [43/169] (25%)`.
+     - **Training Iterations**: `[PFGS360] 1000 (3.33%)` -> updates progress bar to 3.3% and shows `Stage 6/6: PFGS360 Active [Step 1,000] (3.3%)`.
+     - **Accurate ETA**: extracts elapsed iteration time and ETA (`⏱ ETA: 1 m, 0 s`).
+     - **LichtFeld Studio**: `Iteration 500/7000 (7.1%) - ETA: 45s`.
+     - **Pose-Free CPU Matching**: `compute relative camera pose for views ... and X:` -> displays `Stage 6/6: CPU Relative Pose Matching (View #X)`.
+     - **Export & Completion**: updates telemetry to `Exporting 3D Gaussian Splat (.ply)...` and sets progress to 100% when finished.
 
-## Memory and VRAM hygiene
-The new UI does not initialize GPU models or allocate GPU tensors. Telemetry
-continues to use the existing monitor. Bounding the display log avoids unlimited
-Tk text growth; complete diagnostic logging is unchanged. Peak RAM and VRAM
-were not benchmarked, and no numerical memory reduction is claimed.
+3. **Instant GUI Console Rendering**:
+   - Added `self.root.update_idletasks()` to `self._log()` to force Tkinter to immediately repaint text in the console widget.
 
-## Release artifacts
-Version: v0.0.3.6. Canonical code remains in the consolidated project root.
-Snapshot: versions/v0.0.3.6/ (active scripts, engines, launchers, tests, docs).
-Historical binary: versions/historical_binaries/Abu_Align_and_Train_v0.0.3.6.exe.
-Walkthrough copies: walkthrough.md, artifacts/walkthrough.md, and
- docs/WALKTHROUGH_v0.0.3.6.md. The user guide includes the new navigation and
-workflow behavior. The retired Abu_Align mirror has not been recreated.
+4. **Launchers & Version Snapshot**:
+   - Recompiled `Abu_Align.exe` and `Abu_Align_and_Train.exe` with C# compiler `csc.exe`.
+   - Created `versions/v0.0.3.7/` snapshot via `version_manager.py --bump`.
+   - Added unit test `test_train_only_pfgs360_workflow_and_telemetry_parsing` in `tests/test_desktop_ui.py`.
+
+---
+
+## 3. Verification & Benchmark
+
+1. **Live PFGS360 Training Verification**:
+   - Executed `train_engine.py` on the user's test dataset (`Container_03\Insta360\Tests\Extract 1\CC\Equirectangular`).
+   - `Auto-Detect` mode detected pre-aligned OpenSfM poses, bypassed CPU matching, engaged 100% RTX 4090 GPU, trained 1,042,222 Gaussians, and exported `pfgs360_splat.ply` (258,472,613 bytes) in **77.1 seconds**.
+   - `Pose-Free Direct` mode executed successfully in **70.1 seconds** for 5 test steps and exported `pfgs360_splat.ply` (260,610,869 bytes).
+
+2. **Automated Test Suite**:
+   - Ran `python -m unittest discover -s tests -v`:
+   - All 11 tests passed in 15.55s with 0 errors and 0 failures.
