@@ -1,137 +1,106 @@
-# Abu Align & Train v0.0.2.0 Walkthrough: Mapillary OpenSfM & Native 360° Spherical Photogrammetry
+# Abu Align & Train v0.0.2.1 Walkthrough: 360DVO Deep Visual Odometry Integration
 
 ## Executive Summary
 
-**Abu Align & Train v0.0.2.0** expands the photogrammetry suite to **Quad Alignment Engines** by integrating **Mapillary OpenSfM** with native 360° equirectangular spherical bundle adjustment, introduces a vectorized 6-face Pinhole Cubemap Transcoder, and advances the version odometer to **`v0.0.2.0`**:
-
-1. **Mapillary OpenSfM Engine ([`opensfm_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/opensfm_engine.py))**:
-   - Native support for **Equirectangular 360° Panoramas** using unit bearing direction vectors on the $S^2$ spherical manifold ($\mathbf{b} \in \mathbb{R}^3, \|\mathbf{b}\|=1$).
-   - Ceres Solver bundle adjustment minimizing angular bearing residuals ($1 - \mathbf{b}_{\text{observed}}^T \hat{\mathbf{b}}$) with zero polar distortion.
-   - Multi-camera rig support (`rigs.json`) locking relative extrinsic baselines for dual-fisheye 360 cameras (e.g. Insta360, GoPro Max, Ricoh Theta).
-   - Seamless integration with Abu Align's standardized `3dgs_dataset/` via OpenSfM's `export_colmap` action.
-2. **Vectorized 360° Equirectangular to Pinhole Cubemap Transcoder ([`equirectangular_transcoder.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/equirectangular_transcoder.py))**:
-   - Ultra-fast `cv2.remap` coordinate transformation slicing any 360° panorama into 6 rectilinear 90° pinhole views (`front`, `right`, `back`, `left`, `up`, `down`).
-   - Enables **VGGT-Omega**, **ACE0**, **PyCuSFM**, **LichtFeld Studio**, and **Nerfstudio Splatfacto** to process 360° panoramic cameras without optical warping or horizon distortion.
-3. **Interactive GUI Subpanel ([`abu_align_gui.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/abu_align_gui.py#L1178-L1225))**:
-   - 4th Engine Option: `Mapillary OpenSfM (360° Spherical)`.
-   - Dynamic subpanel with:
-     - **Projection Model**: `Equirectangular 360° (Spherical S²)`, `Perspective Pinhole`, `Fisheye`.
-     - **Feature Extractor**: `SIFT (High Precision)`, `HAHOG (Fast Street Standard)`, `ORB`.
-     - **Matcher Strategy**: `words (Visual Bag-of-Words)`, `flann`, `exhaustive`.
-     - **3DGS Transcoder Bridge**: `⚡ Auto-Transcode 6-Face Cubemaps`.
-4. **CLI & Automation Extensions ([`align_cli.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/align_cli.py#L984-L990))**:
-   - Added `--engine opensfm`, `--projection`, `--opensfm_feature`, `--opensfm_matcher`, `--cubemap_transcode`, and `--cubemap_res`.
-   - Automated detection: If 2:1 aspect ratio equirectangular images are fed to standard engines, Abu Align auto-transcodes to cubemaps seamlessly.
-5. **Compiled C# Launchers & Clean Git Commit**:
-   - Recompiled native Windows executable: [`Abu_Align_and_Train_v0.0.2.0.exe`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/Abu_Align_and_Train_v0.0.2.0.exe), [`Abu_Align.exe`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/Abu_Align.exe), and batch launchers.
-   - Committed to Git (`591c166`) on branch `main`.
+**Abu Align & Train v0.0.2.1** advances the neural photogrammetry suite to **Penta Alignment Engines** by integrating **360DVO** ([IEEE RA-L 2026](https://github.com/chris1004336379/360DVO): Deep Visual Odometry for Monocular 360-Degree Camera). Abu Align now natively supports both continuous real-time 360° visual odometry (15–30 FPS) and global spherical Structure-from-Motion, complete with an automated TUM-to-COLMAP trajectory conversion bridge and interactive GUI controls. The base-10 odometer has been officially incremented to **`v0.0.2.1`**.
 
 ---
 
-## 1. 360° Spherical Photogrammetry Architecture
+## 1. Architectural Role of 360DVO
 
 ```mermaid
 flowchart TD
-    subgraph Input ["360 Panoramic Capture"]
-        Pano["Equirectangular Photo (W = 2H)"]
+    subgraph Input ["360° Panoramic Video Capture"]
+        Video["Equirectangular Video / Keyframe Sequence (2:1 W/H)"]
     end
 
-    subgraph OpenSfM ["Mapillary OpenSfM Pipeline"]
-        Bearing["Bearing Ray Projection (b ∈ S²)"]
-        Tracks["Spherical Feature Tracking (SIFT / HAHOG)"]
-        Ceres["Ceres Spherical Bundle Adjustment"]
-        ColmapOut["Export COLMAP (sparse/0/)"]
+    subgraph DVO360 ["360DVO Engine (IEEE RA-L 2026)"]
+        Patches["Spherical Patch Extraction & Deformation"]
+        FactorGraph["Spherical Factor Graph Optimization"]
+        TUM["TUM Trajectory (timestamp, tx, ty, tz, qx, qy, qz, qw)"]
     end
 
-    subgraph CubemapTranscoder ["Abu Align Transcoder"]
-        Transcode["Vectorized cv2.remap Grid"]
-        Faces["6 Pinhole Faces (Front, Right, Back, Left, Up, Down)"]
+    subgraph Bridge ["Abu Align 3DGS Conversion Bridge"]
+        TUMtoCOLMAP["tum_trajectory_to_colmap (Invert c2w -> w2c)"]
+        Sparse0["Standardized COLMAP sparse/0/ (cameras, images, points3D)"]
+        Transcoder["Pinhole Cubemap Transcoder (6 Rectilinear Faces)"]
     end
 
-    subgraph Engines ["Abu Align Photogrammetry Suite"]
-        E1["VGGT-Omega"]
-        E2["ACE0"]
-        E3["NVIDIA PyCuSFM"]
-    end
-
-    subgraph Training3DGS ["3D Gaussian Splatting Suite"]
+    subgraph TrainingEngines ["Unified 3DGS Training Suite"]
         LF["LichtFeld Studio (Vulkan Real-Time GUI)"]
-        NS["Nerfstudio Splatfacto (SOTA PyTorch)"]
+        NS["Nerfstudio Splatfacto (PyTorch SOTA)"]
         GRUT["NVIDIA 3DGRUT / 3DGUT (Spherical Optics)"]
     end
 
-    Pano -->|Native Spherical| Bearing
-    Bearing --> Tracks --> Ceres --> ColmapOut
-
-    Pano -->|Auto-Transcode| Transcode --> Faces
-    Faces --> E1 & E2 & E3
-
-    ColmapOut --> LF & NS & GRUT
-    E1 & E2 & E3 --> LF & NS
+    Video --> Patches --> FactorGraph --> TUM
+    TUM --> TUMtoCOLMAP --> Sparse0
+    Video --> Transcoder
+    Sparse0 & Transcoder --> LF & NS & GRUT
 ```
+
+### Continuous Visual Odometry vs. Global SfM
+| Feature | Mapillary OpenSfM | 360DVO (v0.0.2.1) |
+| :--- | :--- | :--- |
+| **Paradigm** | Global Structure-from-Motion | Deep Visual Odometry (Dense Factor Graph) |
+| **Input Type** | Unordered photos, drone grids, multi-camera rigs | Continuous equirectangular video / sequential frames |
+| **Speed** | 1–5 FPS (SIFT/HAHOG matching & global Ceres BA) | **15–30 FPS (Real-time GPU neural tracking)** |
+| **Geometry Representation** | Unit bearing vectors on $S^2$ manifold | Spherical patch distortion with learned flow |
+| **Output Trajectory** | Global COLMAP model | TUM trajectory format + auto-converted COLMAP `sparse/0/` |
+| **Best Use Case** | Wide-baseline scene surveying & architectural scans | Handheld 360 walk-throughs, robot navigation, drone flights |
 
 ---
 
-## 2. Key Code Implementations
+## 2. Key Components Implemented in v0.0.2.1
 
-### A. 360° Equirectangular to Cubemap Conversion ([`equirectangular_transcoder.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/equirectangular_transcoder.py#L50-L85))
-```python
-# Convert face pinhole ray (u, v, 1.0) into global spherical ray
-rays_face = np.stack([u, v, np.ones_like(u)], axis=-1)
-rays_global = rays_face @ R.T
+### A. 360DVO Engine Wrapper ([`dvo360_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/dvo360_engine.py))
+- **Identifier Safe Module**: Implemented as `dvo360_engine.py` (with `360dvo_engine.py` alias) to prevent Python decimal literal import errors.
+- **`tum_trajectory_to_colmap(...)`**:
+  - Parses TUM pose lines: `timestamp tx ty tz qx qy qz qw`.
+  - Converts camera-to-world ($c2w$) camera poses to COLMAP world-to-camera ($w2c$) coordinate frame:
+    $$R_{w2c} = R_{c2w}^T, \quad \mathbf{t}_{w2c} = -R_{w2c} \, \mathbf{t}_{c2w}$$
+  - Synthesizes COLMAP `cameras.txt` (`SPHERICAL`), `images.txt`, and `points3D.txt`.
+- **Pretrained Weights Discovery**: Searches `./checkpoints/360dvo.pth`, user-specified paths, or model repository directories.
 
-# Map 3D ray to longitude and latitude on unit sphere
-lon = np.arctan2(rays_global[..., 0], rays_global[..., 2])
-lat = np.arctan2(rays_global[..., 1], np.sqrt(x*x + z*z))
+### B. CLI Parameters & Execution ([`align_cli.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/align_cli.py))
+- Added `--engine 360dvo` (and `--engine dvo`).
+- `--dvo_weights <path>`: Specifies custom checkpoint weights file.
+- `--dvo_patches <N>`: Sets active tracked patch count (64, 96, 128).
+- `--dvo_viz`: Launches real-time 3D camera trajectory visualizer.
+- Telemetry reporting: Emits trajectory frame counts, processing speed (FPS), and handoff status to `3dgs_dataset/`.
 
-# Compute pixel remap coordinates
-map_x = ((lon / (2.0 * np.pi) + 0.5) * self.pano_w).astype(np.float32)
-map_y = ((0.5 - lat / np.pi) * self.pano_h).astype(np.float32)
-```
+### C. GUI Dynamic Subpanel ([`abu_align_gui.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/abu_align_gui.py#L1233-L1275))
+- Added 5th engine radio button: `360DVO (Deep 360° Visual Odometry)`.
+- **Patch Graph & Density**:
+  - *Fast Realtime (64 Patches)*: ~30 FPS tracking loop.
+  - *Standard Odometry (96 Patches)*: Recommended balance between accuracy and factor-graph optimization.
+  - *Dense High-Precision (128 Patches)*: Maximum tracking fidelity in rapid motion scenes.
+- **Weights & Visualization**: Status indicator for `checkpoints/360dvo.pth` and visualizer toggle.
+- **TUM-to-COLMAP 3DGS Bridge**: Live status for automatic conversion into `sparse/0/` and handoff to LichtFeld Studio / Nerfstudio.
 
-### B. OpenSfM Engine Controller ([`opensfm_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/opensfm_engine.py#L90-L135))
-```python
-# Automatic camera override for 360 spherical projection
-overrides = {
-    "all": {
-        "projection_type": "equirectangular"
-    }
-}
-with open(os.path.join(self.output_dir, "camera_models_overrides.json"), "w") as f:
-    json.dump(overrides, f, indent=2)
-```
+### D. Automated Setup Helpers
+- [`setup_360dvo.bat`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/setup_360dvo.bat): Windows batch helper to clone 360DVO, fetch Eigen 3.4.0 headers, and build the custom CUDA optical flow / spherical patch extension.
+- [`setup_360dvo.sh`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/setup_360dvo.sh): Headless Linux bash script for Runpod and cloud GPU environments.
 
----
-
-## 3. Verification & Automated Test Results
-
-An automated test of the 360 cubemap transcoder was executed on a synthetic $512 \times 256$ panorama:
-```text
-Transcoding result: Successfully transcoded 1 panoramas into 6 rectilinear pinhole images.
-Generated faces: ['pano_001_back.jpg', 'pano_001_down.jpg', 'pano_001_front.jpg', 'pano_001_left.jpg', 'pano_001_right.jpg', 'pano_001_up.jpg']
-Pinhole Intrinsics: {'model': 'PINHOLE', 'width': 512, 'height': 512, 'fx': 256.0, 'fy': 256.0, 'cx': 256.0, 'cy': 256.0}
-Test Passed Successfully!
-```
+### E. Recompiled Launchers & Odometer Update
+- Bushed `VERSION.txt` and `Abu_Align/VERSION.txt` to **`0.0.2.1`**.
+- Recompiled native executables with `csc.exe`:
+  - `Abu_Align_and_Train_v0.0.2.1.exe`
+  - `Abu_Align.exe`
+  - `Abu_Align_and_Train.exe`
+- All files synchronized to the `Abu_Align/` subfolder.
 
 ---
 
-## 4. How to Use OpenSfM & 360 Panoramas in Abu Align
+## 3. Verification & Validation
 
-### Via Graphical Interface (GUI)
-1. Double-click [`Abu_Align.exe`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/Abu_Align.exe) or [`Abu_Align.bat`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/Abu_Align.bat).
-2. Browse to your photoscan folder containing 360° photos (e.g. from Insta360, GoPro Max, or Ricoh Theta).
-3. Under **Alignment Engine**, click **Mapillary OpenSfM (360° Spherical)**.
-4. Select your projection model: `Equirectangular 360° (Spherical S²)`.
-5. Keep `⚡ Auto-Transcode 6-Face Cubemaps` checked for automatic 3DGS training in LichtFeld Studio.
-6. Click **ONE-CLICK ALIGN & TRAIN**.
-
-### Via Command-Line Interface (CLI)
-```powershell
-& "C:\Users\USer\miniconda3\envs\vggt\python.exe" align_cli.py `
-    --input "C:\path\to\360_panoramas" `
-    --engine opensfm `
-    --projection equirectangular `
-    --opensfm_feature sift `
-    --cubemap_transcode `
-    --train --train_engine lichtfeld
-```
+1. **Python Syntax Compilation**:
+   - `python -m py_compile abu_align_gui.py` -> Exited with code 0 (clean).
+   - `python -m py_compile dvo360_engine.py 360dvo_engine.py align_cli.py` -> Exited with code 0 (clean).
+2. **Trajectory Conversion Unit Test**:
+   - Verified `tum_trajectory_to_colmap` on synthetic TUM pose sequences.
+   - Result: Generated compliant `cameras.txt` (`1 SPHERICAL 3840 1920`), properly inverted `images.txt` ($w2c$ poses), and `points3D.txt`.
+3. **CLI Arguments & Banner Check**:
+   - Tested `python align_cli.py --help`.
+   - Confirmed `--engine 360dvo`, `--dvo_weights`, `--dvo_patches`, and `--dvo_viz` appear in argument parser.
+4. **Git Synchronization**:
+   - Verified identical parity between root workspace and `Abu_Align/` directory.

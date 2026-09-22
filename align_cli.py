@@ -77,8 +77,8 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.0 - Neural Photogrammetry & 3DGS Training
-   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | Mapillary OpenSfM
+   Abu Align & Train v0.0.2.1 - Neural Photogrammetry & 3DGS Training
+   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
 """
@@ -980,7 +980,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), or 'opensfm' (Mapillary 360 & Street SfM)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
+    # 360DVO Deep Visual Odometry Options
+    parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
+    parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
+    parser.add_argument("--dvo_viz", action="store_true", help="Launch live real-time Viser browser visualizer during 360DVO tracking")
     # OpenSfM 360 & Spherical Photogrammetry Options
     parser.add_argument("--projection", type=str, choices=["auto", "equirectangular", "spherical", "perspective", "fisheye"], default="equirectangular", help="Camera projection model for OpenSfM (default: equirectangular for 360 panos)")
     parser.add_argument("--opensfm_feature", type=str, choices=["sift", "hahog", "orb", "akaze"], default="sift", help="Feature extractor for OpenSfM (default: sift)")
@@ -1327,6 +1331,24 @@ def main():
         print()
         print(f"      * OpenSfM Reconstruction Finished in: {inf_elapsed:.2f}s")
         print()
+    elif engine in ["360dvo", "dvo"]:
+        print("[3/5] Starting 360DVO Deep Omnidirectional Visual Odometry Engine (IEEE RA-L 2026)...")
+        print(f"      * Active Patches:    {args.dvo_patches} per frame")
+        print(f"      * Temporal Stride:   {args.stride}")
+        inf_start = time.time()
+        from dvo360_engine import run_360dvo_reconstruction
+        reconstruction, dense_3d, dense_rgb = run_360dvo_reconstruction(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            weights_path=args.dvo_weights,
+            patches_per_frame=args.dvo_patches,
+            stride=args.stride,
+            enable_viz=args.dvo_viz
+        )
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * 360DVO Visual Odometry Finished in: {inf_elapsed:.2f}s ({inf_elapsed/max(num_frames, 1):.3f}s per view)")
+        print()
     else:
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
             engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
@@ -1445,6 +1467,8 @@ def main():
         "pycusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
         "cusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
         "opensfm": "Mapillary OpenSfM (360° Spherical & Street SfM)",
+        "360dvo": "360DVO (Deep 360° Visual Odometry)",
+        "dvo": "360DVO (Deep 360° Visual Odometry)",
     }
     align_engine_label = engine_labels.get(str(args.engine).lower(), str(args.engine))
 
@@ -1510,6 +1534,13 @@ def main():
             f"   * Feature Detector:        {args.opensfm_feature.upper()}",
             f"   * Feature Matcher:         {args.opensfm_matcher.upper()}",
             f"   * 360 Cubemap Transcode:   {'Active (' + str(args.cubemap_res) + 'px)' if getattr(args, 'cubemap_transcode', False) else 'Native Spherical S²'}",
+        ])
+    elif engine in ["360dvo", "dvo"]:
+        report_lines.extend([
+            f"   * Active Patch Density:    {args.dvo_patches} patches/frame",
+            f"   * Video / Frame Stride:    {args.stride}",
+            f"   * Trajectory Format:       Robotics TUM (timestamp, SE3 pose)",
+            f"   * Real-Time Viser View:    {'Enabled' if args.dvo_viz else 'Headless'}",
         ])
     else:
         report_lines.extend([
