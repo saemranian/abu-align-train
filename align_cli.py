@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1006,7 +1006,7 @@ def main():
     parser.add_argument("--cubemap_res", type=int, default=1024, help="Resolution per cubemap face (default: 1024)")
     # Phase 3: 360° Multi-Camera Rig Projector & Panoramic Splitter
     parser.add_argument("--split_panorama", action="store_true", help="Split 360° panoramas into a virtual multi-camera pinhole rig")
-    parser.add_argument("--split_mode", type=str, choices=["ring", "cubemap", "dome"], default="ring", help="Rig projection mode ('ring', 'cubemap', 'dome'; default: ring)")
+    parser.add_argument("--split_mode", type=str, choices=["ring", "cubemap", "dome", "fibonacci"], default="ring", help="Rig projection mode ('ring', 'cubemap', 'dome', 'fibonacci'; default: ring)")
     parser.add_argument("--split_cameras", type=int, default=8, help="Number of virtual cameras when split_mode=ring (default: 8 => 50%% overlap)")
     parser.add_argument("--split_fov", type=float, default=90.0, help="Field of View per virtual camera in degrees (default: 90.0)")
     parser.add_argument("--split_res", type=int, default=1024, help="Resolution per pinhole view (default: 1024)")

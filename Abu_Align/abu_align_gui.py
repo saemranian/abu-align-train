@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.5
+Abu Align & Train Version 0.0.2.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -15,6 +15,7 @@ try:
     import psutil
 except ImportError:
     psutil = None
+import math
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -199,13 +200,14 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.6 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
         # Style configuration (Modern Dark Palette)
         self.bg_dark = "#181825"
         self.panel_bg = "#1e1e2e"
+        self.panel_border = "#313244"
         self.accent_blue = "#3b82f6"
         self.accent_green = "#10b981"
         self.accent_red = "#ef4444"
@@ -395,7 +397,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.5",
+            text="v0.0.2.6",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -1093,7 +1095,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.5 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.6 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -2019,193 +2021,523 @@ class AbuAlignApp:
 
     def _open_panoramic_splitter_dialog(self):
         """
-        Launches the dedicated 360° Multi-Camera Rig Projector & Panoramic Splitter dialog.
-        Converts 360° equirectangular panoramas into undistorted virtual camera rigs:
-        - 6-Face Cubemap (90° FOV)
-        - Horizontal Ring Rig (e.g. 8 cameras @ 50% overlap for pinhole photogrammetry)
-        - Spherical Dome Rig (14 cameras with uniform sphere coverage)
-        Exports pinhole images + transforms.json ready for COLMAP, Nerfstudio, and LichtFeld.
+        Launches the Advanced 360° Multi-Camera Rig Projector & Panoramic Splitter dialog.
+        Features:
+        - Auto-Math Solver: Bidirectional mathematical coupling between Camera Count, FOV, and Overlap.
+        - Multiple Rig Architectures: Horizontal Ring, 6-Face Cubemap, Multi-Tier Dome, Fibonacci Sphere.
+        - Direct 360° Video Intake (.mp4, .mov, .insv) with Target FPS & Keyframe Stride controls.
+        - Interactive High-DPI Canvas Visualizer (Polar Radar View & Equirectangular Footprint Unroll).
+        - Native Angular Pixel Density Matching (⚡ Auto-Res).
+        - Radial Lens Distortion (k1, k2) & Exact Pinhole / OpenCV transforms.json Export.
         """
+        import panoramic_splitter as ps
+
         dialog = tk.Toplevel(self.root)
-        dialog.title("🌐 360° Multi-Camera Rig Projector & Splitter - Abu Align")
-        dialog.geometry("760x650")
-        dialog.minsize(700, 580)
+        dialog.title("🌐 360° Multi-Camera Rig Projector & Splitter (Professional) - Abu Align")
+        dialog.geometry("1160x830")
+        dialog.minsize(1020, 700)
         dialog.configure(bg=self.bg_dark)
         dialog.transient(self.root)
 
         # Header
         hdr = tk.Frame(dialog, bg=self.panel_bg, padx=14, pady=10)
-        hdr.pack(fill=tk.X, padx=12, pady=(12, 8))
+        hdr.pack(fill=tk.X, padx=12, pady=(10, 6))
+
+        hdr_left = tk.Frame(hdr, bg=self.panel_bg)
+        hdr_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tk.Label(
-            hdr,
+            hdr_left,
             text="🌐 360° MULTI-CAMERA RIG PROJECTOR & SPLITTER",
             font=("Segoe UI", 12, "bold"),
             fg="#a855f7",
             bg=self.panel_bg
         ).pack(anchor="w")
         tk.Label(
-            hdr,
-            text="Project 360° spherical panoramas into distortion-free virtual pinhole camera arrays with configurable overlap and transforms.json export.",
+            hdr_left,
+            text="Mathematical Virtual Rig Synthesizer, Spherical Distribution Engine & Real-Time Placement Visualizer",
             font=("Segoe UI", 9),
             fg=self.text_secondary,
             bg=self.panel_bg
         ).pack(anchor="w", pady=(2, 0))
 
-        content = tk.Frame(dialog, bg=self.bg_dark, padx=12)
-        content.pack(fill=tk.BOTH, expand=True)
+        # Main 2-Panel Content Layout
+        body = tk.Frame(dialog, bg=self.bg_dark, padx=10, pady=2)
+        body.pack(fill=tk.BOTH, expand=True)
 
-        # 1. Paths Card
-        paths_card = tk.LabelFrame(
-            content,
-            text=" Input Panoramas & Output Rig Folder ",
-            font=("Segoe UI", 9, "bold"),
-            fg=self.text_primary,
-            bg=self.panel_bg,
-            padx=12,
-            pady=8
-        )
-        paths_card.pack(fill=tk.X, pady=(0, 8))
+        left_col = tk.Frame(body, bg=self.bg_dark)
+        left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
+        right_col = tk.Frame(body, bg=self.bg_dark, width=540)
+        right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
+
+        # -----------------------------------------------------------------
+        # State Variables
+        # -----------------------------------------------------------------
         in_var = tk.StringVar(value=self.dataset_var.get().strip())
         out_var = tk.StringVar()
         if in_var.get():
             out_var.set(os.path.join(in_var.get(), "pinhole_rig"))
 
-        r1 = tk.Frame(paths_card, bg=self.panel_bg)
-        r1.pack(fill=tk.X, pady=3)
-        tk.Label(r1, text="Input Panos:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
-        in_entry = tk.Entry(r1, textvariable=in_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
-        in_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+        mode_var = tk.StringVar(value="ring")           # "ring", "cubemap", "dome", "fibonacci"
+        solver_mode_var = tk.StringVar(value="free")    # "free", "lock_overlap", "lock_fov"
+        num_cams_var = tk.IntVar(value=8)
+        fov_var = tk.DoubleVar(value=90.0)
+        overlap_var = tk.DoubleVar(value=50.0)
 
-        def browse_in():
+        # Dome specific
+        dome_pitch_var = tk.DoubleVar(value=35.0)
+        dome_tier_cams_var = tk.IntVar(value=2)
+        dome_zenith_var = tk.BooleanVar(value=True)
+        dome_nadir_var = tk.BooleanVar(value=True)
+
+        # Optics & Resolution
+        aspect_ratio_var = tk.StringVar(value="1:1 (Square)")
+        out_w_var = tk.IntVar(value=1024)
+        out_h_var = tk.IntVar(value=1024)
+        distortion_k1_var = tk.DoubleVar(value=0.0)
+
+        # Video sampling
+        video_mode_var = tk.StringVar(value="Target FPS")  # "Target FPS", "Frame Stride"
+        video_fps_var = tk.DoubleVar(value=2.0)
+        video_stride_var = tk.IntVar(value=15)
+        video_max_frames_var = tk.IntVar(value=0)
+
+        # Output format & manifest
+        fmt_var = tk.StringVar(value="jpg")
+        qual_var = tk.IntVar(value=95)
+        export_tf_var = tk.BooleanVar(value=True)
+
+        # Visualizer canvas mode
+        canvas_view_mode_var = tk.StringVar(value="polar")  # "polar", "equirect"
+
+        # Cached detected media info
+        detected_media_info = {
+            "is_video": False,
+            "width": 5760,
+            "height": 2880,
+            "fps": 30.0,
+            "frames": 0,
+            "duration_sec": 0.0,
+            "count": 0,
+        }
+
+        # -----------------------------------------------------------------
+        # CARD 1: Input & Output (Left Column)
+        # -----------------------------------------------------------------
+        paths_card = tk.LabelFrame(
+            left_col,
+            text=" 1. Input 360° Source & Output Rig Folder ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=10,
+            pady=6
+        )
+        paths_card.pack(fill=tk.X, pady=(0, 6))
+
+        r1 = tk.Frame(paths_card, bg=self.panel_bg)
+        r1.pack(fill=tk.X, pady=2)
+        tk.Label(r1, text="Input Source:", font=("Segoe UI", 8, "bold"), fg=self.text_primary, bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
+        in_entry = tk.Entry(r1, textvariable=in_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        in_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
+
+        def browse_in_folder():
             f = filedialog.askdirectory(initialdir=in_var.get(), title="Select Directory of 360° Panoramas")
             if f:
                 in_var.set(f)
                 out_var.set(os.path.join(f, "pinhole_rig"))
+                inspect_input_source()
 
-        tk.Button(r1, text="Browse Folder...", font=("Segoe UI", 8), bg=self.accent_blue, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_in).pack(side=tk.RIGHT)
+        def browse_in_video():
+            f = filedialog.askopenfilename(
+                initialdir=in_var.get(),
+                title="Select 360° Panoramic Video File",
+                filetypes=[("360 Video Files", "*.mp4 *.mov *.insv *.mkv *.avi"), ("All Files", "*.*")]
+            )
+            if f:
+                in_var.set(f)
+                base = os.path.splitext(f)[0]
+                out_var.set(f"{base}_pinhole_rig")
+                inspect_input_source()
+
+        tk.Button(r1, text="📁 Folder...", font=("Segoe UI", 8), bg=self.accent_blue, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_in_folder).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(r1, text="🎬 Video...", font=("Segoe UI", 8), bg="#6366f1", fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_in_video).pack(side=tk.LEFT)
 
         r2 = tk.Frame(paths_card, bg=self.panel_bg)
-        r2.pack(fill=tk.X, pady=3)
-        tk.Label(r2, text="Output Rig:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
-        out_entry = tk.Entry(r2, textvariable=out_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
-        out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+        r2.pack(fill=tk.X, pady=2)
+        tk.Label(r2, text="Output Rig:", font=("Segoe UI", 8, "bold"), fg=self.text_primary, bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
+        out_entry = tk.Entry(r2, textvariable=out_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
 
-        def browse_out():
-            f = filedialog.askdirectory(initialdir=out_var.get() or in_var.get(), title="Select Output Rig Folder")
+        def browse_out_folder():
+            f = filedialog.askdirectory(initialdir=out_var.get() or in_var.get(), title="Select Output Directory for Pinhole Views")
             if f:
                 out_var.set(f)
 
-        tk.Button(r2, text="Browse Output...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_out).pack(side=tk.RIGHT)
+        tk.Button(r2, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_out_folder).pack(side=tk.RIGHT)
 
-        # 2. Rig Configuration Card
+        # Media Telemetry Badge
+        media_badge_lbl = tk.Label(
+            paths_card,
+            text="Detected: Ready to inspect input source.",
+            font=("Segoe UI", 8),
+            fg="#38bdf8",
+            bg=self.bg_dark,
+            padx=6,
+            pady=3,
+            anchor="w",
+            relief=tk.FLAT
+        )
+        media_badge_lbl.pack(fill=tk.X, pady=(3, 1))
+
+        # -----------------------------------------------------------------
+        # CARD 2: Rig Architecture & Auto-Math Solver (Left Column)
+        # -----------------------------------------------------------------
         rig_card = tk.LabelFrame(
-            content,
-            text=" Virtual Multi-Camera Rig Configuration ",
+            left_col,
+            text=" 2. Rig Architecture & Auto-Math Solver ",
             font=("Segoe UI", 9, "bold"),
             fg=self.text_primary,
             bg=self.panel_bg,
-            padx=12,
-            pady=8
+            padx=10,
+            pady=6
         )
-        rig_card.pack(fill=tk.X, pady=(0, 8))
+        rig_card.pack(fill=tk.X, pady=(0, 6))
 
-        mode_var = tk.StringVar(value=self.rig_split_mode_var.get())
-        num_cams_var = tk.StringVar(value=self.rig_num_cams_var.get())
-        fov_var = tk.StringVar(value=self.rig_fov_var.get())
-        res_var = tk.StringVar(value=self.rig_res_var.get())
-        fmt_var = tk.StringVar(value="jpg")
-        qual_var = tk.StringVar(value="95")
-        export_tf_var = tk.BooleanVar(value=True)
+        # Mode row
+        m_row = tk.Frame(rig_card, bg=self.panel_bg)
+        m_row.pack(fill=tk.X, pady=2)
+        tk.Label(m_row, text="Rig Architecture:", font=("Segoe UI", 8, "bold"), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w").pack(side=tk.LEFT)
 
-        g1 = tk.Frame(rig_card, bg=self.panel_bg)
-        g1.pack(fill=tk.X, pady=(2, 4))
+        mode_options = [
+            ("ring", "Horizontal Ring (Equatorial)"),
+            ("cubemap", "6-Face Cubemap (90° FOV)"),
+            ("dome", "Spherical Dome (Multi-Tier)"),
+            ("fibonacci", "Fibonacci Sphere (Golden Spiral)"),
+        ]
+        mode_cb = ttk.Combobox(m_row, textvariable=mode_var, values=[k for k, _ in mode_options], state="readonly", width=14)
+        mode_cb.pack(side=tk.LEFT, padx=(0, 10))
 
-        tk.Label(g1, text="Rig Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        mode_cb = ttk.Combobox(g1, textvariable=mode_var, values=["ring", "cubemap", "dome"], state="readonly", width=10)
-        mode_cb.pack(side=tk.LEFT, padx=(0, 16))
+        # Solver Mode
+        tk.Label(m_row, text="Auto-Math Solver:", font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        solver_cb = ttk.Combobox(
+            m_row,
+            textvariable=solver_mode_var,
+            values=["free", "lock_overlap", "lock_fov"],
+            state="readonly",
+            width=13
+        )
+        solver_cb.pack(side=tk.LEFT)
 
-        tk.Label(g1, text="Virtual Cameras (Ring):", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        cams_cb = ttk.Combobox(g1, textvariable=num_cams_var, values=["4", "6", "8", "10", "12", "16"], state="readonly", width=4)
-        cams_cb.pack(side=tk.LEFT, padx=(0, 16))
+        # Tooltip for solver
+        ToolTip(solver_cb, "Auto-Math Modes:\n- free: Adjust Cameras, FOV, and Overlap freely.\n- lock_overlap: Modifying Cameras automatically recalculates FOV to preserve exact overlap %.\n- lock_fov: Modifying Overlap calculates required minimum Camera Count.")
 
-        tk.Label(g1, text="Camera FOV (°):", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        fov_entry = tk.Entry(g1, textvariable=fov_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
-        fov_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+        # Parameters Slider Grid
+        sliders_frame = tk.Frame(rig_card, bg=self.panel_bg)
+        sliders_frame.pack(fill=tk.X, pady=(4, 2))
 
-        overlap_lbl = tk.Label(g1, text="[Overlap: 50.0%]", font=("Segoe UI", 8, "bold"), fg="#34d399", bg=self.panel_bg)
-        overlap_lbl.pack(side=tk.LEFT)
+        # Row 1: Number of Cameras
+        cams_row = tk.Frame(sliders_frame, bg=self.panel_bg)
+        cams_row.pack(fill=tk.X, pady=1)
+        cams_lbl = tk.Label(cams_row, text="Camera Count (N):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        cams_lbl.pack(side=tk.LEFT)
+        cams_scale = tk.Scale(
+            cams_row,
+            from_=3,
+            to=32,
+            orient=tk.HORIZONTAL,
+            variable=num_cams_var,
+            showvalue=False,
+            bg=self.panel_bg,
+            troughcolor=self.bg_dark,
+            highlightthickness=0,
+            activebackground="#a855f7"
+        )
+        cams_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        cams_val_lbl = tk.Label(cams_row, text="8 cams", font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, width=8, anchor="e")
+        cams_val_lbl.pack(side=tk.RIGHT)
 
-        def update_overlap_info(*_):
-            try:
-                m = mode_var.get()
-                if m == "ring":
-                    c = int(num_cams_var.get())
-                    fov = float(fov_var.get())
-                    step = 360.0 / c
-                    if fov > step:
-                        ol = ((fov - step) / fov) * 100.0
-                        overlap_lbl.config(text=f"[Overlap: {ol:.1f}%]", fg="#34d399")
-                    else:
-                        overlap_lbl.config(text=f"[Overlap: 0.0% (Gap!)]", fg="#f87171")
-                    cams_cb.config(state="readonly")
-                elif m == "cubemap":
-                    overlap_lbl.config(text="[6 Faces @ 90° FOV]", fg="#60a5fa")
-                    cams_cb.config(state=tk.DISABLED)
-                else:  # dome
-                    overlap_lbl.config(text="[14 Views: Equator + Tiers + Poles]", fg="#c084fc")
-                    cams_cb.config(state=tk.DISABLED)
-            except Exception:
-                pass
+        # Row 2: Horizontal Field of View (FOV)
+        fov_row = tk.Frame(sliders_frame, bg=self.panel_bg)
+        fov_row.pack(fill=tk.X, pady=1)
+        fov_lbl = tk.Label(fov_row, text="Horizontal FOV (°):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        fov_lbl.pack(side=tk.LEFT)
+        fov_scale = tk.Scale(
+            fov_row,
+            from_=30.0,
+            to=135.0,
+            resolution=0.5,
+            orient=tk.HORIZONTAL,
+            variable=fov_var,
+            showvalue=False,
+            bg=self.panel_bg,
+            troughcolor=self.bg_dark,
+            highlightthickness=0,
+            activebackground="#a855f7"
+        )
+        fov_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        fov_val_lbl = tk.Label(fov_row, text="90.0°", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg=self.panel_bg, width=8, anchor="e")
+        fov_val_lbl.pack(side=tk.RIGHT)
 
-        mode_var.trace_add("write", update_overlap_info)
-        num_cams_var.trace_add("write", update_overlap_info)
-        fov_var.trace_add("write", update_overlap_info)
+        # Row 3: Target Overlap %
+        ol_row = tk.Frame(sliders_frame, bg=self.panel_bg)
+        ol_row.pack(fill=tk.X, pady=1)
+        ol_lbl = tk.Label(ol_row, text="Adjacent Overlap (%):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        ol_lbl.pack(side=tk.LEFT)
+        ol_scale = tk.Scale(
+            ol_row,
+            from_=0.0,
+            to=85.0,
+            resolution=0.5,
+            orient=tk.HORIZONTAL,
+            variable=overlap_var,
+            showvalue=False,
+            bg=self.panel_bg,
+            troughcolor=self.bg_dark,
+            highlightthickness=0,
+            activebackground="#10b981"
+        )
+        ol_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        ol_val_lbl = tk.Label(ol_row, text="50.0%", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, width=8, anchor="e")
+        ol_val_lbl.pack(side=tk.RIGHT)
 
-        g2 = tk.Frame(rig_card, bg=self.panel_bg)
-        g2.pack(fill=tk.X, pady=(4, 2))
+        # Dome extra tier options frame
+        dome_frame = tk.Frame(rig_card, bg=self.panel_bg)
+        dome_row1 = tk.Frame(dome_frame, bg=self.panel_bg)
+        dome_row1.pack(fill=tk.X, pady=1)
+        tk.Label(dome_row1, text="Pitch Tier (°):", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Entry(dome_row1, textvariable=dome_pitch_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT).pack(side=tk.LEFT, padx=(0, 8))
 
-        tk.Label(g2, text="View Resolution:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        res_cb = ttk.Combobox(g2, textvariable=res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
-        res_cb.pack(side=tk.LEFT, padx=(0, 16))
+        tk.Label(dome_row1, text="Cams/Tier:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Entry(dome_row1, textvariable=dome_tier_cams_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=4, relief=tk.FLAT).pack(side=tk.LEFT, padx=(0, 12))
 
-        tk.Label(g2, text="Format:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        fmt_cb = ttk.Combobox(g2, textvariable=fmt_var, values=["jpg", "png"], state="readonly", width=6)
-        fmt_cb.pack(side=tk.LEFT, padx=(0, 16))
+        tk.Checkbutton(dome_row1, text="Zenith (+90°)", variable=dome_zenith_var, font=("Segoe UI", 8), fg="#c084fc", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Checkbutton(dome_row1, text="Nadir (-90°)", variable=dome_nadir_var, font=("Segoe UI", 8), fg="#c084fc", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg).pack(side=tk.LEFT)
 
-        tk.Label(g2, text="Quality:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        qual_entry = tk.Entry(g2, textvariable=qual_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
-        qual_entry.pack(side=tk.LEFT, padx=(0, 16), ipady=1)
+        # -----------------------------------------------------------------
+        # CARD 3: Optics, Resolution & Video Sampling (Left Column)
+        # -----------------------------------------------------------------
+        optics_card = tk.LabelFrame(
+            left_col,
+            text=" 3. Camera Optics, Resolution & Video Sampling ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=10,
+            pady=6
+        )
+        optics_card.pack(fill=tk.X, pady=(0, 6))
 
-        tf_chk = tk.Checkbutton(g2, text="Export transforms.json", variable=export_tf_var, font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        # Resolution & Aspect Ratio Row
+        o1 = tk.Frame(optics_card, bg=self.panel_bg)
+        o1.pack(fill=tk.X, pady=2)
+        tk.Label(o1, text="Aspect Ratio:", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        aspect_cb = ttk.Combobox(o1, textvariable=aspect_ratio_var, values=["1:1 (Square)", "4:3 Standard", "16:9 Widescreen", "Custom"], state="readonly", width=13)
+        aspect_cb.pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Label(o1, text="Size:", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 2))
+        w_entry = tk.Entry(o1, textvariable=out_w_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        w_entry.pack(side=tk.LEFT, padx=(0, 2), ipady=1)
+        tk.Label(o1, text="×", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=1)
+        h_entry = tk.Entry(o1, textvariable=out_h_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        h_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+
+        auto_res_btn = tk.Button(
+            o1,
+            text="⚡ Auto-Res",
+            font=("Segoe UI", 8, "bold"),
+            bg="#0284c7",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=6,
+            pady=1
+        )
+        auto_res_btn.pack(side=tk.LEFT)
+        ToolTip(auto_res_btn, "Auto-calculate optimal rectilinear resolution to match native equirectangular angular pixel density (PPD = W_erp / 2π).")
+
+        # Distortion & Optics Row
+        o2 = tk.Frame(optics_card, bg=self.panel_bg)
+        o2.pack(fill=tk.X, pady=2)
+        tk.Label(o2, text="Distortion (k1):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        dist_scale = tk.Scale(
+            o2,
+            from_=-0.20,
+            to=0.20,
+            resolution=0.01,
+            orient=tk.HORIZONTAL,
+            variable=distortion_k1_var,
+            showvalue=False,
+            bg=self.panel_bg,
+            troughcolor=self.bg_dark,
+            highlightthickness=0,
+            activebackground="#38bdf8"
+        )
+        dist_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        dist_val_lbl = tk.Label(o2, text="0.00 (Pinhole)", font=("Segoe UI", 8), fg="#38bdf8", bg=self.panel_bg, width=11, anchor="e")
+        dist_val_lbl.pack(side=tk.RIGHT)
+
+        # Video Frame Extraction Row
+        video_card_frame = tk.Frame(optics_card, bg=self.panel_bg)
+        video_card_frame.pack(fill=tk.X, pady=(3, 1))
+
+        tk.Label(video_card_frame, text="Video Sampling:", font=("Segoe UI", 8, "bold"), fg="#f59e0b", bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        vid_mode_cb = ttk.Combobox(video_card_frame, textvariable=video_mode_var, values=["Target FPS", "Frame Stride"], state="readonly", width=11)
+        vid_mode_cb.pack(side=tk.LEFT, padx=(0, 6))
+
+        fps_stride_val_lbl = tk.Label(video_card_frame, text="FPS:", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg)
+        fps_stride_val_lbl.pack(side=tk.LEFT, padx=(0, 2))
+        fps_entry = tk.Entry(video_card_frame, textvariable=video_fps_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        fps_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+
+        tk.Label(video_card_frame, text="Max Frames:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 2))
+        max_f_entry = tk.Entry(video_card_frame, textvariable=video_max_frames_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        max_f_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+        ToolTip(max_f_entry, "Maximum number of video frames to sample (0 = extract all frames across entire video duration).")
+
+        # Format & transforms.json Row
+        o3 = tk.Frame(optics_card, bg=self.panel_bg)
+        o3.pack(fill=tk.X, pady=(4, 1))
+
+        tk.Label(o3, text="Format:", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 3))
+        fmt_cb = ttk.Combobox(o3, textvariable=fmt_var, values=["jpg", "png"], state="readonly", width=5)
+        fmt_cb.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(o3, text="Quality:", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 3))
+        qual_entry = tk.Entry(o3, textvariable=qual_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=4, relief=tk.FLAT)
+        qual_entry.pack(side=tk.LEFT, padx=(0, 12), ipady=1)
+
+        tf_chk = tk.Checkbutton(
+            o3,
+            text="Export transforms.json (COLMAP / Nerfstudio)",
+            variable=export_tf_var,
+            font=("Segoe UI", 8, "bold"),
+            fg="#a855f7",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
         tf_chk.pack(side=tk.LEFT)
 
-        # 3. Status & Progress Card
-        prog_card = tk.LabelFrame(
-            content,
-            text=" Progress & Telemetry ",
+        # -----------------------------------------------------------------
+        # RIGHT COLUMN: Interactive Visualizer Canvas & Telemetry Dashboard
+        # -----------------------------------------------------------------
+        viz_hdr = tk.Frame(right_col, bg=self.panel_bg, padx=10, pady=6)
+        viz_hdr.pack(fill=tk.X, pady=(0, 6))
+
+        tk.Label(
+            viz_hdr,
+            text="🎯 RIG PLACEMENT & SPHERICAL COVERAGE",
+            font=("Segoe UI", 9, "bold"),
+            fg="#38bdf8",
+            bg=self.panel_bg
+        ).pack(side=tk.LEFT)
+
+        # View Mode Toggle
+        vm_frame = tk.Frame(viz_hdr, bg=self.panel_bg)
+        vm_frame.pack(side=tk.RIGHT)
+
+        polar_btn = tk.Radiobutton(
+            vm_frame,
+            text="🧭 Polar Radar",
+            variable=canvas_view_mode_var,
+            value="polar",
+            font=("Segoe UI", 8, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        polar_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        equirect_btn = tk.Radiobutton(
+            vm_frame,
+            text="🗺️ 2D Footprint",
+            variable=canvas_view_mode_var,
+            value="equirect",
+            font=("Segoe UI", 8, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        equirect_btn.pack(side=tk.LEFT)
+
+        # Canvas Frame
+        canvas_card = tk.Frame(right_col, bg="#0d0d16", highlightthickness=1, highlightbackground=self.panel_border)
+        canvas_card.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+        viz_canvas = tk.Canvas(
+            canvas_card,
+            bg="#0d0d16",
+            highlightthickness=0,
+            width=520,
+            height=370
+        )
+        viz_canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Telemetry & Optics Dashboard (Below Canvas)
+        telemetry_card = tk.LabelFrame(
+            right_col,
+            text=" Mathematical Telemetry & Optics Solvers ",
             font=("Segoe UI", 9, "bold"),
             fg=self.text_primary,
             bg=self.panel_bg,
-            padx=12,
-            pady=8
+            padx=10,
+            pady=6
         )
-        prog_card.pack(fill=tk.X, pady=(0, 8))
+        telemetry_card.pack(fill=tk.X)
 
-        dlg_pbar = ttk.Progressbar(prog_card, mode="determinate")
-        dlg_pbar.pack(fill=tk.X, pady=(2, 4))
+        t_grid = tk.Frame(telemetry_card, bg=self.panel_bg)
+        t_grid.pack(fill=tk.X)
 
-        status_lbl = tk.Label(prog_card, text="Status: Ready to project rig.", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, anchor="w")
+        # Left Column Stats
+        t_c1 = tk.Frame(t_grid, bg=self.panel_bg)
+        t_c1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        step_telemetry_lbl = tk.Label(t_c1, text="Angular Step (Δθ): 45.0°", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, anchor="w")
+        step_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        overlap_telemetry_lbl = tk.Label(t_c1, text="Rig Overlap: 50.0% [Optimal]", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, anchor="w")
+        overlap_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        focal_telemetry_lbl = tk.Label(t_c1, text="Focal Length: fx=512.0px, fy=512.0px", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, anchor="w")
+        focal_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        # Right Column Stats
+        t_c2 = tk.Frame(t_grid, bg=self.panel_bg)
+        t_c2.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        views_telemetry_lbl = tk.Label(t_c2, text="Rig Views: 8 views/pano", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, anchor="w")
+        views_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        total_telemetry_lbl = tk.Label(t_c2, text="Est. Total Views: 0 images", font=("Segoe UI", 8), fg="#38bdf8", bg=self.panel_bg, anchor="w")
+        total_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        coverage_telemetry_lbl = tk.Label(t_c2, text="Coverage: Equatorial Belt (±45°)", font=("Segoe UI", 8), fg="#a855f7", bg=self.panel_bg, anchor="w")
+        coverage_telemetry_lbl.pack(fill=tk.X, pady=1)
+
+        # -----------------------------------------------------------------
+        # BOTTOM PROGRESS & ACTIONS BAR
+        # -----------------------------------------------------------------
+        bottom_bar = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=8)
+        bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
+
+        prog_row = tk.Frame(bottom_bar, bg=self.panel_bg)
+        prog_row.pack(fill=tk.X, pady=(0, 6))
+
+        dlg_pbar = ttk.Progressbar(prog_row, mode="determinate")
+        dlg_pbar.pack(fill=tk.X, pady=(0, 2))
+
+        status_lbl = tk.Label(prog_row, text="Status: Ready to project multi-camera rig.", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, anchor="w")
         status_lbl.pack(fill=tk.X)
 
-        # 4. Action Buttons
-        btn_row = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=10)
-        btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+        btn_row = tk.Frame(bottom_bar, bg=self.panel_bg)
+        btn_row.pack(fill=tk.X)
 
         split_btn = tk.Button(
             btn_row,
             text="▶ Start Rig Projection",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg="#7c3aed",
             fg="#ffffff",
             activebackground="#6d28d9",
@@ -2230,7 +2562,7 @@ class AbuAlignApp:
 
         open_folder_btn = tk.Button(
             btn_row,
-            text="📁 Open Folder",
+            text="📁 Open Output Folder",
             font=("Segoe UI", 9),
             bg="#29293d",
             fg=self.text_primary,
@@ -2254,11 +2586,481 @@ class AbuAlignApp:
         )
         close_btn.pack(side=tk.RIGHT)
 
+        # -----------------------------------------------------------------
+        # Real-time Mathematical Calculation & Canvas Synchronization
+        # -----------------------------------------------------------------
+        is_updating_math = False
+
+        def get_current_rig():
+            """Returns the list of (name, yaw, pitch, roll, fov) for current settings."""
+            m = mode_var.get()
+            fov_v = fov_var.get()
+            nc = max(3, num_cams_var.get())
+
+            if m == "cubemap":
+                return ps.get_cubemap_rig(fov_deg=fov_v)
+            elif m == "dome":
+                return ps.get_spherical_dome_rig(
+                    equator_cams=nc,
+                    pitch_tier=dome_pitch_var.get(),
+                    tier_cams=dome_tier_cams_var.get(),
+                    include_zenith=dome_zenith_var.get(),
+                    include_nadir=dome_nadir_var.get(),
+                    fov_deg=fov_v
+                )
+            elif m == "fibonacci":
+                return ps.get_fibonacci_sphere_rig(num_cameras=nc, fov_deg=fov_v)
+            else:  # "ring"
+                return ps.get_horizontal_ring_rig(num_cameras=nc, fov_deg=fov_v)
+
+        def sync_math_and_ui(*args):
+            nonlocal is_updating_math
+            if is_updating_math:
+                return
+            is_updating_math = True
+
+            try:
+                m = mode_var.get()
+                solver = solver_mode_var.get()
+                nc = max(3, num_cams_var.get())
+                fov_v = max(10.0, min(150.0, fov_var.get()))
+                ol_v = max(0.0, min(85.0, overlap_var.get()))
+
+                # Visibility of mode-specific widgets
+                if m == "dome":
+                    dome_frame.pack(fill=tk.X, pady=(4, 2))
+                    cams_lbl.config(text="Equator Cams (N):")
+                    cams_scale.config(state=tk.NORMAL)
+                elif m == "cubemap":
+                    dome_frame.pack_forget()
+                    cams_lbl.config(text="Cube Faces (Fixed):")
+                    cams_scale.config(state=tk.DISABLED)
+                    num_cams_var.set(6)
+                    fov_var.set(90.0)
+                    fov_v = 90.0
+                elif m == "fibonacci":
+                    dome_frame.pack_forget()
+                    cams_lbl.config(text="Sphere Cams (N):")
+                    cams_scale.config(state=tk.NORMAL)
+                else:  # ring
+                    dome_frame.pack_forget()
+                    cams_lbl.config(text="Camera Count (N):")
+                    cams_scale.config(state=tk.NORMAL)
+
+                # Solver logic
+                if m in ("ring", "dome"):
+                    if solver == "lock_overlap":
+                        # Recalculate FOV from locked overlap and current camera count
+                        new_fov = ps.calculate_fov_from_overlap(nc, ol_v)
+                        fov_var.set(round(new_fov, 1))
+                        fov_v = new_fov
+                    elif solver == "lock_fov":
+                        # Recalculate camera count from locked FOV and target overlap
+                        req_nc = ps.calculate_cameras_from_fov_and_overlap(fov_v, ol_v)
+                        num_cams_var.set(req_nc)
+                        nc = req_nc
+                    else:
+                        # Free mode: calculate actual overlap from N and FOV
+                        act_ol = ps.calculate_overlap(nc, fov_v)
+                        overlap_var.set(round(act_ol, 1))
+                        ol_v = act_ol
+
+                # Value labels
+                cams_val_lbl.config(text=f"{num_cams_var.get()} cams")
+                fov_val_lbl.config(text=f"{fov_var.get():.1f}°")
+                ol_val_lbl.config(text=f"{overlap_var.get():.1f}%")
+
+                k1_val = distortion_k1_var.get()
+                if abs(k1_val) < 1e-4:
+                    dist_val_lbl.config(text="0.00 (Pinhole)", fg="#38bdf8")
+                else:
+                    dist_val_lbl.config(text=f"{k1_val:+.2f}", fg="#f59e0b")
+
+                # Aspect ratio & resolution
+                ar_mode = aspect_ratio_var.get()
+                w_cur = out_w_var.get()
+                if "1:1" in ar_mode:
+                    out_h_var.set(w_cur)
+                elif "4:3" in ar_mode:
+                    out_h_var.set(max(128, int(round(w_cur * 3.0 / 4.0))))
+                elif "16:9" in ar_mode:
+                    out_h_var.set(max(128, int(round(w_cur * 9.0 / 16.0))))
+
+                # Calculate focal lengths and vertical FOV
+                w = out_w_var.get()
+                h = out_h_var.get()
+                half_fov_rad = math.radians(fov_v) / 2.0
+                fx = (float(w) / 2.0) / math.tan(half_fov_rad)
+                fov_v_deg = ps.calculate_vertical_fov(fov_v, w, h)
+
+                # Telemetry updates
+                step_deg = ps.calculate_angular_step(nc) if m in ("ring", "dome") else (90.0 if m == "cubemap" else (360.0 / nc))
+                step_telemetry_lbl.config(text=f"Angular Step (Δθ): {step_deg:.2f}°")
+
+                rig_cams = get_current_rig()
+                views_telemetry_lbl.config(text=f"Rig Views: {len(rig_cams)} views/pano")
+
+                if ol_v >= 40.0 and ol_v <= 65.0:
+                    overlap_telemetry_lbl.config(text=f"Rig Overlap: {ol_v:.1f}% [Optimal for SfM]", fg="#10b981")
+                elif ol_v > 65.0:
+                    overlap_telemetry_lbl.config(text=f"Rig Overlap: {ol_v:.1f}% [Dense Overlap]", fg="#38bdf8")
+                elif ol_v >= 20.0:
+                    overlap_telemetry_lbl.config(text=f"Rig Overlap: {ol_v:.1f}% [Moderate]", fg="#f59e0b")
+                else:
+                    overlap_telemetry_lbl.config(text=f"Rig Overlap: {ol_v:.1f}% [Gap Alert!]", fg="#ef4444")
+
+                focal_telemetry_lbl.config(text=f"Focal Length: fx={fx:.1f}px, fy={fx:.1f}px (vFOV: {fov_v_deg:.1f}°)")
+
+                if m == "fibonacci":
+                    coverage_telemetry_lbl.config(text="Coverage: 4π Full Sphere (Uniform Golden Spiral)")
+                elif m == "dome":
+                    coverage_telemetry_lbl.config(text="Coverage: 4π Full Sphere (Multi-Tier & Poles)")
+                elif m == "cubemap":
+                    coverage_telemetry_lbl.config(text="Coverage: 4π Full Sphere (6 Orthogonal Faces)")
+                else:
+                    coverage_telemetry_lbl.config(text=f"Coverage: Equatorial Belt (±{fov_v_deg/2.0:.0f}° Lat)")
+
+                # Estimate total views
+                source_count = detected_media_info["count"]
+                if detected_media_info["is_video"] and detected_media_info["fps"] > 0:
+                    if video_mode_var.get() == "Target FPS":
+                        fps_tgt = video_fps_var.get()
+                        est_frames = int(round(detected_media_info["duration_sec"] * fps_tgt))
+                    else:
+                        stride = max(1, video_stride_var.get())
+                        est_frames = detected_media_info["frames"] // stride
+                    if video_max_frames_var.get() > 0:
+                        est_frames = min(est_frames, video_max_frames_var.get())
+                    source_count = est_frames
+
+                total_est = source_count * len(rig_cams)
+                total_telemetry_lbl.config(text=f"Est. Total Views: {total_est:,} pinhole images ({source_count} panos/frames)")
+
+            except Exception:
+                pass
+            finally:
+                is_updating_math = False
+
+            draw_visualizer()
+
+        # Canvas Renderer
+        def draw_visualizer(*_):
+            viz_canvas.delete("all")
+            cw = viz_canvas.winfo_width()
+            ch = viz_canvas.winfo_height()
+            if cw <= 10 or ch <= 10:
+                cw = 520
+                ch = 370
+
+            rig = get_current_rig()
+            vmode = canvas_view_mode_var.get()
+
+            if vmode == "polar":
+                # ---------------------------------------------------------
+                # Polar Compass / Radar View
+                # ---------------------------------------------------------
+                cx = cw / 2.0
+                cy = ch / 2.0
+                max_r = min(cx, cy) - 36.0
+
+                # Concentric range rings (30°, 60°, 90°)
+                for frac, deg_lbl in [(0.333, "30°"), (0.666, "60°"), (1.0, "90°")]:
+                    r_i = max_r * frac
+                    viz_canvas.create_oval(
+                        cx - r_i, cy - r_i, cx + r_i, cy + r_i,
+                        outline="#222233" if frac < 1.0 else "#36364d",
+                        width=1,
+                        dash=(2, 4) if frac < 1.0 else ()
+                    )
+                    viz_canvas.create_text(
+                        cx + r_i + 2, cy - 6,
+                        text=deg_lbl,
+                        fill="#55556d",
+                        font=("Segoe UI", 7),
+                        anchor="w"
+                    )
+
+                # Cardinal Crosshairs
+                viz_canvas.create_line(cx, cy - max_r - 18, cx, cy + max_r + 18, fill="#222233", width=1)
+                viz_canvas.create_line(cx - max_r - 18, cy, cx + max_r + 18, cy, fill="#222233", width=1)
+
+                # Cardinal Labels
+                viz_canvas.create_text(cx, cy - max_r - 14, text="N (0°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"))
+                viz_canvas.create_text(cx + max_r + 16, cy, text="E (+90°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"), anchor="w")
+                viz_canvas.create_text(cx, cy + max_r + 14, text="S (180°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"))
+                viz_canvas.create_text(cx - max_r - 16, cy, text="W (-90°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"), anchor="e")
+
+                # Color palette for overlap
+                ol = overlap_var.get()
+                if ol >= 40.0 and ol <= 65.0:
+                    wedge_color = "#10b981"  # Optimal green
+                    wedge_stipple = "gray25"
+                elif ol > 65.0:
+                    wedge_color = "#3b82f6"  # Blue
+                    wedge_stipple = "gray25"
+                elif ol >= 20.0:
+                    wedge_color = "#f59e0b"  # Amber
+                    wedge_stipple = "gray25"
+                else:
+                    wedge_color = "#ef4444"  # Red
+                    wedge_stipple = "gray25"
+
+                # Draw FOV cones and direction vectors
+                for idx, (cam_name, yaw_d, pitch_d, roll_d, fov_d) in enumerate(rig):
+                    # In screen space, North (yaw=0) is straight UP (-Y axis)
+                    # Yaw increases clockwise: +90° is East (+X axis)
+                    yaw_rad = math.radians(yaw_d)
+                    half_fov = math.radians(fov_d) / 2.0
+
+                    # Adjust radial distance by pitch (projected to equatorial plane: r = max_r * cos(pitch))
+                    pitch_rad = math.radians(pitch_d)
+                    eff_r = max_r * max(0.15, math.cos(pitch_rad))
+
+                    a1 = yaw_rad - half_fov
+                    a2 = yaw_rad + half_fov
+
+                    p0 = (cx, cy)
+                    p1 = (cx + eff_r * math.sin(a1), cy - eff_r * math.cos(a1))
+                    p2 = (cx + eff_r * math.sin(a2), cy - eff_r * math.cos(a2))
+
+                    # Center direction ray
+                    p_mid = (cx + eff_r * math.sin(yaw_rad), cy - eff_r * math.cos(yaw_rad))
+
+                    # Draw FOV wedge polygon
+                    wedge_pts = [p0[0], p0[1], p1[0], p1[1]]
+                    # Interpolate arc
+                    num_arc_steps = 6
+                    for s in range(1, num_arc_steps):
+                        t = s / num_arc_steps
+                        a_t = a1 + t * (a2 - a1)
+                        wedge_pts.extend([cx + eff_r * math.sin(a_t), cy - eff_r * math.cos(a_t)])
+                    wedge_pts.extend([p2[0], p2[1]])
+
+                    viz_canvas.create_polygon(
+                        wedge_pts,
+                        fill=wedge_color,
+                        stipple=wedge_stipple,
+                        outline="#4f46e5" if abs(pitch_d) < 1e-3 else "#c084fc",
+                        width=1
+                    )
+
+                    # Center ray arrow
+                    viz_canvas.create_line(
+                        p0[0], p0[1], p_mid[0], p_mid[1],
+                        fill="#ffffff" if abs(pitch_d) < 1e-3 else "#e9d5ff",
+                        arrow=tk.LAST,
+                        arrowshape=(6, 8, 3),
+                        width=1.5
+                    )
+
+                    # Camera Label
+                    lbl_x = cx + (eff_r + 14) * math.sin(yaw_rad)
+                    lbl_y = cy - (eff_r + 14) * math.cos(yaw_rad)
+                    tag_short = f"C{idx}" if len(rig) > 6 else cam_name.split("_")[0]
+                    viz_canvas.create_text(
+                        lbl_x, lbl_y,
+                        text=tag_short,
+                        fill="#ffffff",
+                        font=("Segoe UI", 7, "bold")
+                    )
+
+                # Center Rig Origin Sphere
+                viz_canvas.create_oval(cx - 7, cy - 7, cx + 7, cy + 7, fill="#a855f7", outline="#ffffff", width=2)
+
+            else:
+                # ---------------------------------------------------------
+                # Equirectangular 2D Footprint Unroll View
+                # ---------------------------------------------------------
+                margin_x = 44.0
+                margin_y = 35.0
+                box_w = cw - 2 * margin_x
+                box_h = ch - 2 * margin_y
+
+                # Background 2:1 map border
+                viz_canvas.create_rectangle(
+                    margin_x, margin_y, margin_x + box_w, margin_y + box_h,
+                    fill="#151522",
+                    outline="#38384f",
+                    width=1.5
+                )
+
+                # Equator line (pitch 0°)
+                y_eq = margin_y + box_h / 2.0
+                viz_canvas.create_line(margin_x, y_eq, margin_x + box_w, y_eq, fill="#4f46e5", width=1.5)
+
+                # Latitude lines (+60°, +30°, -30°, -60°)
+                for p_deg in [60, 30, -30, -60]:
+                    y_lat = margin_y + ((90.0 - p_deg) / 180.0) * box_h
+                    viz_canvas.create_line(margin_x, y_lat, margin_x + box_w, y_lat, fill="#232336", width=1, dash=(2, 4))
+                    viz_canvas.create_text(margin_x - 3, y_lat, text=f"{p_deg:+d}°", fill="#64748b", font=("Segoe UI", 7), anchor="e")
+
+                # Longitude lines (-180, -90, 0, +90, +180)
+                for y_deg in [-180, -90, 0, 90, 180]:
+                    x_lon = margin_x + ((y_deg + 180.0) / 360.0) * box_w
+                    viz_canvas.create_line(x_lon, margin_y, x_lon, margin_y + box_h, fill="#4f46e5" if y_deg == 0 else "#232336", width=1.5 if y_deg == 0 else 1)
+                    viz_canvas.create_text(x_lon, margin_y + box_h + 10, text=f"{y_deg:+d}°", fill="#64748b", font=("Segoe UI", 7))
+
+                # Labels for poles
+                viz_canvas.create_text(margin_x - 3, margin_y, text="+90°", fill="#64748b", font=("Segoe UI", 7), anchor="e")
+                viz_canvas.create_text(margin_x - 3, margin_y + box_h, text="-90°", fill="#64748b", font=("Segoe UI", 7), anchor="e")
+
+                # Render each camera's rectilinear footprint box on the ERP
+                out_w = out_w_var.get()
+                out_h = out_h_var.get()
+
+                for idx, (cam_name, yaw_d, pitch_d, roll_d, fov_d) in enumerate(rig):
+                    fov_v_d = ps.calculate_vertical_fov(fov_d, out_w, out_h)
+                    pw = (fov_d / 360.0) * box_w
+                    ph = (fov_v_d / 180.0) * box_h
+
+                    cx_cam = margin_x + ((yaw_d + 180.0) / 360.0) * box_w
+                    cy_cam = margin_y + ((90.0 - pitch_d) / 180.0) * box_h
+
+                    # Draw camera box
+                    bx0 = cx_cam - pw / 2.0
+                    by0 = cy_cam - ph / 2.0
+                    bx1 = cx_cam + pw / 2.0
+                    by1 = cy_cam + ph / 2.0
+
+                    # Clamp vertical bounds
+                    by0 = max(margin_y, by0)
+                    by1 = min(margin_y + box_h, by1)
+
+                    # Handle wrap around left/right boundaries
+                    boxes_to_draw = []
+                    if bx0 < margin_x:
+                        boxes_to_draw.append((margin_x, by0, bx1, by1))
+                        boxes_to_draw.append((margin_x + box_w - (margin_x - bx0), by0, margin_x + box_w, by1))
+                    elif bx1 > margin_x + box_w:
+                        boxes_to_draw.append((bx0, by0, margin_x + box_w, by1))
+                        boxes_to_draw.append((margin_x, by0, margin_x + (bx1 - (margin_x + box_w)), by1))
+                    else:
+                        boxes_to_draw.append((bx0, by0, bx1, by1))
+
+                    for x0_i, y0_i, x1_i, y1_i in boxes_to_draw:
+                        viz_canvas.create_rectangle(
+                            x0_i, y0_i, x1_i, y1_i,
+                            fill="#7c3aed",
+                            stipple="gray25",
+                            outline="#38bdf8",
+                            width=1
+                        )
+
+                    # Crosshair and label at center
+                    viz_canvas.create_line(cx_cam - 4, cy_cam, cx_cam + 4, cy_cam, fill="#ffffff", width=1)
+                    viz_canvas.create_line(cx_cam, cy_cam - 4, cx_cam, cy_cam + 4, fill="#ffffff", width=1)
+                    tag_short = f"C{idx}" if len(rig) > 6 else cam_name.split("_")[0]
+                    viz_canvas.create_text(cx_cam, cy_cam - 9, text=tag_short, fill="#ffffff", font=("Segoe UI", 7, "bold"))
+
+        # Bind canvas resize to redraw
+        viz_canvas.bind("<Configure>", draw_visualizer)
+
+        # -----------------------------------------------------------------
+        # Media Source Inspection & Auto-Res
+        # -----------------------------------------------------------------
+        def inspect_input_source(*_):
+            p = in_var.get().strip()
+            if not p or not os.path.exists(p):
+                media_badge_lbl.config(text="Status: Input path not found.", fg="#f87171")
+                return
+
+            video_exts = {".mp4", ".mov", ".insv", ".mkv", ".avi"}
+            if os.path.isfile(p) and os.path.splitext(p.lower())[1] in video_exts:
+                # Video file
+                try:
+                    meta = ps.probe_video_metadata(p)
+                    detected_media_info["is_video"] = True
+                    detected_media_info["width"] = meta["width"]
+                    detected_media_info["height"] = meta["height"]
+                    detected_media_info["fps"] = meta["fps"]
+                    detected_media_info["frames"] = meta["frame_count"]
+                    detected_media_info["duration_sec"] = meta["duration_sec"]
+                    detected_media_info["count"] = meta["frame_count"]
+
+                    min_s = int(meta["duration_sec"] // 60)
+                    sec_s = int(meta["duration_sec"] % 60)
+                    media_badge_lbl.config(
+                        text=f"🎬 360° Video: {meta['width']}x{meta['height']} @ {meta['fps']:.1f} FPS, {meta['frame_count']} frames ({min_s}m {sec_s}s)",
+                        fg="#38bdf8"
+                    )
+                except Exception as ex:
+                    media_badge_lbl.config(text=f"🎬 Video detected (probe error: {ex})", fg="#f59e0b")
+            elif os.path.isdir(p):
+                # Directory of images
+                valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+                files = [f for f in os.listdir(p) if os.path.splitext(f.lower())[1] in valid_exts]
+                count = len(files)
+                detected_media_info["is_video"] = False
+                detected_media_info["count"] = count
+
+                if count > 0:
+                    try:
+                        import cv2
+                        s_img = cv2.imread(os.path.join(p, files[0]))
+                        if s_img is not None:
+                            h, w = s_img.shape[:2]
+                            detected_media_info["width"] = w
+                            detected_media_info["height"] = h
+                            media_badge_lbl.config(
+                                text=f"📁 Panorama Directory: {count} images ({w}x{h}, 2:1 ERP)",
+                                fg="#10b981"
+                            )
+                        else:
+                            media_badge_lbl.config(text=f"📁 Panorama Directory: {count} images", fg="#10b981")
+                    except Exception:
+                        media_badge_lbl.config(text=f"📁 Panorama Directory: {count} images", fg="#10b981")
+                else:
+                    media_badge_lbl.config(text="📁 Empty directory (no 360° images found)", fg="#f87171")
+            else:
+                media_badge_lbl.config(text=f"📄 Single Panorama File ({os.path.basename(p)})", fg="#10b981")
+
+            sync_math_and_ui()
+
+        def on_auto_res():
+            """Solves optimal rectilinear resolution from input equirectangular width and FOV."""
+            w_erp = detected_media_info["width"] or 5760
+            fov_v = fov_var.get()
+            opt_w = ps.calculate_optimal_resolution(w_erp, fov_v)
+            out_w_var.set(opt_w)
+
+            ar_mode = aspect_ratio_var.get()
+            if "1:1" in ar_mode:
+                out_h_var.set(opt_w)
+            elif "4:3" in ar_mode:
+                out_h_var.set(max(128, int(round(opt_w * 3.0 / 4.0))))
+            elif "16:9" in ar_mode:
+                out_h_var.set(max(128, int(round(opt_w * 9.0 / 16.0))))
+            sync_math_and_ui()
+            messagebox.showinfo("Auto-Resolution Solved", f"Matched Native Angular Pixel Density (PPD):\nSource ERP Width: {w_erp} px\nCamera FOV: {fov_v}°\nOptimal Pinhole Resolution: {opt_w} x {out_h_var.get()} px")
+
+        auto_res_btn.config(command=on_auto_res)
+
+        # Wire Traces
+        mode_var.trace_add("write", sync_math_and_ui)
+        solver_mode_var.trace_add("write", sync_math_and_ui)
+        num_cams_var.trace_add("write", sync_math_and_ui)
+        fov_var.trace_add("write", sync_math_and_ui)
+        overlap_var.trace_add("write", sync_math_and_ui)
+        dome_pitch_var.trace_add("write", sync_math_and_ui)
+        dome_tier_cams_var.trace_add("write", sync_math_and_ui)
+        dome_zenith_var.trace_add("write", sync_math_and_ui)
+        dome_nadir_var.trace_add("write", sync_math_and_ui)
+        aspect_ratio_var.trace_add("write", sync_math_and_ui)
+        out_w_var.trace_add("write", sync_math_and_ui)
+        out_h_var.trace_add("write", sync_math_and_ui)
+        distortion_k1_var.trace_add("write", sync_math_and_ui)
+        video_mode_var.trace_add("write", sync_math_and_ui)
+        video_fps_var.trace_add("write", sync_math_and_ui)
+        video_stride_var.trace_add("write", sync_math_and_ui)
+        video_max_frames_var.trace_add("write", sync_math_and_ui)
+        canvas_view_mode_var.trace_add("write", sync_math_and_ui)
+
+        # Actions
         def set_as_dataset():
             d = out_var.get().strip()
             if os.path.isdir(d):
                 self.dataset_var.set(d)
-                messagebox.showinfo("Dataset Set", f"Updated Abu Align dataset path to:\n{d}")
+                messagebox.showinfo("Dataset Configured", f"Active Abu Align dataset updated to:\n{d}")
                 dialog.destroy()
 
         use_ds_btn.config(command=set_as_dataset)
@@ -2274,20 +3076,20 @@ class AbuAlignApp:
             in_p = in_var.get().strip()
             out_d = out_var.get().strip()
             if not in_p or not os.path.exists(in_p):
-                messagebox.showerror("Error", "Please select a valid input directory of 360° panoramas.")
+                messagebox.showerror("Error", "Please select a valid input directory of 360° panoramas or video file.")
                 return
             if not out_d:
-                out_d = os.path.join(in_p, "pinhole_rig")
+                out_d = os.path.join(in_p, "pinhole_rig") if os.path.isdir(in_p) else f"{os.path.splitext(in_p)[0]}_pinhole_rig"
                 out_var.set(out_d)
 
-            split_btn.config(state=tk.DISABLED, text="⏳ Projecting...")
+            split_btn.config(state=tk.DISABLED, text="⏳ Synthesizing Rig Views...")
             close_btn.config(state=tk.DISABLED)
             dlg_pbar["value"] = 0
-            status_lbl.config(text="Status: Initializing rig projection...", fg="#a855f7")
+            status_lbl.config(text="Status: Initializing virtual multi-camera rig projection...", fg="#a855f7")
 
             def on_progress(cur, tot, name):
                 pct = (cur / max(tot, 1)) * 100.0
-                status_txt = f"Status: Splitting panorama {cur}/{tot} ({pct:.1f}%): {name}"
+                status_txt = f"Status: Projecting view {cur}/{tot} ({pct:.1f}%): {name}"
                 dialog.after(0, lambda: [
                     dlg_pbar.configure(value=pct),
                     status_lbl.configure(text=status_txt, fg="#a855f7")
@@ -2295,24 +3097,38 @@ class AbuAlignApp:
 
             def worker():
                 try:
-                    from panoramic_splitter import split_panorama_dataset
                     m = mode_var.get()
-                    nc = int(num_cams_var.get())
-                    fov_v = float(fov_var.get())
-                    sz = int(res_var.get())
+                    nc = num_cams_var.get()
+                    fov_v = fov_var.get()
+                    ow = out_w_var.get()
+                    oh = out_h_var.get()
+                    k1 = distortion_k1_var.get()
                     fmt = fmt_var.get()
-                    q = int(qual_var.get())
+                    q = qual_var.get()
                     tf = export_tf_var.get()
 
-                    res = split_panorama_dataset(
+                    v_target_fps = video_fps_var.get() if video_mode_var.get() == "Target FPS" else None
+                    v_stride = video_stride_var.get() if video_mode_var.get() == "Frame Stride" else 1
+                    v_max_f = video_max_frames_var.get()
+
+                    res = ps.split_panorama_dataset(
                         input_dir=in_p,
                         output_dir=out_d,
                         mode=m,
                         num_cameras=nc,
                         fov_deg=fov_v,
-                        crop_size=sz,
+                        crop_width=ow,
+                        crop_height=oh,
+                        k1=k1,
+                        pitch_tier=dome_pitch_var.get(),
+                        tier_cams=dome_tier_cams_var.get(),
+                        include_zenith=dome_zenith_var.get(),
+                        include_nadir=dome_nadir_var.get(),
                         image_format=fmt,
                         quality=q,
+                        video_target_fps=v_target_fps,
+                        video_frame_stride=v_stride,
+                        video_max_frames=v_max_f,
                         export_transforms_json=tf,
                         progress_callback=on_progress,
                     )
@@ -2323,14 +3139,14 @@ class AbuAlignApp:
                     def on_done():
                         dlg_pbar["value"] = 100
                         status_lbl.config(
-                            text=f"Status: Complete! Generated {tot} pinhole views from {panos} panos in {sec}s.",
+                            text=f"Status: Complete! Generated {tot:,} pinhole views from {panos} panoramas/frames in {sec}s.",
                             fg=self.accent_green
                         )
                         split_btn.config(state=tk.NORMAL, text="▶ Start Rig Projection")
                         close_btn.config(state=tk.NORMAL)
                         use_ds_btn.config(state=tk.NORMAL)
                         open_folder_btn.config(state=tk.NORMAL)
-                        self._log(f"\n[360 RIG SPLITTER] Successfully projected {panos} panoramas into {tot} views in {out_d} ({sec}s).\n")
+                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} pinhole views ({ow}x{oh}) in {out_d} ({sec}s).\n")
 
                     dialog.after(0, on_done)
                 except Exception as ex:
@@ -2345,7 +3161,10 @@ class AbuAlignApp:
             t.start()
 
         split_btn.config(command=run_split_worker)
-        update_overlap_info()
+
+        # Initial inspection and math sync
+        inspect_input_source()
+        sync_math_and_ui()
 
     def _log(self, text):
         self.console.insert(tk.END, text)
@@ -2751,7 +3570,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3062,7 +3881,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.5 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -3336,7 +4155,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.5\n"
+            "Abu Align & Train - Version 0.0.2.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
