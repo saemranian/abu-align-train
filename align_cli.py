@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.3.1 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.3.2 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1074,10 +1074,19 @@ def main():
     parser.add_argument("--sh_degree", type=int, default=3, choices=[0, 1, 2, 3], help="Spherical harmonics degree (default: 3)")
     parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 ('auto', 'opensfm', 'posefree', 'ob3d', 'odgs')")
     parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Monocular depth prior for PFGS360 (default: unik3d)")
-    parser.add_argument("--pfgs_filter_sky", action="store_true", default=True, help="Filter sky areas (>50m) in PFGS360")
+    parser.add_argument("--pfgs_filter_sky", dest="pfgs_filter_sky", action="store_true", default=True, help="Filter sky areas (>50m) in PFGS360")
     parser.add_argument("--no_pfgs_filter_sky", dest="pfgs_filter_sky", action="store_false", help="Do not filter sky in PFGS360")
-    parser.add_argument("--pfgs_match_views", type=int, default=0, help="Window size for PFGS360 pose matching")
-    parser.add_argument("--pfgs_densify_views", type=int, default=0, help="Window size for PFGS360 densification")
+    parser.add_argument("--pfgs_sky_depth", type=float, default=50.0, help="Max depth threshold for sky filtering in meters (default: 50.0)")
+    parser.add_argument("--pfgs_match_views", type=int, default=8, help="Sliding window size for PFGS360 pose matching (default: 8; 0 for exhaustive all-pairs)")
+    parser.add_argument("--pfgs_densify_views", type=int, default=8, help="Sliding window size for PFGS360 densification (default: 8; 0 for all views)")
+    parser.add_argument("--pfgs_spherical", dest="pfgs_spherical", action="store_true", default=True, help="Enable SCA-PE spherical coordinate positional encoding")
+    parser.add_argument("--no_pfgs_spherical", dest="pfgs_spherical", action="store_false", help="Disable SCA-PE")
+    parser.add_argument("--pfgs_consist", dest="pfgs_consist", action="store_true", default=True, help="Enable consist-aware epipolar masks")
+    parser.add_argument("--no_pfgs_consist", dest="pfgs_consist", action="store_false", help="Disable consist-aware")
+    parser.add_argument("--pfgs_inlier", dest="pfgs_inlier", action="store_true", default=True, help="Enable DIA-Densify depth inlier growth")
+    parser.add_argument("--no_pfgs_inlier", dest="pfgs_inlier", action="store_false", help="Disable DIA-Densify")
+    parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
+    parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
 
     args = parser.parse_args()
 
@@ -1745,10 +1754,18 @@ def main():
             f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
         ])
     elif "pfgs" in train_eng_clean:
+        mv_val = getattr(args, "pfgs_match_views", 8)
+        match_str = f"{mv_val} views (Sliding Window)" if mv_val > 0 else "All Views (Exhaustive O(N²))"
         report_lines.extend([
             f"   * Depth Prior Engine:      {getattr(args, 'pfgs_depth', 'unik3d').upper()} (Omnidirectional)",
             f"   * Dataparser Routing:      {getattr(args, 'pfgs_dataparser', 'auto').upper()}",
-            f"   * Sky Area Filter:         {'Enabled (>50m)' if getattr(args, 'pfgs_filter_sky', True) else 'Disabled'}",
+            f"   * Match Views Window:      {match_str}",
+            f"   * Densify Views Window:    {getattr(args, 'pfgs_densify_views', 8)} views",
+            f"   * Spherical PE (SCA-PE):   {'Enabled (S² Manifold)' if getattr(args, 'pfgs_spherical', True) else 'Disabled'}",
+            f"   * Epipolar Consistency:    {'Enabled' if getattr(args, 'pfgs_consist', True) else 'Disabled'}",
+            f"   * Inlier Growth (DIA):     {'Enabled' if getattr(args, 'pfgs_inlier', True) else 'Disabled'}",
+            f"   * Align Internal Depth:    {'Enabled' if getattr(args, 'pfgs_align_depth', True) else 'Disabled'}",
+            f"   * Sky Area Filter:         {'Enabled (>' + str(getattr(args, 'pfgs_sky_depth', 50.0)) + 'm)' if getattr(args, 'pfgs_filter_sky', True) else 'Disabled'}",
             f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
         ])
 
@@ -1806,8 +1823,13 @@ def main():
                 pfgs_depth=getattr(args, "pfgs_depth", "unik3d"),
                 pfgs_dataparser=getattr(args, "pfgs_dataparser", "auto"),
                 pfgs_filter_sky=getattr(args, "pfgs_filter_sky", True),
-                pfgs_match_views=getattr(args, "pfgs_match_views", 0),
-                pfgs_densify_views=getattr(args, "pfgs_densify_views", 0),
+                pfgs_sky_depth=getattr(args, "pfgs_sky_depth", 50.0),
+                pfgs_match_views=getattr(args, "pfgs_match_views", 8),
+                pfgs_densify_views=getattr(args, "pfgs_densify_views", 8),
+                pfgs_spherical=getattr(args, "pfgs_spherical", True),
+                pfgs_consist=getattr(args, "pfgs_consist", True),
+                pfgs_inlier=getattr(args, "pfgs_inlier", True),
+                pfgs_align_depth=getattr(args, "pfgs_align_depth", True),
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:

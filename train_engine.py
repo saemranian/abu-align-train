@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.3.1 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.3.2 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -801,9 +801,12 @@ def train_pfgs360(
     spherical_aware: bool = True,
     consist_aware: bool = True,
     inlier_growth: bool = True,
+    align_depth: bool = True,
+    patch_filter: bool = True,
     filter_sky: bool = True,
-    match_views: int = 0,
-    densify_views: int = 0,
+    sky_depth: float = 50.0,
+    match_views: int = 8,
+    densify_views: int = 8,
     sh_degree: int = 3,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
@@ -896,6 +899,14 @@ def train_pfgs360(
             log("      *          trajectories from scratch on CPU view-by-view (NearestNeighbors).")
             log("      * [TIP] To train immediately at full 100% RTX 4090 GPU capacity without waiting for CPU pose")
             log("      *       calculation, set Dataparser Mode to 'Auto-Detect' or 'OpenSfM / 360DVO Handoff'.")
+        if match_views == 0:
+            log("      * [PERFORMANCE WARNING] 'match_views' is set to 0 (All Visited Views).")
+            log("      *                     PFGS360 will perform O(N²) sequential pairwise SIFT matching on CPU.")
+            log("      *                     This will bottleneck progress and temporarily keep GPU utilization low (~10-25%).")
+            log("      * [RECOMMENDATION] Set match_views=8 for a fast sliding window, or pre-align with OpenSfM/360DVO.")
+        else:
+            log(f"      * [FAST SLIDING WINDOW] match_views={match_views}: Restricts CPU pose matching to recent {match_views} views (O(N·K) complexity).")
+            log("      *                       Prevents CPU bottlenecking and maintains steady GPU training progress!")
     else:
         active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") and dataparser_mode != "nerfstudio-data" else dataparser_mode
         dp_mode_label = active_dp
@@ -924,15 +935,19 @@ def train_pfgs360(
             pass
 
     log(f"      * Initializing PFGS360 Engine (CVPR 2026)...")
-    log(f"      * ns-train:    {ns_train_exe}")
-    log(f"      * Dataparser:  {dp_mode_label}")
-    log(f"      * Depth Prior: {depth_type.upper()} (Omnidirectional)")
-    log(f"      * Spherical:   {'Enabled (S^2 Manifold)' if spherical_aware else 'Disabled'}")
-    log(f"      * Inlier-Grow: {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
-    log(f"      * Filter Sky:  {'Enabled (>50m)' if filter_sky else 'Disabled'}")
-    log(f"      * Dataset:     {dataset_abs}")
-    log(f"      * Output Dir:  {output_dir}")
-    log(f"      * Max Steps:   {iterations:,}")
+    log(f"      * ns-train:      {ns_train_exe}")
+    log(f"      * Dataparser:    {dp_mode_label}")
+    log(f"      * Depth Prior:   {depth_type.upper()} (Omnidirectional)")
+    log(f"      * Match Views:   {f'{match_views} Keyframes (Sliding Window)' if match_views > 0 else 'All Visited Views (O(N²) CPU Matching)'}")
+    log(f"      * Densify Views: {f'{densify_views} Keyframes (Sliding Window)' if densify_views > 0 else 'All Keyframes'}")
+    log(f"      * Spherical:     {'Enabled (S² Manifold)' if spherical_aware else 'Disabled'}")
+    log(f"      * Consist-Aware: {'Enabled (Epipolar Masks)' if consist_aware else 'Disabled'}")
+    log(f"      * Inlier-Grow:   {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
+    log(f"      * Align-Depth:   {'Enabled' if align_depth else 'Disabled'}")
+    log(f"      * Filter Sky:    {f'Enabled (>{sky_depth:.0f}m)' if filter_sky else 'Disabled'}")
+    log(f"      * Dataset:       {dataset_abs}")
+    log(f"      * Output Dir:    {output_dir}")
+    log(f"      * Max Steps:     {iterations:,}")
 
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -951,10 +966,20 @@ def train_pfgs360(
     ]
     if not spherical_aware:
         cmd.extend(["--pipeline.model.spherical-aware", "False"])
+    if not consist_aware:
+        cmd.extend(["--pipeline.model.consist-aware", "False"])
     if not inlier_growth:
         cmd.extend(["--pipeline.model.inlier-growth", "False"])
+    if not align_depth:
+        cmd.extend(["--pipeline.model.align-depth", "False"])
+    if not patch_filter:
+        cmd.extend(["--pipeline.model.patch-filter", "False"])
     if filter_sky:
         cmd.extend(["--pipeline.model.filter-sky", "True"])
+        if sky_depth != 50.0:
+            cmd.extend(["--pipeline.model.sky-depth", str(sky_depth)])
+    else:
+        cmd.extend(["--pipeline.model.filter-sky", "False"])
     if match_views > 0:
         cmd.extend(["--pipeline.model.match-views", str(match_views)])
     if densify_views > 0:
@@ -1092,8 +1117,13 @@ def run_3dgs_training(
     pfgs_depth: str = "unik3d",
     pfgs_dataparser: str = "auto",
     pfgs_filter_sky: bool = True,
-    pfgs_match_views: int = 0,
-    pfgs_densify_views: int = 0,
+    pfgs_sky_depth: float = 50.0,
+    pfgs_match_views: int = 8,
+    pfgs_densify_views: int = 8,
+    pfgs_spherical: bool = True,
+    pfgs_consist: bool = True,
+    pfgs_inlier: bool = True,
+    pfgs_align_depth: bool = True,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1127,21 +1157,22 @@ def run_3dgs_training(
             tf_check = os.path.isfile(os.path.join(dataset_dir, "transforms.json"))
             if pfgs_dataparser.lower() == "auto":
                 if rec_check:
-                    dp_disp = "AUTO (Auto-Routed: OpenSfM Handoff)"
+                    dp_disp = "AUTO (Auto-Routed: OpenSfM Handoff [100% GPU])"
                 elif tf_check:
-                    dp_disp = "AUTO (Auto-Routed: Transforms.json Handoff)"
+                    dp_disp = "AUTO (Auto-Routed: Transforms.json Handoff [100% GPU])"
                 else:
                     dp_disp = "AUTO (Auto-Routed: Pose-Free Direct [posefree-dataparser])"
             elif pfgs_dataparser.lower() in ["posefree", "pose-free", "direct"]:
                 dp_disp = "POSE-FREE DIRECT (posefree-dataparser - Paradigm A)"
             elif pfgs_dataparser.lower() in ["opensfm", "handoff"]:
-                dp_disp = "SFM HANDOFF (opensfm-dataparser)"
+                dp_disp = "SFM HANDOFF (opensfm-dataparser [100% GPU])"
             elif pfgs_dataparser.lower() in ["ob3d", "egocentric"]:
                 dp_disp = "OB3D BENCHMARK (ob3d-dataparser)"
             else:
                 dp_disp = pfgs_dataparser.upper()
             progress_callback(f" Dataparser:  {dp_disp}")
-            progress_callback(f" Filter Sky:  {'Enabled' if pfgs_filter_sky else 'Disabled'}")
+            progress_callback(f" Match Views: {f'{pfgs_match_views} Keyframes' if pfgs_match_views > 0 else 'All Views (O(N²))'}")
+            progress_callback(f" Filter Sky:  {f'Enabled (>{pfgs_sky_depth:.0f}m)' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
 
     # Ensure dataset has images extracted if raw video was supplied
@@ -1196,7 +1227,12 @@ def run_3dgs_training(
             iterations=iterations,
             depth_type=pfgs_depth,
             dataparser_mode=pfgs_dataparser,
+            spherical_aware=pfgs_spherical,
+            consist_aware=pfgs_consist,
+            inlier_growth=pfgs_inlier,
+            align_depth=pfgs_align_depth,
             filter_sky=pfgs_filter_sky,
+            sky_depth=pfgs_sky_depth,
             match_views=pfgs_match_views,
             densify_views=pfgs_densify_views,
             sh_degree=sh_degree,
@@ -1229,10 +1265,20 @@ if __name__ == "__main__":
     parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, help="Spherical Harmonics degree")
     parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Depth prior for PFGS360")
-    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 (auto, opensfm, ob3d, odgs)")
-    parser.add_argument("--pfgs_filter_sky", action="store_true", default=True, help="Filter sky in PFGS360")
-    parser.add_argument("--pfgs_match_views", type=int, default=0, help="Window size for PFGS360 pose matching")
-    parser.add_argument("--pfgs_densify_views", type=int, default=0, help="Window size for PFGS360 densification")
+    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 (auto, opensfm, posefree, ob3d, odgs)")
+    parser.add_argument("--pfgs_filter_sky", dest="pfgs_filter_sky", action="store_true", default=True, help="Filter sky in PFGS360")
+    parser.add_argument("--no_pfgs_filter_sky", dest="pfgs_filter_sky", action="store_false", help="Disable sky filtering in PFGS360")
+    parser.add_argument("--pfgs_sky_depth", type=float, default=50.0, help="Max depth threshold for sky filtering in meters (default: 50.0)")
+    parser.add_argument("--pfgs_match_views", type=int, default=8, help="Sliding window size for PFGS360 pose matching (default: 8; 0 for all views)")
+    parser.add_argument("--pfgs_densify_views", type=int, default=8, help="Sliding window size for PFGS360 densification (default: 8; 0 for all views)")
+    parser.add_argument("--pfgs_spherical", dest="pfgs_spherical", action="store_true", default=True, help="Enable SCA-PE spherical coordinate positional encoding")
+    parser.add_argument("--no_pfgs_spherical", dest="pfgs_spherical", action="store_false", help="Disable SCA-PE")
+    parser.add_argument("--pfgs_consist", dest="pfgs_consist", action="store_true", default=True, help="Enable consist-aware epipolar masks")
+    parser.add_argument("--no_pfgs_consist", dest="pfgs_consist", action="store_false", help="Disable consist-aware")
+    parser.add_argument("--pfgs_inlier", dest="pfgs_inlier", action="store_true", default=True, help="Enable DIA-Densify depth inlier growth")
+    parser.add_argument("--no_pfgs_inlier", dest="pfgs_inlier", action="store_false", help="Disable DIA-Densify")
+    parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
+    parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
 
     args = parser.parse_args()
 

@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.1
+Abu Align & Train Version 0.0.3.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -200,7 +200,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.2 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -334,11 +334,16 @@ class AbuAlignApp:
         self.grut_sh_var = tk.StringVar(value="3")
 
         # PFGS360 (CVPR 2026) Specific Options
-        self.pfgs_depth_var = tk.StringVar(value="unik3d")
+        self.pfgs_depth_var = tk.StringVar(value="UniK3D")
         self.pfgs_dataparser_var = tk.StringVar(value="auto")
-        self.pfgs_filter_sky_var = tk.BooleanVar(value=True)
+        self.pfgs_match_views_var = tk.StringVar(value="8 (Sliding Window - Fast & Smooth)")
+        self.pfgs_densify_views_var = tk.StringVar(value="8")
         self.pfgs_spherical_var = tk.BooleanVar(value=True)
+        self.pfgs_consist_var = tk.BooleanVar(value=True)
         self.pfgs_inlier_var = tk.BooleanVar(value=True)
+        self.pfgs_align_depth_var = tk.BooleanVar(value=True)
+        self.pfgs_filter_sky_var = tk.BooleanVar(value=True)
+        self.pfgs_sky_depth_var = tk.StringVar(value="50.0")
         self.pfgs_sh_var = tk.StringVar(value="3")
 
         # Legacy aliases for backward compatibility
@@ -404,7 +409,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.3.1",
+            text="v0.0.3.2",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -1105,7 +1110,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.3.1 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.3.2 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1615,45 +1620,74 @@ class AbuAlignApp:
         # Col A: Dataparser & Alignment Handoff
         pfgs_col1 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
         pfgs_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(pfgs_col1, text="Dataparser / Handoff Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect [Recommended: 100% GPU with Pre-Aligned Poses]", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        tk.Label(pfgs_col1, text="Dataparser & Alignment Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect [100% GPU with Pre-Aligned Poses]", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d1.pack(anchor="w")
         rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff [Instant 100% GPU]", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d2.pack(anchor="w")
-        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct [Unposed Video only - CPU Pose Phase]", variable=self.pfgs_dataparser_var, value="posefree", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct [Unposed Video - CPU Matching]", variable=self.pfgs_dataparser_var, value="posefree", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d3.pack(anchor="w")
-        ToolTip(rb_pfgs_d1, "Auto-Detect [Recommended Default]:\nChecks if pre-aligned camera poses exist (OpenSfM, 360DVO, or COLMAP).\n• If found: loads poses in <0.5s and runs 100% RTX 4090 GPU training immediately!\n• If unposed video: runs direct pose-free registration on CPU.")
-        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading pre-aligned poses from reconstruction.json or transforms.json.\n• Bypasses CPU matching phase completely.\n• Maximizes RTX 4090 CUDA GPU utilization from step 0.")
-        ToolTip(rb_pfgs_d3, "Pose-Free Direct [CVPR 2026 Paradigm A]:\nFor raw unaligned video clips without any prior SfM.\n• Warning: Computes relative poses progressively on CPU before training,\ncausing lower GPU utilization (10-25%) until camera poses are resolved.")
+        tk.Label(pfgs_col1, text="⚡ Auto-Route: 100% GPU if poses exist", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 0))
+        ToolTip(rb_pfgs_d1, "Auto-Detect [Recommended Default]:\nChecks if pre-aligned camera poses exist (OpenSfM, 360DVO, or COLMAP).\n• If found: loads poses in <0.5s and engages 100% RTX 4090 CUDA GPU training immediately!\n• If unposed video: engages pose-free sliding-window matching.")
+        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading pre-aligned poses from reconstruction.json or transforms.json.\n• Bypasses CPU SIFT matching phase completely.\n• Maximizes RTX 4090 CUDA GPU utilization from step 0.")
+        ToolTip(rb_pfgs_d3, "Pose-Free Direct [CVPR 2026 Paradigm A]:\nFor raw unaligned video clips without any prior SfM.\n• Solves relative camera poses using spherical bearing disparity.\n• Use Match Views = 8 to prevent CPU freeze.")
 
-        # Col B: Depth Prior Model & Spherical Geometry
+        # Col B: Depth Prior Model & Optimization Window
         pfgs_col2 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
         pfgs_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(pfgs_col2, text="Depth Prior & Spherical Geometry:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        tk.Label(pfgs_col2, text="Depth Prior & Pose Optimization:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
 
         depth_row = tk.Frame(pfgs_col2, bg=self.panel_bg)
-        depth_row.pack(anchor="w", pady=(2, 2))
-        tk.Label(depth_row, text="Depth Model:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        depth_cb = ttk.Combobox(depth_row, textvariable=self.pfgs_depth_var, values=["UniK3D", "midas", "zoedepth"], state="readonly", width=10)
-        depth_cb.pack(side=tk.LEFT, padx=4)
+        depth_row.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_depth = tk.Label(depth_row, text="Depth Prior:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_depth.pack(side=tk.LEFT)
+        depth_cb = ttk.Combobox(depth_row, textvariable=self.pfgs_depth_var, values=["UniK3D", "midas", "zoedepth"], state="readonly", width=9, font=("Segoe UI", 8))
+        depth_cb.pack(side=tk.LEFT)
+        ToolTip(lbl_depth, "Monocular depth estimation prior model for spherical backprojection.")
         ToolTip(depth_cb, "Depth Prior Model:\n• UniK3D [CVPR 2026 Recommended]: Geometrically consistent omnidirectional spherical depth prior.\n• midas: Multi-condition robust monocular depth.\n• zoedepth: Metric relative zero-shot depth estimation.")
+
+        mv_row = tk.Frame(pfgs_col2, bg=self.panel_bg)
+        mv_row.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_mv = tk.Label(mv_row, text="Match Views:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_mv.pack(side=tk.LEFT)
+        mv_cb = ttk.Combobox(mv_row, textvariable=self.pfgs_match_views_var, values=["8 (Sliding Window - Fast & Smooth)", "4 (Quickest Window)", "16 (Wide Window)", "0 (All Views - Slow O(N²))"], state="readonly", width=18, font=("Segoe UI", 8))
+        mv_cb.pack(side=tk.LEFT)
+        ToolTip(lbl_mv, "Number of recent keyframes used for pairwise relative camera pose matching.")
+        ToolTip(mv_cb, "Match Views Window Size:\n• 8 [Recommended]: Fast sliding-window matching (O(N·K)). Eliminates CPU bottleneck and keeps GPU at 100% power.\n• 4: Quickest window for fast-moving cameras.\n• 16: Wider window for high-overlap loop closure.\n• 0: Matches against ALL visited views (O(N²) CPU SIFT, causes slow training).")
+
+        dens_row = tk.Frame(pfgs_col2, bg=self.panel_bg)
+        dens_row.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_dens = tk.Label(dens_row, text="Densify Views:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_dens.pack(side=tk.LEFT)
+        dens_cb = ttk.Combobox(dens_row, textvariable=self.pfgs_densify_views_var, values=["8", "4", "16", "0"], state="readonly", width=6, font=("Segoe UI", 8))
+        dens_cb.pack(side=tk.LEFT)
+        ToolTip(lbl_dens, "Number of recent frames used to compute depth inliers and outliers during DIA densification.")
+        ToolTip(dens_cb, "Number of recent frames used to compute depth inliers and outliers during DIA densification (8 recommended).")
 
         pfgs_sph_chk = tk.Checkbutton(pfgs_col2, text="SCA-PE (Spherical Coords PE)", variable=self.pfgs_spherical_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         pfgs_sph_chk.pack(anchor="w")
         ToolTip(pfgs_sph_chk, "Spherical Coordinate Aware Positional Encoding (SCA-PE):\nMaps Gaussians directly across omnidirectional spherical coordinates to eliminate pole pinch distortion.")
 
-        pfgs_inlier_chk = tk.Checkbutton(pfgs_col2, text="DIA-Densify (Inlier Depth Growth)", variable=self.pfgs_inlier_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        pfgs_consist_chk = tk.Checkbutton(pfgs_col2, text="Consist-Aware (Epipolar Masking)", variable=self.pfgs_consist_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        pfgs_consist_chk.pack(anchor="w")
+        ToolTip(pfgs_consist_chk, "Epipolar Consistency Masks:\nDiscards occluded and dynamic moving pixels from camera pose estimation.")
+
+        # Col C: DIA-Densify, Sky Mask & Export
+        pfgs_col3 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
+        pfgs_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(pfgs_col3, text="DIA-Densify, Sky Mask & SH:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        pfgs_inlier_chk = tk.Checkbutton(pfgs_col3, text="DIA-Densify (Inlier Depth Growth)", variable=self.pfgs_inlier_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         pfgs_inlier_chk.pack(anchor="w")
         ToolTip(pfgs_inlier_chk, "Depth Inlier Aware Densification (DIA-Densify):\nUses depth-consistent backprojected inliers to guide 3D Gaussian splitting and cloning.")
 
-        # Col C: Sky Masking & Viewport
-        pfgs_col3 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
-        pfgs_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(pfgs_col3, text="Optics, Sky Mask & Export:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        pfgs_align_chk = tk.Checkbutton(pfgs_col3, text="Align Monocular Depth with Poses", variable=self.pfgs_align_depth_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        pfgs_align_chk.pack(anchor="w")
+        ToolTip(pfgs_align_chk, "Align Depth:\nOptimizes affine scale and shift between monocular depth priors and rendered internal depth.")
 
-        sky_chk = tk.Checkbutton(pfgs_col3, text="Filter Sky & Infinity Pixels", variable=self.pfgs_filter_sky_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        sky_chk = tk.Checkbutton(pfgs_col3, text="Filter Sky & Infinity Pixels (>50m)", variable=self.pfgs_filter_sky_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         sky_chk.pack(anchor="w")
-        ToolTip(sky_chk, "Sky Filtering:\nFilters out distant sky / infinite distance pixels to prevent floaters in outdoor 360° panoramas.")
+        ToolTip(sky_chk, "Sky Filtering:\nFilters out distant sky / infinite distance pixels (>50m) to prevent floaters in outdoor 360° panoramas.")
 
         pfgs_sh_row = tk.Frame(pfgs_col3, bg=self.panel_bg)
         pfgs_sh_row.pack(anchor="w", pady=(2, 2))
@@ -3740,6 +3774,13 @@ class AbuAlignApp:
             return 15000
         return 30000
 
+    def _parse_pfgs_match_views(self):
+        raw = str(self.pfgs_match_views_var.get()).strip()
+        digits = re.findall(r"\d+", raw)
+        if digits:
+            return int(digits[0])
+        return 8
+
     def _clear_dataset_cache(self):
         dataset_path = self.dataset_var.get().strip()
         if not os.path.isdir(dataset_path):
@@ -4005,12 +4046,30 @@ class AbuAlignApp:
             cmd.extend([
                 "--pfgs_depth", self.pfgs_depth_var.get().lower(),
                 "--pfgs_dataparser", self.pfgs_dataparser_var.get(),
+                "--pfgs_match_views", str(self._parse_pfgs_match_views()),
+                "--pfgs_densify_views", str(self.pfgs_densify_views_var.get()).strip(),
                 "--sh_degree", str(self.pfgs_sh_var.get()),
             ])
             if self.pfgs_filter_sky_var.get():
                 cmd.append("--pfgs_filter_sky")
             else:
                 cmd.append("--no_pfgs_filter_sky")
+            if self.pfgs_spherical_var.get():
+                cmd.append("--pfgs_spherical")
+            else:
+                cmd.append("--no_pfgs_spherical")
+            if self.pfgs_consist_var.get():
+                cmd.append("--pfgs_consist")
+            else:
+                cmd.append("--no_pfgs_consist")
+            if self.pfgs_inlier_var.get():
+                cmd.append("--pfgs_inlier")
+            else:
+                cmd.append("--no_pfgs_inlier")
+            if self.pfgs_align_depth_var.get():
+                cmd.append("--pfgs_align_depth")
+            else:
+                cmd.append("--no_pfgs_align_depth")
 
         if force_auto_train or self.auto_train_var.get():
             cmd.append("--train")
@@ -4135,10 +4194,30 @@ class AbuAlignApp:
             cmd.extend([
                 "--pfgs_depth", self.pfgs_depth_var.get().lower(),
                 "--pfgs_dataparser", self.pfgs_dataparser_var.get(),
+                "--pfgs_match_views", str(self._parse_pfgs_match_views()),
+                "--pfgs_densify_views", str(self.pfgs_densify_views_var.get()).strip(),
                 "--sh_degree", str(self.pfgs_sh_var.get()),
             ])
             if self.pfgs_filter_sky_var.get():
                 cmd.append("--pfgs_filter_sky")
+            else:
+                cmd.append("--no_pfgs_filter_sky")
+            if self.pfgs_spherical_var.get():
+                cmd.append("--pfgs_spherical")
+            else:
+                cmd.append("--no_pfgs_spherical")
+            if self.pfgs_consist_var.get():
+                cmd.append("--pfgs_consist")
+            else:
+                cmd.append("--no_pfgs_consist")
+            if self.pfgs_inlier_var.get():
+                cmd.append("--pfgs_inlier")
+            else:
+                cmd.append("--no_pfgs_inlier")
+            if self.pfgs_align_depth_var.get():
+                cmd.append("--pfgs_align_depth")
+            else:
+                cmd.append("--no_pfgs_align_depth")
 
         self._log(f"Executing Standalone 3DGS Training: {' '.join(cmd)}\n")
         self._log(f"Session Log: {self.active_log_path}\n\n")
@@ -4154,7 +4233,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4465,7 +4544,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.1 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4739,7 +4818,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.1\n"
+            "Abu Align & Train - Version 0.0.3.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
