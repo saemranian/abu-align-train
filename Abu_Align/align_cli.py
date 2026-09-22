@@ -77,8 +77,8 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.9 - Neural Photogrammetry & 3DGS Training
-   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
+   Abu Align & Train v0.0.2.0 - Neural Photogrammetry & 3DGS Training
+   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | Mapillary OpenSfM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
 """
@@ -980,8 +980,13 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
-    parser.add_argument("--output_dir", "-o", type=str, default=None, help="Custom output directory for sparse COLMAP files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), or 'pycusfm' (NVIDIA Isaac cuSFM)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), or 'opensfm' (Mapillary 360 & Street SfM)")
+    # OpenSfM 360 & Spherical Photogrammetry Options
+    parser.add_argument("--projection", type=str, choices=["auto", "equirectangular", "spherical", "perspective", "fisheye"], default="equirectangular", help="Camera projection model for OpenSfM (default: equirectangular for 360 panos)")
+    parser.add_argument("--opensfm_feature", type=str, choices=["sift", "hahog", "orb", "akaze"], default="sift", help="Feature extractor for OpenSfM (default: sift)")
+    parser.add_argument("--opensfm_matcher", type=str, choices=["words", "flann", "exhaustive"], default="words", help="Feature matcher for OpenSfM (default: words)")
+    parser.add_argument("--cubemap_transcode", action="store_true", help="Automatically slice 360 equirectangular images into 6 rectilinear pinhole cubemaps")
+    parser.add_argument("--cubemap_res", type=int, default=1024, help="Resolution per cubemap face (default: 1024)")
     parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
@@ -1092,6 +1097,32 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     print(f"      * Target Output: {output_dir}")
     print()
+
+    # 360° Equirectangular Cubemap Transcoding (if requested or auto-detected for non-OpenSfM engines)
+    is_equirectangular = (orig_w == 2 * orig_h)
+    if getattr(args, "cubemap_transcode", False) or (is_equirectangular and args.engine not in ["opensfm"]):
+        print("      * [360 TRANSCODER] Equirectangular 360° panoramas detected.")
+        print(f"      * Transcoding into 6 rectilinear 90° pinhole cubemaps (Face size: {args.cubemap_res}px)...")
+        from equirectangular_transcoder import transcode_dataset
+        cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
+        total_saved, msg = transcode_dataset(
+            input_dir=scan_dir,
+            output_dir=cubemap_dir,
+            face_size=args.cubemap_res
+        )
+        print(f"      * {msg}")
+        cubemap_paths = sorted([
+            os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
+            if os.path.splitext(f.lower())[1] in valid_exts
+        ])
+        if cubemap_paths:
+            image_paths = cubemap_paths
+            num_frames = len(image_paths)
+            scan_dir = cubemap_dir
+            with Image.open(image_paths[0]) as sample_img:
+                orig_w, orig_h = sample_img.size
+            print(f"      * Transcoded Pinhole Keyframes: {num_frames} ({orig_w}x{orig_h})")
+            print()
 
     # -------------------------------------------------------------
     # Stage 2: Load Model & GPU Environment
@@ -1241,6 +1272,61 @@ def main():
         print()
         print(f"      * PyCuSFM Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
         print()
+    elif engine in ["opensfm"]:
+        print("[3/5] Starting Mapillary OpenSfM Spherical & Street-Scale Engine...")
+        print(f"      * Projection Type:   {args.projection.upper()}")
+        print(f"      * Feature Extractor: {args.opensfm_feature.upper()}")
+        print(f"      * Matcher:           {args.opensfm_matcher.upper()}")
+        inf_start = time.time()
+
+        from opensfm_engine import OpenSfMEngine
+        opensfm = OpenSfMEngine(
+            dataset_path=scan_dir,
+            output_dir=os.path.join(output_dir, "opensfm_workspace"),
+            projection_type=args.projection,
+            feature_type=args.opensfm_feature,
+            matcher_type=args.opensfm_matcher
+        )
+
+        if opensfm.opensfm_bin is not None:
+            opensfm.setup_workspace(image_paths)
+            success = opensfm.run_pipeline()
+            if success:
+                import pycolmap
+                colmap_out = os.path.join(opensfm.output_dir, "colmap")
+                if not os.path.isdir(colmap_out):
+                    colmap_out = os.path.join(opensfm.output_dir, "sparse")
+                if os.path.isdir(colmap_out):
+                    reconstruction = pycolmap.Reconstruction(colmap_out)
+                else:
+                    reconstruction = pycolmap.Reconstruction()
+                dense_3d = np.empty((0, 3), dtype=np.float32)
+                dense_rgb = np.empty((0, 3), dtype=np.uint8)
+            else:
+                raise RuntimeError("OpenSfM pipeline execution encountered an error.")
+        else:
+            print("      * [NOTICE] Native OpenSfM CLI not found on local system PATH.")
+            print("      * [AUTO-FALLBACK] Slicing 360° Equirectangular images into 6 Rectilinear Pinhole Cubemaps...")
+            from equirectangular_transcoder import transcode_dataset
+            cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
+            total_saved, msg = transcode_dataset(
+                input_dir=scan_dir,
+                output_dir=cubemap_dir,
+                face_size=args.cubemap_res
+            )
+            print(f"      * {msg}")
+            cubemap_paths = sorted([
+                os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
+                if os.path.splitext(f.lower())[1] in valid_exts
+            ])
+            reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
+                "vggt_omega", model, cubemap_paths, len(cubemap_paths), len(cubemap_paths), device, dtype, vggt_res, args
+            )
+
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * OpenSfM Reconstruction Finished in: {inf_elapsed:.2f}s")
+        print()
     else:
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
             engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
@@ -1353,11 +1439,12 @@ def main():
     # Human-readable labels for selected GUI / CLI settings
     engine_labels = {
         "vggt_omega": "VGGT-Omega (Fast, Low VRAM)",
-        "vggt": "VGGT Standard 1B (Global Attention)",
+        "vggt": "VGGT-Omega (Fast, Low VRAM)",
         "acezero": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
         "ace0": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
         "pycusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
         "cusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
+        "opensfm": "Mapillary OpenSfM (360° Spherical & Street SfM)",
     }
     align_engine_label = engine_labels.get(str(args.engine).lower(), str(args.engine))
 
@@ -1416,6 +1503,13 @@ def main():
             f"   * Pose Initializer:        {args.cusfm_init.upper()}",
             f"   * cuDSS BA Iterations:     {args.cusfm_ba_iterations}",
             f"   * Point Cloud Output:      {'Colorized RGB Tie Points' if getattr(args, 'cusfm_rgb', True) else 'Geometric Sparse'}",
+        ])
+    elif engine in ["opensfm"]:
+        report_lines.extend([
+            f"   * Camera Projection:       {args.projection.upper()}",
+            f"   * Feature Detector:        {args.opensfm_feature.upper()}",
+            f"   * Feature Matcher:         {args.opensfm_matcher.upper()}",
+            f"   * 360 Cubemap Transcode:   {'Active (' + str(args.cubemap_res) + 'px)' if getattr(args, 'cubemap_transcode', False) else 'Native Spherical S²'}",
         ])
     else:
         report_lines.extend([

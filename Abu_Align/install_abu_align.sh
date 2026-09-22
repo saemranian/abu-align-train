@@ -66,7 +66,22 @@ if [ -d "../vggt-omega" ] && [ -f "../vggt-omega/setup.py" ]; then
     pip install -e "../vggt-omega" --no-deps
 fi
 
-# 6. Create convenient launcher script
+# 6. Install Mapillary OpenSfM (360° Spherical Photogrammetry)
+echo "[*] Installing Mapillary OpenSfM..."
+pip install pyyaml joblib scikit-image || true
+if ! command -v opensfm >/dev/null 2>&1; then
+    if [ ! -d "OpenSfM" ]; then
+        git clone --recursive https://github.com/mapillary/OpenSfM.git || true
+    fi
+    if [ -d "OpenSfM" ]; then
+        cd OpenSfM
+        python setup.py build || true
+        pip install -e . || true
+        cd ..
+    fi
+fi
+
+# 7. Create convenient launcher script
 cat << 'EOF' > run_abu_align.sh
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

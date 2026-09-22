@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.1.9
+Abu Align & Train Version 0.0.2.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT, VGGT-Omega, Niantic Labs ACE0, and NVIDIA Isaac PyCuSFM with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
 """
@@ -199,7 +199,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.1.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.0 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -273,6 +273,12 @@ class AbuAlignApp:
         self.cusfm_init_var = tk.StringVar(value="omega")
         self.cusfm_ba_var = tk.StringVar(value="100")
         self.cusfm_rgb_var = tk.BooleanVar(value=True)
+
+        # OpenSfM 360 & Spherical Specific Options
+        self.opensfm_proj_var = tk.StringVar(value="equirectangular")
+        self.opensfm_feat_var = tk.StringVar(value="sift")
+        self.opensfm_transcode_var = tk.BooleanVar(value=True)
+        self.opensfm_matcher_var = tk.StringVar(value="words")
 
         # Cache & Windowing Options
         self.cache_var = tk.BooleanVar(value=True)
@@ -364,7 +370,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.1.9",
+            text="v0.0.2.0",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -469,10 +475,13 @@ class AbuAlignApp:
         rb_ace0.pack(anchor="w")
         rb_cusfm = tk.Radiobutton(col1, text="NVIDIA PyCuSFM (cuSFM GPU)", variable=self.engine_var, value="pycusfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_cusfm.pack(anchor="w")
+        rb_opensfm = tk.Radiobutton(col1, text="Mapillary OpenSfM (360° Spherical)", variable=self.engine_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_opensfm.pack(anchor="w")
 
         ToolTip(rb_omega, "VGGT-Omega (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
         ToolTip(rb_ace0, "ACE0 (Niantic Labs ECCV 2024): Learning-based Structure-from-Motion. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
         ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA SfM framework by NVIDIA Isaac. Learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and cuDSS sparse bundle adjustment.")
+        ToolTip(rb_opensfm, "Mapillary OpenSfM: Native 360° equirectangular spherical bundle adjustment on unit bearing S² manifold. Designed for full spherical panoramas, street-level trajectories, and multi-camera rigs.")
 
         sub_row = tk.Frame(col1, bg=self.panel_bg)
         sub_row.pack(anchor="w", pady=(4, 0))
@@ -1011,7 +1020,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.1.9 Ready.\nTriple Alignment Engines: VGGT-Omega, ACE0, & NVIDIA PyCuSFM.\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.0 Ready.\nQuad Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, & Mapillary OpenSfM (360° Spherical).\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1166,11 +1175,59 @@ class AbuAlignApp:
         cu_rgb_chk.pack(anchor="w")
         ToolTip(cu_rgb_chk, "Dense RGB Colorization:\nProjects aligned 3D points back onto source photos to extract accurate RGB colors for 3DGS seed initialization.")
 
+        # =========================================================================
+        # 4. Mapillary OpenSfM Subpanel (360° Spherical & Street SfM)
+        # =========================================================================
+        self.panel_align_opensfm = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Projection / Camera Model
+        osfm_col1 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
+        osfm_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(osfm_col1, text="Camera Projection Model:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_op_p1 = tk.Radiobutton(osfm_col1, text="Equirectangular 360° (Spherical S²)", variable=self.opensfm_proj_var, value="equirectangular", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_op_p1.pack(anchor="w")
+        rb_op_p2 = tk.Radiobutton(osfm_col1, text="Perspective Pinhole (Rectilinear)", variable=self.opensfm_proj_var, value="perspective", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_op_p2.pack(anchor="w")
+        rb_op_p3 = tk.Radiobutton(osfm_col1, text="Fisheye (Ultra-Wide 180°+)", variable=self.opensfm_proj_var, value="fisheye", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_op_p3.pack(anchor="w")
+        ToolTip(rb_op_p1, "Equirectangular 360°:\nNative spherical bundle adjustment on unit bearing vectors (S² manifold).\nOptimizes 360 full-sphere panoramas without polar distortion.")
+        ToolTip(rb_op_p2, "Perspective Pinhole:\nStandard rectilinear pinhole model for DSLR, drone, and smartphone cameras.")
+        ToolTip(rb_op_p3, "Fisheye Model:\nRadial equidistant lens projection handling field-of-view up to 220°.")
+
+        # Col B: Features & Matcher Strategy
+        osfm_col2 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
+        osfm_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(osfm_col2, text="Features & Matcher Strategy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        f_row = tk.Frame(osfm_col2, bg=self.panel_bg)
+        f_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(f_row, text="Feature:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_feat_cb = ttk.Combobox(f_row, textvariable=self.opensfm_feat_var, values=["sift", "hahog", "orb"], state="readonly", width=8)
+        osfm_feat_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(osfm_feat_cb, "Feature Extractor:\n• SIFT: High-precision scale invariant features.\n• HAHOG: Fast Hessian-Affine + Histogram of Gradients (Mapillary street standard).\n• ORB: Fast binary feature extractor.")
+
+        m_row = tk.Frame(osfm_col2, bg=self.panel_bg)
+        m_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(m_row, text="Matcher:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_match_cb = ttk.Combobox(m_row, textvariable=self.opensfm_matcher_var, values=["words", "flann", "exhaustive"], state="readonly", width=10)
+        osfm_match_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(osfm_match_cb, "Matcher Strategy:\n• words: Visual Bag-of-Words vocabulary tree indexing.\n• flann: Fast approximate nearest neighbors.\n• exhaustive: Full pairwise matching.")
+
+        # Col C: 360° Cubemap Transcoding & 3DGS Bridge
+        osfm_col3 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
+        osfm_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(osfm_col3, text="360° to 3DGS Training Bridge:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        tc_chk = tk.Checkbutton(osfm_col3, text="⚡ Auto-Transcode 6-Face Cubemaps", variable=self.opensfm_transcode_var, font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        tc_chk.pack(anchor="w", pady=(2, 4))
+        ToolTip(tc_chk, "Auto-Transcode 6-Face Pinhole Cubemap:\nConverts 360° spherical panoramas into 6 distortion-free rectilinear 90° views.\nEnables immediate Gaussian Splatting training in LichtFeld Studio & Nerfstudio Splatfacto.")
+
     def _update_align_panel(self):
         engine = self.engine_var.get()
         self.panel_align_vggt.pack_forget()
         self.panel_align_ace0.pack_forget()
         self.panel_align_pycusfm.pack_forget()
+        if hasattr(self, "panel_align_opensfm"):
+            self.panel_align_opensfm.pack_forget()
 
         if engine in ["vggt_omega", "vggt"]:
             self.panel_align_vggt.pack(fill=tk.BOTH, expand=True)
@@ -1178,6 +1235,8 @@ class AbuAlignApp:
             self.panel_align_ace0.pack(fill=tk.BOTH, expand=True)
         elif engine == "pycusfm":
             self.panel_align_pycusfm.pack(fill=tk.BOTH, expand=True)
+        elif engine == "opensfm":
+            self.panel_align_opensfm.pack(fill=tk.BOTH, expand=True)
 
     def _build_train_panels(self):
         """Creates the 3 engine-specific training panels inside self.train_dynamic_container."""
@@ -1566,6 +1625,14 @@ class AbuAlignApp:
                 cmd.append("--cusfm_rgb")
             else:
                 cmd.append("--no_cusfm_rgb")
+        elif align_engine == "opensfm":
+            cmd.extend([
+                "--projection", self.opensfm_proj_var.get(),
+                "--opensfm_feature", self.opensfm_feat_var.get(),
+                "--opensfm_matcher", self.opensfm_matcher_var.get(),
+            ])
+            if self.opensfm_transcode_var.get():
+                cmd.append("--cubemap_transcode")
 
         # Active 3DGS Training Engine Options (logged in report, executed if auto-train enabled)
         train_engine = self.train_engine_var.get()
@@ -1708,7 +1775,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.1.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -2013,7 +2080,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.1.9 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.0 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -2230,7 +2297,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.1.9\n"
+            "Abu Align & Train - Version 0.0.2.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, & NVIDIA Isaac PyCuSFM\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"
