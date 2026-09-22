@@ -28,9 +28,9 @@ import re
 import subprocess
 from typing import Tuple, List
 
-VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION.txt")
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")) if os.path.basename(os.path.dirname(os.path.abspath(__file__))) == "Abu_Align" else os.path.dirname(os.path.abspath(__file__))
-ABU_ALIGN_DIR = os.path.join(ROOT_DIR, "Abu_Align")
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION_FILE = os.path.join(ROOT_DIR, "VERSION.txt")
+VERSIONS_DIR = os.path.join(ROOT_DIR, "versions")
 
 
 def parse_version(ver_str: str) -> Tuple[int, int, int, int]:
@@ -66,35 +66,57 @@ def increment_base10(digits: Tuple[int, int, int, int]) -> Tuple[int, int, int, 
 
 
 def get_current_version() -> str:
-    """Reads current version from VERSION.txt or defaults to 0.0.1.3."""
-    v_paths = [
-        os.path.join(ABU_ALIGN_DIR, "VERSION.txt"),
-        os.path.join(ROOT_DIR, "VERSION.txt"),
-        VERSION_FILE,
-    ]
-    for p in v_paths:
-        if os.path.isfile(p):
-            with open(p, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    return content.lstrip("vV")
-    return "0.0.1.3"
+    """Reads current version from VERSION.txt or defaults to 0.0.3.4."""
+    if os.path.isfile(VERSION_FILE):
+        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if content:
+                return content.lstrip("vV")
+    return "0.0.3.4"
 
 
 def save_current_version(ver_str: str) -> None:
-    """Persists version string to VERSION.txt in both locations."""
+    """Persists version string to VERSION.txt."""
     clean = ver_str.strip().lstrip("vV")
-    v_paths = [
-        os.path.join(ABU_ALIGN_DIR, "VERSION.txt"),
-        os.path.join(ROOT_DIR, "VERSION.txt"),
+    try:
+        with open(VERSION_FILE, "w", encoding="utf-8") as f:
+            f.write(clean + "\n")
+    except Exception as e:
+        print(f"[VersionManager Warning] Failed to write to {VERSION_FILE}: {e}")
+
+
+def create_version_snapshot(version_str: str) -> None:
+    """Creates a snapshot folder in versions/vX.Y.Z.W archiving core code."""
+    import shutil
+    target_dir = os.path.join(VERSIONS_DIR, f"v{version_str}")
+    os.makedirs(target_dir, exist_ok=True)
+    snapshot_files = [
+        "abu_align_gui.py",
+        "align_cli.py",
+        "train_engine.py",
+        "opensfm_engine.py",
+        "360dvo_engine.py",
+        "dvo360_engine.py",
+        "acezero_engine.py",
+        "pycusfm_engine.py",
+        "cache_manager.py",
+        "video_extractor.py",
+        "panoramic_splitter.py",
+        "equirectangular_transcoder.py",
+        "version_manager.py",
+        "VERSION.txt",
+        "Abu_Align_and_Train.bat",
+        "Abu_Align_and_Train.exe",
+        "launcher.cs"
     ]
-    for p in set(v_paths):
-        try:
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                f.write(clean + "\n")
-        except Exception as e:
-            print(f"[VersionManager Warning] Failed to write to {p}: {e}")
+    for sf in snapshot_files:
+        src = os.path.join(ROOT_DIR, sf)
+        dst = os.path.join(target_dir, sf)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, dst)
+            except Exception:
+                pass
 
 
 def sync_files_with_version(new_version: str) -> List[str]:
@@ -107,23 +129,13 @@ def sync_files_with_version(new_version: str) -> List[str]:
 
     updated_files = []
 
-    # Files to update with regex patterns
+    # Canonical files to update with regex patterns
     targets = [
-        # GUI files
-        os.path.join(ABU_ALIGN_DIR, "abu_align_gui.py"),
         os.path.join(ROOT_DIR, "abu_align_gui.py"),
-        # CLI files
-        os.path.join(ABU_ALIGN_DIR, "align_cli.py"),
         os.path.join(ROOT_DIR, "align_cli.py"),
-        # Train engine files
-        os.path.join(ABU_ALIGN_DIR, "train_engine.py"),
         os.path.join(ROOT_DIR, "train_engine.py"),
-        # Launcher CS
-        os.path.join(ABU_ALIGN_DIR, "launcher.cs"),
-        # Batch files
-        os.path.join(ABU_ALIGN_DIR, "Abu_Align_and_Train.bat"),
+        os.path.join(ROOT_DIR, "launcher.cs"),
         os.path.join(ROOT_DIR, "Abu_Align_and_Train.bat"),
-        os.path.join(ABU_ALIGN_DIR, "Abu_Align.bat"),
         os.path.join(ROOT_DIR, "Abu_Align.bat"),
     ]
 
@@ -147,28 +159,30 @@ def sync_files_with_version(new_version: str) -> List[str]:
         except Exception as e:
             print(f"[VersionManager Warning] Failed to update {file_path}: {e}")
 
-    # Recompile executable launchers
+    # Recompile executable launchers and save VERSION.txt
     recompile_executables(v_clean)
     save_current_version(v_clean)
+    create_version_snapshot(v_clean)
     return updated_files
 
 
 def recompile_executables(version_str: str) -> None:
-    """Recompiles Abu_Align_and_Train.exe and Abu_Align_and_Train_vX.Y.Z.W.exe using csc.exe."""
+    """Recompiles Abu_Align_and_Train.exe and archives Abu_Align_and_Train_vX.Y.Z.W.exe using csc.exe."""
     csc_path = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
     if not os.path.isfile(csc_path):
         print("[VersionManager Warning] csc.exe not found. Skipping C# compilation.")
         return
 
-    launcher_cs = os.path.join(ABU_ALIGN_DIR, "launcher.cs")
+    launcher_cs = os.path.join(ROOT_DIR, "launcher.cs")
     if not os.path.isfile(launcher_cs):
         return
 
+    bin_dir = os.path.join(VERSIONS_DIR, "historical_binaries")
+    os.makedirs(bin_dir, exist_ok=True)
+
     exe_targets = [
-        os.path.join(ABU_ALIGN_DIR, "Abu_Align_and_Train.exe"),
-        os.path.join(ABU_ALIGN_DIR, f"Abu_Align_and_Train_v{version_str}.exe"),
         os.path.join(ROOT_DIR, "Abu_Align_and_Train.exe"),
-        os.path.join(ROOT_DIR, f"Abu_Align_and_Train_v{version_str}.exe"),
+        os.path.join(bin_dir, f"Abu_Align_and_Train_v{version_str}.exe"),
     ]
 
     for exe_out in exe_targets:
