@@ -1451,15 +1451,15 @@ class AbuAlignApp:
         pfgs_col1 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
         pfgs_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(pfgs_col1, text="Dataparser / Handoff Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect (Handoff or Pose-Free)", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect (Smart Route: Handoff vs Pose-Free)", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d1.pack(anchor="w")
-        rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff Parser", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff (Requires SfM)", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d2.pack(anchor="w")
-        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (Omni-Egocentric)", variable=self.pfgs_dataparser_var, value="ob3d", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (No Prior SfM Required)", variable=self.pfgs_dataparser_var, value="ob3d", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d3.pack(anchor="w")
-        ToolTip(rb_pfgs_d1, "Auto-Detect [Recommended]:\nIf OpenSfM or 360DVO reconstruction exists, uses OpenSfM dataparser handoff.\nOtherwise, activates Pose-Free omnidirectional egocentric mode directly from unposed 360° video frames.")
-        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nLoads poses, spherical coordinates, and camera extrinsics from opensfm/reconstruction.json.")
-        ToolTip(rb_pfgs_d3, "Pose-Free Direct:\nTrains directly on unposed 360° equirectangular video frames using joint camera pose solving and UniK3D depth priors without prior SfM.")
+        ToolTip(rb_pfgs_d1, "Auto-Detect [Default]:\nAutomatically checks if an OpenSfM or 360DVO reconstruction exists.\n• If found: routes to OpenSfM handoff.\n• If not found (unposed video): automatically activates Pose-Free Direct mode.")
+        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading poses and extrinsics from opensfm/reconstruction.json.")
+        ToolTip(rb_pfgs_d3, "Pose-Free Direct:\nForces direct joint camera pose estimation and 3DGS training from raw 360° equirectangular video frames without any SfM alignment.")
 
         # Col B: Depth Prior Model & Spherical Geometry
         pfgs_col2 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
@@ -1928,12 +1928,18 @@ class AbuAlignApp:
                 lf.write("=" * 72 + "\n\n")
                 lf.flush()
 
+                sub_env = os.environ.copy()
+                sub_env["PYTHONIOENCODING"] = "utf-8"
+                sub_env["PYTHONUTF8"] = "1"
                 self.worker_process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=sub_env,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 )
 

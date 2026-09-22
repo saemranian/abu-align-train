@@ -163,6 +163,8 @@ scratch/
 Abu_Align/logs/*.log
 !Abu_Align/logs/.gitkeep
 acezero/
+360DVO/
+PFGS360/
 
 # Model weights & Large Checkpoints (Keep out of Git)
 *.pt

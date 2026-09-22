@@ -22,8 +22,15 @@ import re
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List
 
-
-# ----------------------------------------------------------------------
+# Ensure stdout and stderr use UTF-8 on Windows with error replacement
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 # Paths & Environment Detectors
 # ----------------------------------------------------------------------
 LICHTFELD_CANDIDATES = [
@@ -537,10 +544,18 @@ def train_pfgs360(
     Supports both pose-free direct learning and OpenSfM / 360DVO alignment handoff.
     """
     def log(msg):
-        if progress_callback:
-            progress_callback(msg)
-        else:
-            print(msg)
+        s = str(msg)
+        try:
+            if progress_callback:
+                progress_callback(s)
+            else:
+                print(s)
+        except UnicodeEncodeError:
+            clean = s.encode("ascii", errors="replace").decode("ascii")
+            if progress_callback:
+                progress_callback(clean)
+            else:
+                print(clean)
 
     ns_train_exe = get_pfgs360_train_executable()
     ns_export_exe = get_pfgs360_export_executable()
@@ -556,13 +571,25 @@ def train_pfgs360(
     # 1. If opensfm/reconstruction.json exists (from OpenSfM or 360DVO), use opensfm-dataparser
     # 2. Otherwise use ob3d-dataparser for pose-free egocentric frames
     rec_json = os.path.join(dataset_abs, "opensfm", "reconstruction.json")
+    if not os.path.isfile(rec_json):
+        rec_json = os.path.join(dataset_abs, "reconstruction.json")
+
     if dataparser_mode == "auto":
         if os.path.isfile(rec_json):
             active_dp = "opensfm-dataparser"
+            dp_mode_label = "OpenSfM / 360DVO Handoff (opensfm-dataparser)"
         else:
             active_dp = "ob3d-dataparser"
+            dp_mode_label = "Pose-Free Direct (ob3d-dataparser - Egocentric)"
+    elif dataparser_mode in ["ob3d", "posefree", "pose-free"]:
+        active_dp = "ob3d-dataparser"
+        dp_mode_label = "Pose-Free Direct (ob3d-dataparser)"
+    elif dataparser_mode in ["opensfm", "handoff"]:
+        active_dp = "opensfm-dataparser"
+        dp_mode_label = "SfM Handoff (opensfm-dataparser)"
     else:
         active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") else dataparser_mode
+        dp_mode_label = active_dp
 
     # Ensure metadata.json exists if opensfm-dataparser is active
     if active_dp == "opensfm-dataparser":
@@ -574,9 +601,9 @@ def train_pfgs360(
 
     log(f"      * Initializing PFGS360 Engine (CVPR 2026)...")
     log(f"      * ns-train:    {ns_train_exe}")
-    log(f"      * Dataparser:  {active_dp.upper()}")
+    log(f"      * Dataparser:  {dp_mode_label}")
     log(f"      * Depth Prior: {depth_type.upper()} (Omnidirectional)")
-    log(f"      * Spherical:   {'Enabled (S² Manifold)' if spherical_aware else 'Disabled'}")
+    log(f"      * Spherical:   {'Enabled (S^2 Manifold)' if spherical_aware else 'Disabled'}")
     log(f"      * Inlier-Grow: {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
     log(f"      * Filter Sky:  {'Enabled (>50m)' if filter_sky else 'Disabled'}")
     log(f"      * Dataset:     {dataset_abs}")
@@ -630,21 +657,44 @@ def train_pfgs360(
         env=env
     )
 
+    captured_lines = []
     last_report_time = time.time()
     for line in proc.stdout:
         line_s = line.strip()
         if not line_s:
             continue
-        lower = line_s.lower()
+        captured_lines.append(line_s)
+        if len(captured_lines) > 40:
+            captured_lines.pop(0)
+
+        # Sanitize any non-encodable box-drawing characters for legacy consoles
+        clean_line = line_s
+        if sys.platform == "win32":
+            try:
+                clean_line.encode(sys.stdout.encoding or "utf-8")
+            except UnicodeEncodeError:
+                clean_line = clean_line.encode("ascii", errors="replace").decode("ascii")
+
+        lower = clean_line.lower()
         if any(keyword in lower for keyword in ["iter", "step", "loss", "psnr", "point", "viser", "pose", "densify", "depth"]):
             now = time.time()
             if now - last_report_time >= 0.25 or any(k in lower for k in ["done", "finish", "export", "saved"]):
-                log(f"        [PFGS360] {line_s}")
+                log(f"        [PFGS360] {clean_line}")
                 last_report_time = now
+        elif any(keyword in lower for keyword in ["error", "modulenotfounderror", "traceback", "fatal", "unsupported"]):
+            log(f"        [PFGS360-ERR] {clean_line}")
 
     proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"PFGS360 exited with return code {proc.returncode}")
+        err_block = "\n".join(captured_lines[-15:]) if captured_lines else f"Exited with code {proc.returncode}"
+        if "spherical_distortion" in err_block or "No module named" in err_block or "invalid choice: 'pfgs360'" in err_block:
+            missing_pkg = "spherical_distortion" if "spherical_distortion" in err_block else "PFGS360 C++ extensions"
+            raise RuntimeError(
+                f"PFGS360 requires '{missing_pkg}'.\n"
+                f"Please run 'setup_pfgs360.bat' (Windows) or 'setup_pfgs360.sh' (Linux/RunPod) to build extensions.\n"
+                f"Details:\n{err_block}"
+            )
+        raise RuntimeError(f"PFGS360 training failed (exit code {proc.returncode}):\n{err_block}")
 
     # Export Gaussian Splatting .ply if ns-export is available
     config_files = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
@@ -728,7 +778,16 @@ def run_3dgs_training(
         progress_callback(f" SH Degree:   {sh_degree}")
         if "pfgs" in engine_clean:
             progress_callback(f" Depth Model: {pfgs_depth.upper()}")
-            progress_callback(f" Dataparser:  {pfgs_dataparser.upper()}")
+            rec_check = os.path.isfile(os.path.join(dataset_dir, "opensfm", "reconstruction.json")) or os.path.isfile(os.path.join(dataset_dir, "reconstruction.json"))
+            if pfgs_dataparser.lower() == "auto":
+                dp_disp = "AUTO (Auto-Routed: OpenSfM / 360DVO Handoff)" if rec_check else "AUTO (Auto-Routed: Pose-Free Direct [ob3d])"
+            elif pfgs_dataparser.lower() in ["ob3d", "posefree", "pose-free"]:
+                dp_disp = "POSE-FREE DIRECT (ob3d-dataparser)"
+            elif pfgs_dataparser.lower() in ["opensfm", "handoff"]:
+                dp_disp = "SFM HANDOFF (opensfm-dataparser)"
+            else:
+                dp_disp = pfgs_dataparser.upper()
+            progress_callback(f" Dataparser:  {dp_disp}")
             progress_callback(f" Filter Sky:  {'Enabled' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
 
