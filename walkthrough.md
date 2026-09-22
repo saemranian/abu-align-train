@@ -1,135 +1,89 @@
-# Abu Align & Train v0.0.2.6 Walkthrough: Professional 360° Multi-Camera Rig Projector & Real-Time Canvas Visualizer
+# Walkthrough: Abu Align & Train v0.0.2.8
 
-## Executive Summary
+## Overview
 
-**Abu Align & Train v0.0.2.6** delivers an advanced, professional overhaul of the **360° Multi-Camera Rig Projector & Panoramic Splitter** application. This update bridges 360° spherical imaging and high-fidelity 3D Gaussian Splatting (3DGS) / Structure-from-Motion (SfM) by providing rigorous mathematical rig synthesis, real-time visual canvas feedback, direct video intake, and native resolution matching.
+**Abu Align & Train v0.0.2.8** introduces an interactive **3D Virtual Camera Rig Visualizer & Orbit Viewport** directly inside the **360° Multi-Camera Rig Projector & Splitter** dialog (`media_1790086520218.png`).
 
-In adherence to the strict base-10 odometer rule, the version has been incremented from `v0.0.2.5` to **`v0.0.2.6`**.
-
----
-
-## 1. Key New Features & Professional Capabilities
-
-```mermaid
-flowchart TD
-    subgraph Intake ["360° Spherical Input Sources"]
-        PanoFolder["📁 Equirectangular Panoramas (.jpg, .png, .webp)"]
-        VideoFile["🎬 360° Panoramic Video (.mp4, .mov, .insv, .mkv)"]
-    end
-
-    subgraph RigArchitectures ["Virtual Multi-Camera Rig Architectures"]
-        Ring["Equatorial Ring (N cams, 0-360° yaw)"]
-        Cube["6-Face Cubemap (Front, Right, Back, Left, Up, Down)"]
-        Dome["Multi-Tier Spherical Dome (+/- Pitch Tiers + Poles)"]
-        Fibonacci["Fibonacci Sphere (Golden Spiral Uniform 4π)"]
-    end
-
-    subgraph AutoMathSolver ["Auto-Math Coupling Engine"]
-        Solver1["Lock Overlap: Auto-calculate FOV from N & Overlap %"]
-        Solver2["Lock FOV: Auto-calculate Camera Count N from FOV & Overlap %"]
-        AutoRes["⚡ Auto-Res: Match Native Equirectangular Angular PPD"]
-        Distortion["Brown-Conrady Radial Distortion (k1, k2)"]
-    end
-
-    subgraph RealTimeVisualizer ["High-DPI Interactive Live Canvas"]
-        PolarView["🧭 Polar Radar: Cardinal bearings, FOV cones, color-coded overlap arcs"]
-        EquirectView["🗺️ 2D ERP Footprint: 2:1 map unroll with pitch/yaw bounding boxes"]
-        Telemetry["Telemetry Dashboard: Δθ, Overlap %, fx/fy, Total views estimate"]
-    end
-
-    subgraph Outputs ["Standardized Pinhole Dataset Output"]
-        ImagesDir["images/ (Rectilinear pinhole views)"]
-        TransformsJSON["transforms.json (COLMAP / Nerfstudio / PFGS360)"]
-        RigManifest["rig_manifest.json (Complete mathematical metadata)"]
-    end
-
-    Intake --> AutoMathSolver
-    RigArchitectures --> AutoMathSolver
-    AutoMathSolver --> RealTimeVisualizer
-    AutoMathSolver --> Outputs
-```
+Users can now examine, rotate, zoom, and inspect their synthesized virtual camera rigs in full 3D space in real-time as they tune rig parameters (camera count, FOV, overlap %, aspect ratio, and pitch tiers).
 
 ---
 
-## 2. Mathematical Rig Coupling & Optics Formulas
+## Key Features & Changes
 
-### A. Horizontal Ring Overlap & FOV Coupling
-For an equatorial ring with $N$ virtual cameras:
-- **Angular separation (step)**:
-  $$\Delta \theta = \frac{360^\circ}{N}$$
-- **Horizontal overlap percentage**:
-  $$\text{Overlap} = \max\left(0, \frac{\text{FOV}_h - \Delta \theta}{\text{FOV}_h}\right) \times 100\%$$
-- **Auto-Math Mode: Lock Overlap (Auto-FOV)**:
-  $$\text{FOV}_h = \frac{\Delta \theta}{1 - \frac{\text{Overlap}}{100}} = \frac{360^\circ}{N \times (1 - \text{Overlap}/100)}$$
-- **Auto-Math Mode: Lock FOV (Auto-Camera Count)**:
-  $$N = \left\lceil \frac{360^\circ}{\text{FOV}_h \times (1 - \text{Overlap}/100)} \right\rceil$$
+### 1. Interactive 3D Camera Rig Orbit Viewport (`abu_align_gui.py`)
+- **Three Unified View Modes**:
+  1. `🌐 3D Orbit Rig` (default): True 3D perspective viewport with orbit rotation, pan, zoom, wireframe reference sphere, optical axis rays, and depth-sorted frustums.
+  2. `🧭 Polar Radar`: Top-down circular compass showing angular distribution and FOV wedges on the equatorial plane.
+  3. `🗺️ 2D Footprint`: Equirectangular $(360^\circ \times 180^\circ)$ panoramic unroll displaying rectilinear projection rectangles.
+- **Controls & Interaction**:
+  - **Left-Click Drag**: Orbit rotates the camera around the rig ($\text{Yaw} \in [0^\circ, 360^\circ]$, $\text{Elevation/Pitch} \in [-88^\circ, +88^\circ]$).
+  - **Shift + Left-Click Drag / Right-Click Drag**: Screen-space camera pan ($\Delta X, \Delta Y$).
+  - **Mouse Wheel / Scroll**: Smooth continuous zoom ($\text{distance multiplier} \in [1.2, 9.0]$).
+  - **Double-Click**: Instantly resets 3D camera to default azimuth ($35^\circ$), elevation ($22^\circ$), and zoom ($3.4\times$).
+  - **`🔄 Reset 3D` Button**: One-click reset in the top header bar.
+  - **`⚡ Auto-Spin` Button**: Automated turntable spin animation ($30\text{ FPS}$) with start/stop toggle and clean thread cancellation on dialog exit.
+  - **Active Cursor**: Switches dynamically to `"fleur"` when hovering over the canvas in 3D mode.
 
-### B. Spherical Fibonacci / Golden Spiral Distribution
-To achieve uniform, mathematically optimal camera distribution over the entire $4\pi$ steradian sphere without polar clustering:
-For $i = 0, \dots, N-1$:
-$$y_i = 1 - \frac{2i + 1}{N}, \quad r_i = \sqrt{\max(0, 1 - y_i^2)}$$
-$$\theta_i = i \times \phi, \quad \text{where } \phi = 2\pi \left(1 - \frac{1}{\frac{1 + \sqrt{5}}{2}}\right) \approx 137.507764^\circ$$
-$$\text{pitch}_i = \arcsin(y_i), \quad \text{yaw}_i = \text{atan2}(\cos\theta_i \cdot r_i, \sin\theta_i \cdot r_i)$$
+### 2. 3D Perspective Rendering & Frustum Geometry
+- **$S^2$ Unit Sphere Reference Wireframe**:
+  - Equator circle in vivid indigo (`#4f46e5`, width=1.5).
+  - Latitude parallels at $\pm 30^\circ$ and $\pm 60^\circ$ (dashed `#252538`).
+  - Meridian circles at $0^\circ/180^\circ$ and $90^\circ/270^\circ$ (dashed `#232338`).
+  - Polar axis with directional arrow from Nadir ($-Y$) to Zenith ($+Y$, `#a855f7`).
+  - Cardinal ticks and labels at the Equator: North ($0^\circ$), East ($+90^\circ$), South ($180^\circ$), West ($-90^\circ$) in sky blue (`#38bdf8`).
+- **Depth-Sorted Frustums (Painter's Algorithm)**:
+  - Each camera's 3D forward vector $\mathbf{fwd}$, right vector $\mathbf{right}$, and up vector $\mathbf{up}$ are derived from $(\text{yaw}, \text{pitch}, \text{roll})$.
+  - Frustum plane calculated at distance $D=1.12$ with aspect-ratio-corrected dimensions:
+    $$w = D \cdot \tan(\alpha_h), \quad h = \frac{w}{\text{aspect}}$$
+  - Computes 4 sensor plane corners ($TL, TR, BR, BL$), pyramid edges from origin $(0,0,0)$, and center optical axis ray with arrow tip.
+  - **Translucent Sensor Face**: Shaded with Tkinter `stipple="gray25"` and color-coded by rig overlap:
+    - **Optimal ($40\% \le \text{overlap} \le 65\%$)**: Emerald green (`#10b981`).
+    - **High ($>65\%$)**: Sky blue (`#38bdf8`).
+    - **Medium ($20\% \le \text{overlap} < 40\%$)**: Amber (`#f59e0b`).
+    - **Low ($<20\%$)**: Crimson red (`#ef4444`).
+  - Sorted back-to-front by camera view depth ($Z_{\text{depth}}$) prior to drawing, ensuring foreground frustums occlude background elements without Z-fighting.
+  - Billboard labels (`C0`, `C1`, etc.) floating just outside sensor planes.
+- **Corner Orientation Triad (Orthographic XYZ Gizmo)**:
+  - Mini 3D axes widget in the bottom-right corner showing $+X$ (Red), $+Y$ (Green), $+Z$ (Blue) dynamically rotating with the orbit camera.
+- **Onscreen HUD Diagnostics**:
+  - Live readout of camera count $N$, FOV, overlap %, orbit azimuth, elevation, zoom level, and mouse navigation hints.
 
-### C. ⚡ Auto-Res: Native Angular Pixel Density Matching
-To avoid oversampling or loss of detail at the center of the rectilinear pinhole crop:
-- Equirectangular angular resolution:
-  $$\text{PPD}_\text{ERP} = \frac{W_\text{ERP}}{2\pi \text{ radians}}$$
-- Center pinhole pixel density matches $\text{PPD}_\text{ERP}$:
-  $$W_\text{opt} = 2 f \tan\left(\frac{\text{FOV}_h}{2}\right) \approx \frac{W_\text{ERP}}{\pi} \tan\left(\frac{\text{FOV}_h}{2}\right)$$
-Rounded to the nearest multiple of 16 for GPU texture and video encoder alignment.
-
-### D. Aspect Ratio & Vertical FOV
-For output dimensions $W \times H$:
-$$\text{FOV}_v = 2 \arctan\left( \frac{H}{W} \tan\left(\frac{\text{FOV}_h}{2}\right) \right)$$
-
-### E. Radial Distortion Model ($k_1, k_2$)
-Normalized camera plane coordinates $(u, v)$ with radius $r^2 = u^2 + v^2$:
-$$u_d = u(1 + k_1 r^2 + k_2 r^4), \quad v_d = v(1 + k_1 r^2 + k_2 r^4)$$
-Enables barrel or pincushion distortion modeling or correction, exported directly to `transforms.json` with camera model `OPENCV`.
-
----
-
-## 3. Real-Time Interactive Canvas Visualizer
-
-The UI features a dedicated, high-DPI canvas (`520x370 px`) that updates instantaneously as the user moves any slider or modifies any parameters:
-
-1. **🧭 Polar Radar View (Top-Down)**:
-   - Concentric range rings ($30^\circ, 60^\circ, 90^\circ$) with cardinal bearings: $N (0^\circ)$, $E (+90^\circ)$, $S (180^\circ)$, $W (-90^\circ)$.
-   - Center camera rig node with directional ray arrows.
-   - Translucent stippled field-of-view cones.
-   - **Dynamic Overlap Color Coding**:
-     - **Optimal (40% - 65%)**: `#10b981` (Vibrant Emerald Green - recommended for SfM tie point matching).
-     - **Dense (>65%)**: `#3b82f6` (Sky Blue - dense multi-view redundancy).
-     - **Moderate (20% - 40%)**: `#f59e0b` (Amber warning).
-     - **Gap (<20%)**: `#ef4444` (Red alert - danger of disjoint reconstructions).
-2. **🗺️ 2D Equirectangular Footprint View**:
-   - 2:1 aspect ratio spherical projection map.
-   - Latitude lines ($\pm 60^\circ, \pm 30^\circ, 0^\circ \text{ Equator}$) and Longitude lines ($\pm 180^\circ, \pm 90^\circ, 0^\circ$).
-   - Rectangular bounding footprints for all virtual cameras with automatic horizontal $360^\circ$ boundary wrapping and center crosshairs.
-3. **Live Mathematical Telemetry Dashboard**:
-   - Displays real-time angular separation $\Delta \theta$, overlap %, focal lengths $f_x, f_y$, vertical FOV, estimated total output views, and spherical coverage area.
+### 3. Version Control & Launcher Synchronization
+- Strict base-10 odometer increment from `v0.0.2.7` $\to$ `v0.0.2.8`.
+- C# launchers recompiled with Microsoft .NET `csc.exe`:
+  - `Abu_Align/Abu_Align_and_Train.exe`
+  - `Abu_Align/Abu_Align_and_Train_v0.0.2.8.exe`
+  - `Abu_Align_and_Train.exe`
+  - `Abu_Align_and_Train_v0.0.2.8.exe`
+- 100% parity verified between workspace root and `Abu_Align/`.
+- Full version snapshot preserved in `Abu_Align/versions/v0.0.2.8/`.
 
 ---
 
-## 4. Direct 360° Video Intake Pipeline
+## Verification & Test Results
 
-Users can now select 360° video files (`.mp4`, `.mov`, `.insv`, `.mkv`, `.avi`) directly:
-- Automatic metadata inspection: dimensions, native FPS, total frame count, and video duration.
-- Flexible frame sampling:
-  - **Target FPS**: Extract at a desired frequency (e.g. 1.0, 2.0, or 5.0 fps).
-  - **Keyframe Stride**: Extract every $K$-th frame.
-  - **Max Frames Cap**: Safeguard to limit output view count.
-- Extracts and projects video frames on the fly without intermediate disk bloat.
+### 1. Interactive 3D Visualizer Test Suite
+Executed comprehensive automated headless GUI tests:
+- **Button Existence**: Verified `🌐 3D Orbit Rig`, `🧭 Polar Radar`, `🗺️ 2D Footprint`, `🔄 Reset 3D`, and `⚡ Auto-Spin` buttons are properly configured.
+- **Mouse Drag Orbit**: Simulated left-drag from $(200, 200) \to (240, 180)$, confirming continuous angle updates and redraws without error.
+- **Mouse Wheel Zoom**: Simulated zoom in ($\Delta = +120$) and zoom out ($\Delta = -120$), verifying smooth distance scaling.
+- **Mouse Pan**: Simulated Shift-drag and Right-drag, verifying screen-space offset translation.
+- **Reset 3D**: Invoked reset button, confirming return to $(35^\circ, 22^\circ, 3.4\times)$.
+- **Auto-Spin Turntable**: Toggled auto-spin on and off, verifying state changes and clean timer loop cancellation.
+- **Result: PASSED (100%)**.
 
----
+### 2. View Mode & Rig Architecture Coverage
+- Tested switching between all 3 canvas view modes (`3d`, `polar`, `equirect`) on live canvas.
+- Tested all 4 virtual rig architectures in 3D orbit mode:
+  - `ring`: Horizontal equatorial ring with $N$ cameras.
+  - `cubemap`: 6-face cubemap ($90^\circ$ FOV, Zenith + Nadir + 4 horizontal faces).
+  - `dome`: Multi-tier spherical dome with zenith/nadir and customizable pitch tiers.
+  - `fibonacci`: Golden spiral spherical distribution on $S^2$.
+- All 4 architectures rendered completely with zero gimbal-lock errors, zero mathematical singularity issues, and full depth-sorted canvas elements.
+- **Result: PASSED (100%)**.
 
-## 5. Verification Results
-
-| Test Scenario | Test Input | Settings | Result | Execution Time |
-| :--- | :--- | :--- | :--- | :--- |
-| **Video Intake & Projection** | 8K 360° Video (7680x3840 @ 50fps) | 4-cam Ring, 90° FOV, 512px, 1 frame | ✅ Success (4 views + transforms.json) | **0.78s** |
-| **Fibonacci Sphere CLI** | 5.7K Panorama (5760x2880) | 12-cam Fibonacci, 90° FOV, 512px | ✅ Success (12 views + transforms.json) | **0.52s** |
-| **Auto-Res Solver** | 5.7K ERP (5760px) @ 90° FOV | Auto-Res button | ✅ Solved: **1840 x 1840 px** | Instant |
-| **Auto-Math Solver Coupling** | 8 cams @ 50% overlap | Lock Overlap mode | ✅ Adjusting $N=6 \to \text{FOV}=120.0^\circ$ | Instant |
-| **Interactive GUI & Canvas** | AbuAlignApp GUI Dialog | Polar & Equirect views, 2-column layout | ✅ Rendered & passed headless test | Clean exit |
+### 3. Parity & Build Verification
+- Verified version numbers across `VERSION.txt`, `abu_align_gui.py`, `align_cli.py`, `train_engine.py`, `Abu_Align.bat`, and `Abu_Align_and_Train.bat`.
+- Verified binary presence and execution of `Abu_Align_and_Train_v0.0.2.8.exe`.
+- Created clean version snapshot in `Abu_Align/versions/v0.0.2.8/`.
+- **Result: PASSED (100%)**.
