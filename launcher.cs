@@ -14,16 +14,35 @@ namespace AbuAlignLauncher
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory;
                 string scriptPath = Path.Combine(appDir, "abu_align_gui.py");
-                string pythonPath = @"C:\Users\USer\miniconda3\envs\vggt\pythonw.exe";
-
-                if (!File.Exists(pythonPath))
+                
+                string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string[] candidatePythons = new string[]
                 {
-                    pythonPath = @"C:\Users\USer\miniconda3\envs\vggt\python.exe";
+                    Path.Combine(appDir, "env", "pythonw.exe"),
+                    Path.Combine(appDir, "env", "python.exe"),
+                    Path.Combine(userProfile, @"miniconda3\envs\abu_align\pythonw.exe"),
+                    Path.Combine(userProfile, @"miniconda3\envs\abu_align\python.exe"),
+                    Path.Combine(userProfile, @"miniconda3\envs\vggt\pythonw.exe"),
+                    Path.Combine(userProfile, @"miniconda3\envs\vggt\python.exe"),
+                    Path.Combine(userProfile, @"anaconda3\envs\abu_align\pythonw.exe"),
+                    Path.Combine(userProfile, @"anaconda3\envs\abu_align\python.exe"),
+                    Path.Combine(userProfile, @"anaconda3\envs\vggt\pythonw.exe"),
+                    Path.Combine(userProfile, @"anaconda3\envs\vggt\python.exe")
+                };
+
+                string pythonPath = null;
+                foreach (string candidate in candidatePythons)
+                {
+                    if (File.Exists(candidate))
+                    {
+                        pythonPath = candidate;
+                        break;
+                    }
                 }
 
-                if (!File.Exists(pythonPath))
+                if (string.IsNullOrEmpty(pythonPath))
                 {
-                    MessageBox.Show("Conda environment python not found at:\n" + pythonPath,
+                    MessageBox.Show("Python executable not found in standard Conda environments (abu_align or vggt).\nPlease run install_abu_align.bat or set up the conda environment.",
                         "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }

@@ -77,8 +77,8 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.7 - Neural Photogrammetry & 3DGS Training
-   Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
+   Abu Align & Train v0.0.1.8 - Neural Photogrammetry & 3DGS Training
+   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
 """
@@ -332,6 +332,13 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     from vggt.utils.load_fn import load_and_preprocess_images_square
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
     from vggt.utils.geometry import unproject_depth_map_to_point_map
+
+    def safe_unproject(d_map, ext_cam, int_cam):
+        if isinstance(d_map, torch.Tensor):
+            d_map = d_map.cpu().numpy()
+        if d_map.ndim == 3:
+            d_map = d_map[..., None]
+        return unproject_depth_map_to_point_map(d_map, ext_cam, int_cam)
     from vggt.dependency.np_to_pycolmap import batch_np_matrix_to_pycolmap_wo_track
     import pycolmap
     import trimesh
@@ -600,7 +607,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         depth_conf = np.concatenate(all_depth_confs, axis=0)
         images = torch.cat(all_images, dim=0).to(device)
         original_coords = torch.cat(all_orig_coords, dim=0).to(device)
-        points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
+        points_3d = safe_unproject(depth_map, extrinsic, intrinsic)
 
     else:
         # Standard Single-Pass Inference for small/medium datasets (<= 48 frames)
@@ -656,7 +663,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         elif depth_conf.ndim == 4 and depth_conf.shape[1] == 1:
             depth_conf = depth_conf.squeeze(1)
 
-        points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
+        points_3d = safe_unproject(depth_map, extrinsic, intrinsic)
 
     inf_elapsed = time.time() - inf_start
     print()
