@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.6
+Abu Align & Train Version 0.0.2.7
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -200,7 +200,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.6 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.7 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -279,7 +279,7 @@ class AbuAlignApp:
         # OpenSfM 360 & Spherical Specific Options
         self.opensfm_proj_var = tk.StringVar(value="equirectangular")
         self.opensfm_feat_var = tk.StringVar(value="sift")
-        self.opensfm_transcode_var = tk.BooleanVar(value=True)
+        self.opensfm_transcode_var = tk.BooleanVar(value=False)
         self.opensfm_matcher_var = tk.StringVar(value="words")
         self.rig_split_mode_var = tk.StringVar(value="ring")
         self.rig_num_cams_var = tk.StringVar(value="8")
@@ -397,7 +397,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.6",
+            text="v0.0.2.7",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -608,9 +608,12 @@ class AbuAlignApp:
         clear_cache_btn.pack(side=tk.LEFT, padx=(8, 16))
         ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
 
-        tk.Label(cache_row, text="Chunk [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
+        self.vggt_cache_frame = tk.Frame(cache_row, bg=self.panel_bg)
+        self.vggt_cache_frame.pack(side=tk.LEFT)
+
+        tk.Label(self.vggt_cache_frame, text="Chunk [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
         chunk_cb = ttk.Combobox(
-            cache_row,
+            self.vggt_cache_frame,
             textvariable=self.chunk_size_var,
             values=[
                 "16", "24", "32", "48", "64", "96", "128", 
@@ -621,9 +624,9 @@ class AbuAlignApp:
         chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
         ToolTip(chunk_cb, "Sliding-Window Chunk Size [VGGT / VGGT-Omega Only]:\nSubdivides large image collections into attention chunks connected via Sim(3) Umeyama alignment.\n• Stride & Res apply to all engines; Chunk and Anchor apply only to VGGT attention.")
 
-        tk.Label(cache_row, text="Anchor [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
+        tk.Label(self.vggt_cache_frame, text="Anchor [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
         anchor_cb = ttk.Combobox(
-            cache_row,
+            self.vggt_cache_frame,
             textvariable=self.anchor_var,
             values=[
                 "4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256"
@@ -1095,7 +1098,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.6 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.7 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1296,7 +1299,9 @@ class AbuAlignApp:
         tc_chk.pack(anchor="w", pady=(1, 2))
         ToolTip(tc_chk, "Auto-Project Multi-Camera Rig:\nConverts 360° spherical panoramas into virtual rectilinear pinhole arrays (e.g. 8-camera ring @ 50% overlap or 6-face cubemap).\nEnables immediate Gaussian Splatting training in LichtFeld Studio & Nerfstudio Splatfacto.")
 
-        rig_row = tk.Frame(osfm_col3, bg=self.panel_bg)
+        self.osfm_rig_subframe = tk.Frame(osfm_col3, bg=self.panel_bg)
+
+        rig_row = tk.Frame(self.osfm_rig_subframe, bg=self.panel_bg)
         rig_row.pack(anchor="w", pady=(1, 2))
         tk.Label(rig_row, text="Rig:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
         rig_cb = ttk.Combobox(rig_row, textvariable=self.rig_split_mode_var, values=["ring", "cubemap", "dome"], state="readonly", width=8)
@@ -1307,7 +1312,7 @@ class AbuAlignApp:
         rig_res_cb.pack(side=tk.LEFT, padx=(2, 4))
 
         rig_dlg_btn = tk.Button(
-            osfm_col3,
+            self.osfm_rig_subframe,
             text="🌐 Open Rig Projector Dialog...",
             font=("Segoe UI", 8, "bold"),
             bg="#7c3aed",
@@ -1318,6 +1323,15 @@ class AbuAlignApp:
             command=self._open_panoramic_splitter_dialog
         )
         rig_dlg_btn.pack(anchor="w", pady=(2, 0))
+
+        def _toggle_osfm_rig(*_):
+            if self.opensfm_transcode_var.get():
+                self.osfm_rig_subframe.pack(anchor="w", pady=(1, 2))
+            else:
+                self.osfm_rig_subframe.pack_forget()
+
+        self.opensfm_transcode_var.trace_add("write", _toggle_osfm_rig)
+        _toggle_osfm_rig()
 
         # =========================================================================
         # 5. 360DVO Subpanel (Deep Visual Odometry for 360° Cameras)
@@ -1369,14 +1383,20 @@ class AbuAlignApp:
 
         if engine in ["vggt_omega", "vggt"]:
             self.panel_align_vggt.pack(fill=tk.BOTH, expand=True)
-        elif engine == "ace0":
-            self.panel_align_ace0.pack(fill=tk.BOTH, expand=True)
-        elif engine == "pycusfm":
-            self.panel_align_pycusfm.pack(fill=tk.BOTH, expand=True)
-        elif engine == "opensfm":
-            self.panel_align_opensfm.pack(fill=tk.BOTH, expand=True)
-        elif engine in ["360dvo", "dvo"]:
-            self.panel_align_360dvo.pack(fill=tk.BOTH, expand=True)
+            if hasattr(self, "vggt_cache_frame"):
+                self.vggt_cache_frame.pack(side=tk.LEFT)
+        else:
+            if hasattr(self, "vggt_cache_frame"):
+                self.vggt_cache_frame.pack_forget()
+
+            if engine == "ace0":
+                self.panel_align_ace0.pack(fill=tk.BOTH, expand=True)
+            elif engine == "pycusfm":
+                self.panel_align_pycusfm.pack(fill=tk.BOTH, expand=True)
+            elif engine == "opensfm":
+                self.panel_align_opensfm.pack(fill=tk.BOTH, expand=True)
+            elif engine in ["360dvo", "dvo"]:
+                self.panel_align_360dvo.pack(fill=tk.BOTH, expand=True)
 
     def _build_train_panels(self):
         """Creates the 3 engine-specific training panels inside self.train_dynamic_container."""
@@ -3304,22 +3324,21 @@ class AbuAlignApp:
         if not self.cache_var.get():
             cmd.append("--no_cache")
 
-        try:
-            chunk_val = max(int(str(self.chunk_size_var.get()).strip()), 8)
-        except Exception:
-            chunk_val = 96
-        try:
-            anchor_val = max(int(str(self.anchor_var.get()).strip()), 2)
-        except Exception:
-            anchor_val = 24
-
-        cmd.extend([
-            "--chunk_size", str(chunk_val),
-            "--anchor_size", str(anchor_val)
-        ])
-
         # Active Alignment Engine Options
         if align_engine in ["vggt_omega", "vggt"]:
+            try:
+                chunk_val = max(int(str(self.chunk_size_var.get()).strip()), 8)
+            except Exception:
+                chunk_val = 96
+            try:
+                anchor_val = max(int(str(self.anchor_var.get()).strip()), 2)
+            except Exception:
+                anchor_val = 24
+
+            cmd.extend([
+                "--chunk_size", str(chunk_val),
+                "--anchor_size", str(anchor_val)
+            ])
             cmd.extend([
                 "--align_mode", self.align_var.get(),
                 "--lens_model", self.lens_var.get(),
@@ -3570,7 +3589,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.6 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.7 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3881,7 +3900,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.6 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.7 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4155,7 +4174,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.6\n"
+            "Abu Align & Train - Version 0.0.2.7\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

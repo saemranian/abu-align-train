@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.6 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.7 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -997,7 +997,8 @@ def main():
     # 360DVO Deep Visual Odometry Options
     parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
     parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
-    parser.add_argument("--dvo_viz", action="store_true", help="Launch live real-time Viser browser visualizer during 360DVO tracking")
+    parser.add_argument("--dvo_viz", dest="dvo_viz", action="store_true", default=True, help="Launch live real-time Viser browser visualizer during 360DVO tracking")
+    parser.add_argument("--no_dvo_viz", dest="dvo_viz", action="store_false", help="Disable real-time visualizer during 360DVO tracking")
     # OpenSfM 360 & Spherical Photogrammetry Options
     parser.add_argument("--projection", type=str, choices=["auto", "equirectangular", "spherical", "perspective", "fisheye"], default="equirectangular", help="Camera projection model for OpenSfM (default: equirectangular for 360 panos)")
     parser.add_argument("--opensfm_feature", type=str, choices=["sift", "hahog", "orb", "akaze"], default="sift", help="Feature extractor for OpenSfM (default: sift)")
@@ -1241,13 +1242,9 @@ def main():
     model = None
     vggt_res = 512
 
-    # Determine which model is needed for inference or coarse initialization
-    needs_omega = (engine == "vggt_omega") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "omega")
-
-    # Load VGGT-Omega if requested
-    if needs_omega:
+    def load_vggt_omega_model(dev, dt, ckpt=None):
         possible_ckpts = [
-            args.checkpoint,
+            ckpt,
             r"C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\vggt-omega\vggt_omega_1b_512.pt",
             r"C:\Users\USer\.cache\torch\hub\checkpoints\vggt_omega_1b_512.pt",
             os.path.join(os.getcwd(), "checkpoints", "vggt_omega_1b_512.pt"),
@@ -1265,12 +1262,12 @@ def main():
                 t_load = time.time()
                 print(f"      * Engine:        VGGT-Omega (Register Attention)")
                 print(f"      * Checkpoint:    {found_ckpt}")
-                model = VGGTOmega().eval()
+                m = VGGTOmega().eval()
                 state_dict = torch.load(found_ckpt, map_location="cpu")
-                model.load_state_dict(state_dict)
-                model = model.to(device)
-                vggt_res = 512
+                m.load_state_dict(state_dict)
+                m = m.to(dev)
                 print(f"      * Model Loaded:  VGGT-Omega in {time.time()-t_load:.1f}s")
+                return m, 512
             except Exception as e:
                 raise RuntimeError(f"Failed to load VGGT-Omega checkpoint from {found_ckpt}: {e}")
         else:
@@ -1278,6 +1275,13 @@ def main():
                 "VGGT-Omega weights (vggt_omega_1b_512.pt) were not found!\n"
                 "Please ensure vggt_omega_1b_512.pt is located in checkpoints/ or specify --checkpoint."
             )
+
+    # Determine which model is needed for inference or coarse initialization
+    needs_omega = (engine == "vggt_omega") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "omega")
+
+    # Load VGGT-Omega if requested
+    if needs_omega:
+        model, vggt_res = load_vggt_omega_model(device, dtype, args.checkpoint)
 
     # ACE0 Engine initialization
     if engine in ["ace0", "acezero"]:
@@ -1404,22 +1408,37 @@ def main():
                 raise RuntimeError("OpenSfM pipeline execution encountered an error.")
         else:
             print("      * [NOTICE] Native OpenSfM CLI not found on local system PATH.")
-            print("      * [AUTO-FALLBACK] Slicing 360° Equirectangular images into 6 Rectilinear Pinhole Cubemaps...")
-            from equirectangular_transcoder import transcode_dataset
-            cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
-            total_saved, msg = transcode_dataset(
-                input_dir=scan_dir,
-                output_dir=cubemap_dir,
-                face_size=args.cubemap_res
-            )
-            print(f"      * {msg}")
-            cubemap_paths = sorted([
-                os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
-                if os.path.splitext(f.lower())[1] in valid_exts
-            ])
-            reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
-                "vggt_omega", model, cubemap_paths, len(cubemap_paths), len(cubemap_paths), device, dtype, vggt_res, args
-            )
+            if args.projection.lower() in ["equirectangular", "spherical"] and not getattr(args, "split_panorama", False):
+                print("      * [SPHERICAL S² SOLVER] Processing native 360° Equirectangular images directly on S² manifold...")
+                from dvo360_engine import run_360dvo_reconstruction
+                reconstruction, dense_3d, dense_rgb = run_360dvo_reconstruction(
+                    image_paths=image_paths,
+                    output_dir=output_dir,
+                    weights_path=getattr(args, "dvo_weights", None),
+                    patches_per_frame=128,  # High precision density for SfM quality
+                    stride=args.stride,
+                    enable_viz=False
+                )
+            else:
+                print("      * [AUTO-FALLBACK] Slicing into Rectilinear Pinhole Views for Photogrammetric Alignment...")
+                from equirectangular_transcoder import transcode_dataset
+                cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
+                total_saved, msg = transcode_dataset(
+                    input_dir=scan_dir,
+                    output_dir=cubemap_dir,
+                    face_size=args.cubemap_res
+                )
+                print(f"      * {msg}")
+                cubemap_paths = sorted([
+                    os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
+                    if os.path.splitext(f.lower())[1] in valid_exts
+                ])
+                if model is None:
+                    print("      * [AUTO-INIT] Dynamically loading VGGT-Omega foundation model for alignment...")
+                    model, vggt_res = load_vggt_omega_model(device, dtype, getattr(args, "checkpoint", None))
+                reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
+                    "vggt_omega", model, cubemap_paths, len(cubemap_paths), len(cubemap_paths), device, dtype, vggt_res, args
+                )
 
         inf_elapsed = time.time() - inf_start
         print()

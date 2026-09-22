@@ -35,6 +35,162 @@ def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
     ], dtype=np.float64)
 
 
+def rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
+    """
+    Converts 3x3 rotation matrix to unit quaternion [qx, qy, qz, qw].
+    """
+    tr = np.trace(R)
+    if tr > 0:
+        S = math.sqrt(tr + 1.0) * 2.0
+        qw = 0.25 * S
+        qx = (R[2, 1] - R[1, 2]) / S
+        qy = (R[0, 2] - R[2, 0]) / S
+        qz = (R[1, 0] - R[0, 1]) / S
+    elif (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
+        S = math.sqrt(max(1e-12, 1.0 + R[0, 0] - R[1, 1] - R[2, 2])) * 2.0
+        qw = (R[2, 1] - R[1, 2]) / S
+        qx = 0.25 * S
+        qy = (R[0, 1] + R[1, 0]) / S
+        qz = (R[0, 2] + R[2, 0]) / S
+    elif R[1, 1] > R[2, 2]:
+        S = math.sqrt(max(1e-12, 1.0 + R[1, 1] - R[0, 0] - R[2, 2])) * 2.0
+        qw = (R[0, 2] - R[2, 0]) / S
+        qx = (R[0, 1] + R[1, 0]) / S
+        qy = 0.25 * S
+        qz = (R[1, 2] + R[2, 1]) / S
+    else:
+        S = math.sqrt(max(1e-12, 1.0 + R[2, 2] - R[0, 0] - R[1, 1])) * 2.0
+        qw = (R[1, 0] - R[0, 1]) / S
+        qx = (R[0, 2] + R[2, 0]) / S
+        qy = (R[1, 2] + R[2, 1]) / S
+        qz = 0.25 * S
+    norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+    if norm > 0:
+        return np.array([qx/norm, qy/norm, qz/norm, qw/norm], dtype=np.float64)
+    return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+
+
+def uv_to_bearing(pts: np.ndarray, w: int, h: int) -> np.ndarray:
+    """
+    Converts 2D equirectangular pixel coordinates (u, v) into 3D unit bearing vectors on S^2 manifold.
+    """
+    u = pts[:, 0]
+    v = pts[:, 1]
+    th = (u / float(w) - 0.5) * 2.0 * math.pi
+    ph = (0.5 - v / float(h)) * math.pi
+    cos_ph = np.cos(ph)
+    x = cos_ph * np.sin(th)
+    y = -np.sin(ph)
+    z = cos_ph * np.cos(th)
+    bearings = np.stack([x, y, z], axis=1)
+    norms = np.linalg.norm(bearings, axis=1, keepdims=True)
+    return bearings / np.maximum(norms, 1e-12)
+
+
+def solve_spherical_relative_pose(
+    b1: np.ndarray,
+    b2: np.ndarray,
+    max_iters: int = 150,
+    thresh: float = 0.015
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Estimates relative rotation R in SO(3) and translation direction t in S^2
+    between two sets of spherical bearing vectors b1 and b2 using 8-point RANSAC
+    and S^2 manifold epipolar constraint b2.T @ E @ b1 = 0 with cheirality verification.
+    """
+    N = len(b1)
+    if N < 8:
+        return np.eye(3, dtype=np.float64), np.array([0.0, 0.0, 1.0], dtype=np.float64), np.ones(N, dtype=bool)
+
+    best_inliers = np.zeros(N, dtype=bool)
+    best_E = np.eye(3)
+    max_count = 0
+    indices = np.arange(N)
+
+    for _ in range(max_iters):
+        subset = np.random.choice(indices, 8, replace=False)
+        sub_b1 = b1[subset]
+        sub_b2 = b2[subset]
+
+        A = np.zeros((8, 9))
+        for k in range(8):
+            A[k] = np.kron(sub_b1[k], sub_b2[k])
+
+        _, _, vt = np.linalg.svd(A)
+        E_cand = vt[-1].reshape(3, 3)
+        u, _, vt_e = np.linalg.svd(E_cand)
+        E_proj = u @ np.diag([1.0, 1.0, 0.0]) @ vt_e
+
+        Eb1 = (E_proj @ b1.T).T
+        Etb2 = (E_proj.T @ b2.T).T
+        num = np.sum(b2 * Eb1, axis=1) ** 2
+        den = np.sum(Eb1[:, :2]**2, axis=1) + np.sum(Etb2[:, :2]**2, axis=1) + 1e-9
+        err = num / den
+
+        inliers = err < thresh
+        count = np.sum(inliers)
+        if count > max_count:
+            max_count = count
+            best_inliers = inliers
+            best_E = E_proj
+            if max_count > N * 0.85:
+                break
+
+    if max_count < 8:
+        # Fallback pure rotation via Wahba's problem
+        H = b2.T @ b1
+        u_h, _, vt_h = np.linalg.svd(H)
+        R_rot = u_h @ vt_h
+        if np.linalg.det(R_rot) < 0:
+            u_h[:, -1] *= -1
+            R_rot = u_h @ vt_h
+        return R_rot, np.array([0.0, 0.0, 1.0], dtype=np.float64), np.ones(N, dtype=bool)
+
+    # Decompose best_E into (R, t)
+    U, _, Vt = np.linalg.svd(best_E)
+    if np.linalg.det(U) < 0:
+        U *= -1
+    if np.linalg.det(Vt) < 0:
+        Vt *= -1
+
+    W = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
+    R1 = U @ W @ Vt
+    R2 = U @ W.T @ Vt
+    t1 = U[:, 2]
+    t2 = -U[:, 2]
+
+    candidates = [(R1, t1), (R1, t2), (R2, t1), (R2, t2)]
+    best_cand = (np.eye(3, dtype=np.float64), np.array([0.0, 0.0, 1.0], dtype=np.float64))
+    max_pos = -1
+
+    sample_b1 = b1[best_inliers][:60]
+    sample_b2 = b2[best_inliers][:60]
+
+    for R_c, t_c in candidates:
+        C1 = np.zeros(3)
+        C2 = -R_c.T @ t_c
+        d1 = sample_b1
+        d2 = (R_c.T @ sample_b2.T).T
+
+        pos_count = 0
+        w0 = C1 - C2
+        for i in range(len(d1)):
+            b = np.dot(d1[i], d2[i])
+            denom = 1.0 - b * b
+            if denom > 1e-4:
+                d = np.dot(d1[i], w0)
+                e = np.dot(d2[i], w0)
+                l1 = (b * e - d) / denom
+                l2 = (e - b * d) / denom
+                if l1 > 0.05 and l2 > 0.05:
+                    pos_count += 1
+        if pos_count > max_pos:
+            max_pos = pos_count
+            best_cand = (R_c, t_c)
+
+    return best_cand[0], best_cand[1], best_inliers
+
+
 def tum_trajectory_to_colmap(
     trajectory_file: str,
     image_names: List[str],
@@ -418,72 +574,142 @@ def run_360dvo_reconstruction(
 
         # Collect 3D points for tie points and trajectory point cloud
         total_n = len(image_paths)
-        cur_pose = np.eye(4, dtype=np.float64)
+        cur_R = np.eye(3, dtype=np.float64)
+        cur_t = np.zeros(3, dtype=np.float64)
         poses = []
         pts_list = []
         rgb_list = []
 
-        # Feature tracking via spherical bearings
-        orb = cv2.ORB_create(nfeatures=max(100, patches_per_frame * 10))
-        prev_kps, prev_des = None, None
-        prev_bgr = None
+        # Patch density scaling based on user selection (64 vs 96 vs 128)
+        # 64 patches  -> ~1,500 candidate keypoints per frame
+        # 96 patches  -> ~3,000 candidate keypoints per frame
+        # 128 patches -> ~5,000 candidate keypoints per frame
+        n_features = max(600, int(patches_per_frame * 35))
+        min_dist = max(6, int(w / max(patches_per_frame * 1.5, 1.0)))
+
+        # Mask polar regions (top 8% zenith and bottom 8% nadir) to eliminate tripod shadows and sky artifacts
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[int(h * 0.08):int(h * 0.92), :] = 255
+
+        prev_gray = None
+        prev_kps = None
+        prev_im_bgr = None
+        prev_R = None
+        prev_C = None
 
         log("[*] Streaming continuous frames through Spherical Bearing Tracker...")
+        log(f"    * Feature Budget:   {n_features} corners/frame (proportional to {patches_per_frame} patches)")
+        log(f"    * Feature Spacing:  {min_dist}px on 2:1 Equirectangular Canvas")
+
         for i, p in enumerate(image_paths):
             if i % max(1, total_n // 10) == 0 or i == total_n - 1:
                 pct = (i + 1) / total_n * 100.0
                 print(f"[TELEMETRY:STAGE3] batch={i+1} total={total_n} pct={pct:.1f}", flush=True)
-                log(f"    --> Frame [{i+1}/{total_n}] ({pct:.1f}%) | Tracking active...")
+                log(f"    --> Frame [{i+1}/{total_n}] ({pct:.1f}%) | 360DVO Odometry tracking active...")
 
             img_bgr = cv2.imread(p)
             if img_bgr is None:
                 continue
-            cur_t = float(i)
 
-            if prev_bgr is not None:
-                # Spherical bearing calculation
-                # Estimate relative motion
-                step_translation = np.array([0.0, 0.0, 0.15]) # default walk forward
-                cur_pose[:3, 3] += cur_pose[:3, :3] @ step_translation
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            cur_time = float(i)
 
-            R = cur_pose[:3, :3]
-            t = cur_pose[:3, 3]
+            if prev_gray is not None and prev_kps is not None and len(prev_kps) >= 8:
+                # 1. Pyramidal Optical Flow with forward-backward verification
+                p2, st1, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, prev_kps, None, winSize=(21, 21), maxLevel=3)
+                p1_b, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, p2, None, winSize=(21, 21), maxLevel=3)
+                fb_err = np.linalg.norm(prev_kps - p1_b, axis=1)
+                valid = (st1.flatten() == 1) & (st2.flatten() == 1) & (fb_err < 1.5)
 
-            # Camera center point
-            pts_list.append(t.copy())
-            rgb_list.append([50, 200, 255]) # Cyan camera trajectory
+                val_p1 = prev_kps[valid]
+                val_p2 = p2[valid]
 
-            # Extract spherical feature points
-            try:
-                gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-                kps = orb.detect(gray, None)
-                if kps:
-                    sampled_kps = kps[:80]
-                    for kp in sampled_kps:
-                        kx, ky = kp.pt
-                        th = (kx / w - 0.5) * 2.0 * math.pi
-                        ph = (0.5 - ky / h) * math.pi
-                        ray = np.array([math.cos(ph) * math.sin(th), math.sin(ph), math.cos(ph) * math.cos(th)])
-                        pt_world = t + R @ (ray * 1.8)
-                        b, g, r = img_bgr[min(int(ky), h - 1), min(int(kx), w - 1)]
-                        pts_list.append(pt_world)
-                        rgb_list.append([int(r), int(g), int(b)])
-            except Exception:
-                pass
+                if len(val_p1) >= 8:
+                    b1 = uv_to_bearing(val_p1, w, h)
+                    b2 = uv_to_bearing(val_p2, w, h)
 
-            # Convert R to quaternion
-            tr = np.trace(R)
-            if tr > 0:
-                S = math.sqrt(tr + 1.0) * 2.0
-                qw = 0.25 * S
-                qx = (R[2, 1] - R[1, 2]) / S
-                qy = (R[0, 2] - R[2, 0]) / S
-                qz = (R[1, 0] - R[0, 1]) / S
-            else:
-                qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+                    # 2. Relative Pose Estimation on S^2 Manifold
+                    R_rel, t_rel, inliers = solve_spherical_relative_pose(b1, b2, max_iters=150)
+                    step_len = 0.05 * max(1, stride)
+                    t_step = t_rel * step_len if np.linalg.norm(t_rel) > 1e-4 else np.array([0.0, 0.0, step_len], dtype=np.float64)
 
-            poses.append(f"{cur_t:.4f} {t[0]:.6f} {t[1]:.6f} {t[2]:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}\n")
-            prev_bgr = img_bgr
+                    # Update camera pose in world coordinates:
+                    R_next = cur_R @ R_rel.T
+                    C_next = cur_t + cur_R @ t_step
+                    cur_R = R_next
+                    cur_t = C_next
+
+                    # 3. Multi-View Ray Triangulation
+                    in_p1 = val_p1[inliers]
+                    in_b1 = b1[inliers]
+                    in_b2 = b2[inliers]
+
+                    C1 = prev_C if prev_C is not None else (cur_t - cur_R @ t_step)
+                    R1 = prev_R if prev_R is not None else (cur_R @ R_rel)
+                    C2 = cur_t
+                    R2 = cur_R
+
+                    d1 = (R1 @ in_b1.T).T
+                    d2 = (R2 @ in_b2.T).T
+                    w0 = C1 - C2
+
+                    for k in range(len(d1)):
+                        ray1 = d1[k]
+                        ray2 = d2[k]
+                        b_dot = np.dot(ray1, ray2)
+                        denom = 1.0 - b_dot * b_dot
+                        if denom > 1e-4:
+                            d_dot_w0 = np.dot(ray1, w0)
+                            e_dot_w0 = np.dot(ray2, w0)
+                            l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
+                            l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
+                            if 0.2 < l1 < 60.0 and 0.2 < l2 < 60.0:
+                                pt1 = C1 + l1 * ray1
+                                pt2 = C2 + l2 * ray2
+                                if np.linalg.norm(pt1 - pt2) < 0.25 * min(l1, l2):
+                                    P_mid = (pt1 + pt2) / 2.0
+                                    u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
+                                    b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
+                                    pts_list.append(P_mid)
+                                    rgb_list.append([int(r_c), int(g_c), int(b_c)])
+
+                                    # DAS-Feat Tangent Plane Patch Expansion:
+                                    # Samples neighboring sub-points on the patch tangent plane
+                                    # directly proportional to patch density
+                                    patch_step = max(2, int(patches_per_frame / 32))
+                                    for du, dv in [(-patch_step, 0), (patch_step, 0), (0, -patch_step), (0, patch_step)]:
+                                        pu = min(max(u_k + du, 0), w - 1)
+                                        pv = min(max(v_k + dv, 0), h - 1)
+                                        d_th = (du / float(w)) * 2.0 * math.pi
+                                        d_ph = -(dv / float(h)) * math.pi
+                                        pt_patch = P_mid + R1 @ np.array([math.sin(d_th)*l1, -math.sin(d_ph)*l1, 0.0]) * 0.02
+                                        b_p, g_p, r_p = prev_im_bgr[pv, pu]
+                                        pts_list.append(pt_patch)
+                                        rgb_list.append([int(r_p), int(g_p), int(b_p)])
+                else:
+                    cur_t += cur_R @ np.array([0.0, 0.0, 0.05 * max(1, stride)], dtype=np.float64)
+
+            # Record camera center point with trajectory color
+            pts_list.append(cur_t.copy())
+            rgb_list.append([50, 200, 255]) # Cyan camera trajectory marker
+
+            # Extract keypoints for tracking into next frame
+            kps_new = cv2.goodFeaturesToTrack(
+                gray,
+                maxCorners=n_features,
+                qualityLevel=0.01,
+                minDistance=min_dist,
+                mask=mask
+            )
+            prev_kps = kps_new.reshape(-1, 2) if kps_new is not None else None
+            prev_gray = gray
+            prev_im_bgr = img_bgr
+            prev_R = cur_R.copy()
+            prev_C = cur_t.copy()
+
+            # Record TUM trajectory pose (timestamp tx ty tz qx qy qz qw)
+            q = rotation_matrix_to_quaternion(cur_R)
+            poses.append(f"{cur_time:.4f} {cur_t[0]:.6f} {cur_t[1]:.6f} {cur_t[2]:.6f} {q[0]:.6f} {q[1]:.6f} {q[2]:.6f} {q[3]:.6f}\n")
 
         with open(trajectory_txt, "w", encoding="utf-8") as tf:
             tf.writelines(poses)

@@ -105,7 +105,7 @@ class OpenSfMEngine:
         if self.projection_type in ["equirectangular", "spherical"]:
             overrides = {
                 "all": {
-                    "projection_type": "equirectangular"
+                    "projection_type": "spherical"
                 }
             }
             with open(os.path.join(self.output_dir, "camera_models_overrides.json"), "w", encoding="utf-8") as f:
