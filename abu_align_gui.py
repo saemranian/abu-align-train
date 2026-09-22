@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.6
+Abu Align & Train Version 0.0.3.7
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.6 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.7 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -3183,6 +3183,10 @@ class AbuAlignApp:
         self.console.configure(state="disabled")
         if not hasattr(self, "follow_log_var") or self.follow_log_var.get():
             self.console.see(tk.END)
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
 
     def _parse_train_iterations(self):
         iter_str = self.train_iter_var.get()
@@ -3228,6 +3232,7 @@ class AbuAlignApp:
         - index == stage_idx: active (blue bg #2563eb, white fg #ffffff)
         - indices > stage_idx: pending (dark bg #232338, gray fg #64748b)
         """
+        self.active_stage_idx = stage_idx
         if not hasattr(self, "stage_badges"):
             return
         for i, badge in enumerate(self.stage_badges):
@@ -3545,6 +3550,36 @@ class AbuAlignApp:
                 if resp:
                     self._start_one_click()
                 return
+        elif train_engine == "pfgs360" and self.pfgs_dataparser_var.get() in ["posefree", "pose-free", "direct"]:
+            has_poses = False
+            for cand in [
+                os.path.join(dataset_path, "transforms.json"),
+                os.path.join(dataset_path, "reconstruction.json"),
+                os.path.join(dataset_path, "opensfm", "reconstruction.json"),
+                os.path.join(dataset_path, "3dgs_dataset", "transforms.json"),
+                os.path.join(dataset_path, "3dgs_dataset", "opensfm", "reconstruction.json"),
+                os.path.join(dataset_path, "sparse", "0"),
+            ]:
+                if os.path.exists(cand):
+                    has_poses = True
+                    break
+            if not has_poses and os.path.isdir(os.path.join(dataset_path, "results")):
+                for sub in os.listdir(os.path.join(dataset_path, "results")):
+                    if os.path.isdir(os.path.join(dataset_path, "results", sub, "3dgs_dataset")):
+                        has_poses = True
+                        break
+
+            if has_poses:
+                resp = messagebox.askyesno(
+                    "Pre-Aligned Camera Poses Detected",
+                    f"Pre-aligned camera poses (from OpenSfM/360DVO) were detected for this dataset:\n{dataset_path}\n\n"
+                    f"You currently have 'Pose-Free Direct [CPU Matching]' selected.\n"
+                    f"Pose-free mode discards your pre-aligned poses and recalculates them from scratch on CPU (~15-30 min).\n\n"
+                    f"Would you like to switch to 'Auto-Detect' to use your pre-aligned poses and train immediately at full 100% RTX 4090 GPU speed?",
+                    icon="question"
+                )
+                if resp:
+                    self.pfgs_dataparser_var.set("auto")
 
         self.is_running = True
         self.is_paused = False
@@ -3651,7 +3686,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.6 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.7 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3743,9 +3778,10 @@ class AbuAlignApp:
                         self._log("\n[STATUS] Pipeline Job Completed.\n")
                     else:
                         self.pct_lbl.config(text="Failed", fg="#ff4d4d")
-                        self.telemetry_lbl.config(text=f"Status: Alignment Failed (Error code {code}) - See log", fg="#ff4d4d")
+                        active_task = "3DGS Training" if getattr(self, "active_stage_idx", 0) == 5 else "Alignment"
+                        self.telemetry_lbl.config(text=f"Status: {active_task} Failed (Error code {code}) - See log", fg="#ff4d4d")
                         self.eta_lbl.config(text="Error")
-                        self._log(f"\n[CRITICAL ERROR] Alignment exited with error code {code}. See traceback above.\n")
+                        self._log(f"\n[CRITICAL ERROR] {active_task} exited with error code {code}. See traceback above.\n")
                     self.log_status_lbl.config(
                         text="Log: Saved (logs/)",
                         fg=self.text_secondary
@@ -3795,9 +3831,54 @@ class AbuAlignApp:
                                 self.eta_lbl.config(text=f"⏱ ETA: {eta_str}")
                         except Exception:
                             pass
-                    elif any(k in msg for k in ["[LichtFeld]", "[Nerfstudio]", "[3DGRUT]", "Stage 6", "Starting 3DGS"]):
+                    elif any(k in msg for k in ["[LichtFeld]", "[Nerfstudio]", "[3DGRUT]", "[PFGS360]", "[PFGS360-ERR]", "Stage 6", "Starting 3DGS", "pfgs360"]):
                         self._set_stage(5)
-                        if any(k in msg.lower() for k in ["step", "iter", "export", "loss"]):
+                        depth_m = re.search(r"(\d+)%\|.*\|\s*(\d+)/(\d+)", msg)
+                        step_m = re.search(r"(\d+)\s*\(([\d\.]+)%\)", msg)
+                        lf_m = re.search(r"Iteration\s+(\d+)/(\d+)\s*\(([\d\.]+)%\)", msg)
+                        pose_m = re.search(r"compute relative camera pose for views .* and (\d+):", msg)
+
+                        if depth_m:
+                            pct_val = float(depth_m.group(1))
+                            cur_f = depth_m.group(2)
+                            tot_f = depth_m.group(3)
+                            self.progress_bar["value"] = pct_val * 0.15
+                            self.pct_lbl.config(text=f"{pct_val:5.1f}%")
+                            self.telemetry_lbl.config(text=f"Stage 6/6: Precomputing Depth Priors [{cur_f}/{tot_f}] ({pct_val:.0f}%)", fg=self.accent_cyan)
+                        elif step_m:
+                            cur_step = int(step_m.group(1))
+                            step_pct = float(step_m.group(2))
+                            self.progress_bar["value"] = step_pct
+                            self.pct_lbl.config(text=f"{step_pct:5.1f}%")
+                            engine_label = self.train_engine_var.get().upper()
+                            self.telemetry_lbl.config(text=f"Stage 6/6: {engine_label} Active [Step {cur_step:,}] ({step_pct:.1f}%)", fg=self.accent_cyan)
+                            parts = [p.strip() for p in re.split(r"\s{2,}", msg.strip()) if p.strip()]
+                            if len(parts) >= 3:
+                                self.eta_lbl.config(text=f"⏱ ETA: {parts[-1]}")
+                            else:
+                                eta_m = re.search(r"ETA:\s*([^\s,]+)", msg)
+                                if eta_m:
+                                    self.eta_lbl.config(text=f"⏱ ETA: {eta_m.group(1).strip()}")
+                        elif lf_m:
+                            cur_step = int(lf_m.group(1))
+                            tot_step = int(lf_m.group(2))
+                            lf_pct = float(lf_m.group(3))
+                            self.progress_bar["value"] = lf_pct
+                            self.pct_lbl.config(text=f"{lf_pct:5.1f}%")
+                            self.telemetry_lbl.config(text=f"Stage 6/6: LichtFeld Active [{cur_step:,}/{tot_step:,}] ({lf_pct:.1f}%)", fg=self.accent_cyan)
+                            eta_m = re.search(r"ETA:\s*([0-9a-zA-Z\s]+)", msg)
+                            if eta_m:
+                                self.eta_lbl.config(text=f"⏱ ETA: {eta_m.group(1).strip()}")
+                        elif pose_m:
+                            view_idx = pose_m.group(1)
+                            self.telemetry_lbl.config(text=f"Stage 6/6: CPU Relative Pose Matching (View #{view_idx})", fg="#a855f7")
+                        elif any(k in msg for k in ["Exporting", "ns-export", "export_spz"]):
+                            self.telemetry_lbl.config(text="Stage 6/6: Exporting 3D Gaussian Splat (.ply)...", fg=self.accent_cyan)
+                        elif "Training Finished" in msg or "Training complete!" in msg:
+                            self.progress_bar["value"] = 100
+                            self.pct_lbl.config(text="100.0%", fg=self.accent_green)
+                            self.telemetry_lbl.config(text="Stage 6/6: 3DGS Model Generation Complete (100%)", fg=self.accent_green)
+                        elif any(k in msg.lower() for k in ["step", "iter", "export", "loss", "rays / sec"]) and not (step_m or lf_m or depth_m):
                             self.telemetry_lbl.config(text="Stage 6: 3DGS Training Active", fg=self.accent_cyan)
         except queue.Empty:
             pass
@@ -3963,7 +4044,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.6 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.7 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4237,7 +4318,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.6\n"
+            "Abu Align & Train - Version 0.0.3.7\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

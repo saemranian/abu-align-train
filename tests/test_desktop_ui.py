@@ -96,5 +96,39 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.app.one_click_btn.cget("text"), "Start alignment")
 
 
+    def test_train_only_pfgs360_workflow_and_telemetry_parsing(self):
+        self.app.dataset_var.set(self.temp.name)
+        self.app.train_engine_var.set("pfgs360")
+        self.app.pfgs_dataparser_var.set("auto")
+        with patch("abu_align_gui.threading.Thread") as thread:
+            self.app.is_running = False
+            self.app._start_train_only()
+            self.assertTrue(thread.called)
+            command = thread.call_args.kwargs["args"][0]
+            self.assertIn("--engine", command)
+            self.assertIn("pfgs360", command)
+            self.assertEqual(self.app.workspace_tabs.select(), str(self.app.activity_tab))
+        self.app.is_running = False
+
+        # Verify queue telemetry parser for PFGS360 depth priors
+        self.app.output_queue.put("[PFGS360] 25%|██▌       | 43/169 [00:04<00:09, 12.74it/s]")
+        self.app._check_queue()
+        self.assertIn("Depth Priors", self.app.telemetry_lbl.cget("text"))
+        self.assertIn("25.0%", self.app.pct_lbl.cget("text"))
+
+        # Verify queue telemetry parser for 3DGS training step and ETA
+        self.app.output_queue.put("[PFGS360] 1000 (3.33%)           12 s, 11.424 ms      1 m, 0 s")
+        self.app._check_queue()
+        self.assertIn("PFGS360 Active", self.app.telemetry_lbl.cget("text"))
+        self.assertIn("3.3%", self.app.pct_lbl.cget("text"))
+        self.assertIn("1 m, 0 s", self.app.eta_lbl.cget("text"))
+
+        # Verify successful completion
+        self.app.output_queue.put("__PROCESS_FINISHED__:0")
+        self.app._check_queue()
+        self.assertEqual(self.app.progress_bar["value"], 100)
+        self.assertEqual(self.app.pct_lbl.cget("text"), "100.0%")
+
+
 if __name__ == "__main__":
     unittest.main()
