@@ -155,9 +155,29 @@ examples/*/sparse/
 **/sparse/
 *.ply
 *.bin
+*.splat
+*.spz
 backups/
 Abu_Align_Backups/
 scratch/
 Abu_Align/logs/*.log
 !Abu_Align/logs/.gitkeep
 acezero/
+
+# Model weights & Large Checkpoints (Keep out of Git)
+*.pt
+*.pth
+*.onnx
+checkpoints/
+**/checkpoints/
+
+# Datasets & raw images
+datasets/
+**/datasets/
+
+# Large Archives & Cloud Config
+*.zip
+*.tar
+*.tar.gz
+*.7z
+.runpod/

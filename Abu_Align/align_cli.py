@@ -77,7 +77,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.1.6 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.1.7 - Neural Photogrammetry & 3DGS Training
    Align: VGGT Foundation | VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
 ======================================================================
@@ -480,6 +480,15 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             c_int = c_int.squeeze(0).float().cpu().numpy()
             c_depth = c_depth.squeeze(0).float().cpu().numpy()
             c_conf = c_conf.squeeze(0).float().cpu().numpy()
+            if c_depth.ndim == 4 and c_depth.shape[-1] == 1:
+                c_depth = c_depth.squeeze(-1)
+            elif c_depth.ndim == 4 and c_depth.shape[1] == 1:
+                c_depth = c_depth.squeeze(1)
+
+            if c_conf.ndim == 4 and c_conf.shape[-1] == 1:
+                c_conf = c_conf.squeeze(-1)
+            elif c_conf.ndim == 4 and c_conf.shape[1] == 1:
+                c_conf = c_conf.squeeze(1)
 
             c_centers = np.zeros((c_len, 3))
             for i in range(c_len):
@@ -529,31 +538,31 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
                     for v_pix in range(grid_step, H_d - grid_step, grid_step):
                         for u_pix in range(grid_step, W_d - grid_step, grid_step):
-                            c_s = c_conf[k, v_pix, u_pix]
-                            c_d = prev_chunk_conf[prev_k, v_pix, u_pix]
+                            c_s = float(c_conf[k, v_pix, u_pix])
+                            c_d = float(prev_chunk_conf[prev_k, v_pix, u_pix])
                             if c_s >= 1.5 and c_d >= 1.5:
-                                z_s = c_depth[k, v_pix, u_pix]
-                                z_d = prev_chunk_depth[prev_k, v_pix, u_pix]
+                                z_s = float(c_depth[k, v_pix, u_pix])
+                                z_d = float(prev_chunk_depth[prev_k, v_pix, u_pix])
                                 if z_s > 0.05 and z_d > 0.05:
-                                    p_cam_s = np.array([(u_pix - cx_s) * z_s / fx_s, (v_pix - cy_s) * z_s / fy_s, z_s])
-                                    p_w_s = R_src.T @ (p_cam_s - t_src)
+                                    p_cam_s = np.array([(u_pix - cx_s) * z_s / fx_s, (v_pix - cy_s) * z_s / fy_s, z_s], dtype=np.float64)
+                                    p_w_s = (R_src.T @ (p_cam_s - t_src)).flatten()
 
-                                    p_cam_d = np.array([(u_pix - cx_d) * z_d / fx_d, (v_pix - cy_d) * z_d / fy_d, z_d])
-                                    p_w_d = R_dst.T @ (p_cam_d - t_dst)
+                                    p_cam_d = np.array([(u_pix - cx_d) * z_d / fx_d, (v_pix - cy_d) * z_d / fy_d, z_d], dtype=np.float64)
+                                    p_w_d = (R_dst.T @ (p_cam_d - t_dst)).flatten()
 
                                     src_pts_3d.append(p_w_s)
                                     dst_pts_3d.append(p_w_d)
 
                 if len(src_pts_3d) >= 16:
-                    src_pts_arr = np.array(src_pts_3d)
-                    dst_pts_arr = np.array(dst_pts_3d)
-                    src_cam_weighted = np.repeat(src_overlap, 10, axis=0)
-                    dst_cam_weighted = np.repeat(dst_overlap, 10, axis=0)
+                    src_pts_arr = np.array(src_pts_3d, dtype=np.float64).reshape(-1, 3)
+                    dst_pts_arr = np.array(dst_pts_3d, dtype=np.float64).reshape(-1, 3)
+                    src_cam_weighted = np.repeat(src_overlap, 10, axis=0).reshape(-1, 3)
+                    dst_cam_weighted = np.repeat(dst_overlap, 10, axis=0).reshape(-1, 3)
                     src_all = np.vstack([src_cam_weighted, src_pts_arr])
                     dst_all = np.vstack([dst_cam_weighted, dst_pts_arr])
                     s_rel, R_rel, t_rel = umeyama_alignment(src_all, dst_all)
                 else:
-                    s_rel, R_rel, t_rel = umeyama_alignment(src_overlap, dst_overlap)
+                    s_rel, R_rel, t_rel = umeyama_alignment(src_overlap.reshape(-1, 3), dst_overlap.reshape(-1, 3))
 
                 for i in range(c_len):
                     R_c = c_ext[i, :3, :3]
@@ -637,6 +646,16 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         intrinsic = intrinsic.squeeze(0).float().cpu().numpy()
         depth_map = depth_map.squeeze(0).float().cpu().numpy()
         depth_conf = depth_conf.squeeze(0).float().cpu().numpy()
+        if depth_map.ndim == 4 and depth_map.shape[-1] == 1:
+            depth_map = depth_map.squeeze(-1)
+        elif depth_map.ndim == 4 and depth_map.shape[1] == 1:
+            depth_map = depth_map.squeeze(1)
+
+        if depth_conf.ndim == 4 and depth_conf.shape[-1] == 1:
+            depth_conf = depth_conf.squeeze(-1)
+        elif depth_conf.ndim == 4 and depth_conf.shape[1] == 1:
+            depth_conf = depth_conf.squeeze(1)
+
         points_3d = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
 
     inf_elapsed = time.time() - inf_start
@@ -955,7 +974,7 @@ def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "-o", type=str, default=None, help="Custom output directory for sparse COLMAP files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt", "vggt_omega", "ace0", "acezero", "pycusfm", "cusfm"], default="vggt", help="Model engine: 'vggt', 'vggt_omega', 'ace0', or 'pycusfm' (NVIDIA Isaac cuSFM)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), or 'pycusfm' (NVIDIA Isaac cuSFM)")
     parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
@@ -965,7 +984,7 @@ def main():
     parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
     parser.add_argument("--cusfm_matcher", type=str, choices=["lightglue", "superglue"], default="lightglue", help="Keypoint matcher for PyCuSFM (default: lightglue)")
-    parser.add_argument("--cusfm_init", type=str, choices=["omega", "vggt", "ace0", "none"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
+    parser.add_argument("--cusfm_init", type=str, choices=["omega", "ace0", "none"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
     parser.add_argument("--cusfm_ba_iterations", type=int, default=100, help="Maximum bundle adjustment iterations for PyCuSFM (default: 100)")
     parser.add_argument("--cusfm_rgb", dest="cusfm_rgb", action="store_true", default=True, help="Generate colorized RGB 3D point cloud for PyCuSFM")
     parser.add_argument("--no_cusfm_rgb", dest="cusfm_rgb", action="store_false", help="Generate geometric sparse point cloud for PyCuSFM")
@@ -1084,18 +1103,18 @@ def main():
 
     engine = args.engine
     model = None
-    vggt_res = 518
+    vggt_res = 512
 
     # Determine which model is needed for inference or coarse initialization
     needs_omega = (engine == "vggt_omega") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "omega")
-    needs_vggt = (engine == "vggt") or (engine in ["pycusfm", "cusfm"] and args.cusfm_init == "vggt")
 
-    # Attempt to load VGGT-Omega if requested
+    # Load VGGT-Omega if requested
     if needs_omega:
         possible_ckpts = [
             args.checkpoint,
             r"C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\vggt-omega\vggt_omega_1b_512.pt",
             r"C:\Users\USer\.cache\torch\hub\checkpoints\vggt_omega_1b_512.pt",
+            os.path.join(os.getcwd(), "checkpoints", "vggt_omega_1b_512.pt"),
             os.path.join(os.getcwd(), "vggt_omega_1b_512.pt"),
         ]
         found_ckpt = None
@@ -1117,28 +1136,12 @@ def main():
                 vggt_res = 512
                 print(f"      * Model Loaded:  VGGT-Omega in {time.time()-t_load:.1f}s")
             except Exception as e:
-                print(f"[WARNING] Failed to load VGGT-Omega: {e}. Falling back to VGGT.")
-                needs_vggt = True
+                raise RuntimeError(f"Failed to load VGGT-Omega checkpoint from {found_ckpt}: {e}")
         else:
-            if engine == "vggt_omega":
-                print("\n" + "="*70)
-                print(" [NOTICE] VGGT-Omega weights (vggt_omega_1b_512.pt) are not yet downloaded.")
-                print("          (Your HuggingFace access request status is currently PENDING)")
-                print("          --> Seamlessly falling back to VGGT-1B (Ready & Cached)!")
-                print("="*70 + "\n")
-            needs_vggt = True
-
-    # Default or fallback to standard VGGT
-    if needs_vggt and model is None:
-        from vggt.models.vggt import VGGT
-        vggt_res = 518
-        print(f"      * Engine:        VGGT-1B (Global Attention)")
-        t_load = time.time()
-        model = VGGT()
-        checkpoint_url = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-        model.load_state_dict(torch.hub.load_state_dict_from_url(checkpoint_url))
-        model.eval().to(device)
-        print(f"      * Model Loaded:  VGGT-1B Transformer in {time.time()-t_load:.1f}s")
+            raise FileNotFoundError(
+                "VGGT-Omega weights (vggt_omega_1b_512.pt) were not found!\n"
+                "Please ensure vggt_omega_1b_512.pt is located in checkpoints/ or specify --checkpoint."
+            )
 
     # ACE0 Engine initialization
     if engine in ["ace0", "acezero"]:
