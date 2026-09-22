@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.5
+Abu Align & Train Version 0.0.3.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -56,6 +56,9 @@ class ToolTip:
         self.widget.bind("<Enter>", self._on_enter, add="+")
         self.widget.bind("<Leave>", self._on_leave, add="+")
         self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+        self.widget.bind("<FocusIn>", self._on_enter, add="+")
+        self.widget.bind("<FocusOut>", self._on_leave, add="+")
+        self.widget.bind("<Escape>", self._on_leave, add="+")
 
     def _on_enter(self, event=None):
         self._schedule()
@@ -92,8 +95,8 @@ class ToolTip:
             frame = tk.Frame(
                 tw,
                 bg="#232338",
-                highlightbackground="#3b82f6",
-                highlightcolor="#3b82f6",
+                highlightbackground="#70dbc0",
+                highlightcolor="#70dbc0",
                 highlightthickness=1,
                 padx=9,
                 pady=6
@@ -105,11 +108,14 @@ class ToolTip:
                 text=self.text,
                 justify=tk.LEFT,
                 bg="#232338",
-                fg="#f8fafc",
+                fg="#e7edef",
                 font=("Segoe UI", 9),
                 wraplength=340
             )
             lbl.pack()
+            tw.update_idletasks()
+            y = min(y, max(0, self.widget.winfo_screenheight() - tw.winfo_reqheight() - 12))
+            tw.wm_geometry(f"+{x}+{y}")
         except Exception:
             pass
 
@@ -204,22 +210,24 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.5 (Neural Photogrammetry & 3DGS Training Suite)")
-        self.root.geometry("1100x870")
-        self.root.minsize(920, 700)
+        self.root.title("Abu Align & Train - Version 0.0.3.6 (Neural Photogrammetry & 3DGS Training Suite)")
+        width = min(1440, self.root.winfo_screenwidth() - 80)
+        height = min(1050, self.root.winfo_screenheight() - 120)
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(960, 720)
 
         # Style configuration (Modern Dark Palette)
-        self.bg_dark = "#181825"
-        self.panel_bg = "#1e1e2e"
-        self.panel_border = "#313244"
-        self.accent_blue = "#3b82f6"
+        self.bg_dark = "#111518"
+        self.panel_bg = "#1a2024"
+        self.panel_border = "#344149"
+        self.accent_blue = "#70dbc0"
         self.accent_green = "#10b981"
         self.accent_red = "#ef4444"
         self.accent_purple = "#8b5cf6"
         self.accent_cyan = "#0284c7"
-        self.text_primary = "#f8fafc"
-        self.text_secondary = "#94a3b8"
-        self.console_bg = "#11111b"
+        self.text_primary = "#e7edef"
+        self.text_secondary = "#a0adb5"
+        self.console_bg = "#111518"
 
         self.root.configure(bg=self.bg_dark)
 
@@ -480,6 +488,7 @@ class AbuAlignApp:
         file_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
+        file_menu.add_command(label="Save configuration preset...", accelerator="Ctrl+Shift+S", command=self._save_preset)
         file_menu.add_command(label="Open Video File...", command=self._browse_video)
         file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
         file_menu.add_command(label="📁 Open 3DGS Models Folder", command=self._open_models_folder)
@@ -505,738 +514,8 @@ class AbuAlignApp:
         help_menu.add_command(label="ℹ️ About Abu Align & Train", command=self._show_about_box)
 
     def _build_ui(self):
-        # 1. Header Banner
-        header = tk.Frame(self.root, bg=self.panel_bg, height=65)
-        header.pack(fill=tk.X, padx=12, pady=(12, 6))
-
-        title_lbl = tk.Label(
-            header,
-            text="ABU ALIGN & TRAIN",
-            font=("Segoe UI", 16, "bold"),
-            fg=self.accent_blue,
-            bg=self.panel_bg
-        )
-        title_lbl.pack(side=tk.LEFT, padx=16, pady=8)
-
-        version_badge = tk.Label(
-            header,
-            text="v0.0.3.5",
-            font=("Segoe UI", 9, "bold"),
-            fg="#ffffff",
-            bg=self.accent_purple,
-            padx=6,
-            pady=2
-        )
-        version_badge.pack(side=tk.LEFT, pady=12)
-
-        subtitle_lbl = tk.Label(
-            header,
-            text="|   Neural Photogrammetry & 3D Gaussian Splatting Training Suite",
-            font=("Segoe UI", 10),
-            fg=self.text_secondary,
-            bg=self.panel_bg
-        )
-        subtitle_lbl.pack(side=tk.LEFT, padx=10, pady=12)
-
-        # Header Help & User Guide Button
-        help_btn = tk.Button(
-            header,
-            text="📖 User Guide & Manual",
-            font=("Segoe UI", 9, "bold"),
-            bg="#29293d",
-            fg="#f8fafc",
-            activebackground=self.accent_blue,
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=12,
-            pady=4,
-            command=self._open_user_guide
-        )
-        help_btn.pack(side=tk.RIGHT, padx=16, pady=12)
-        ToolTip(help_btn, "Open Abu Align User Guide & Fundamentals Manual")
-
-        # 2. Main Content Notebook / Grid
-        content_frame = tk.Frame(self.root, bg=self.bg_dark)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
-
-        # Top Control Card
-        # Top Control Card: Project & Dataset Workspace
-        control_card = tk.LabelFrame(
-            content_frame,
-            text=" Project & Dataset Workspace (Shared Alignment & Training Input) ",
-            font=("Segoe UI", 10, "bold"),
-            fg=self.text_primary,
-            bg=self.panel_bg,
-            padx=14,
-            pady=10
-        )
-        control_card.pack(fill=tk.X, pady=(0, 8))
-
-        preset_row = tk.Frame(control_card, bg=self.panel_bg)
-        preset_row.pack(fill=tk.X, pady=4)
-        tk.Label(preset_row, text="User Preset:", width=14, anchor="w",
-                 font=("Segoe UI", 9, "bold"), fg=self.text_primary,
-                 bg=self.panel_bg).pack(side=tk.LEFT)
-        self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_var,
-                                         state="readonly", postcommand=self._refresh_presets)
-        self.preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        for label, command in [("Load", self._load_preset), ("Save As…", self._save_preset)]:
-            tk.Button(preset_row, text=label, command=command, bg=self.accent_blue,
-                      fg="white", relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=3)
-        ToolTip(self.preset_combo, "Save and restore all alignment and training settings.\n"
-                "The current dataset and separate tool dialogs are not included.")
-        self._refresh_presets()
-
-        # Dataset Path Selection
-        path_row = tk.Frame(control_card, bg=self.panel_bg)
-        path_row.pack(fill=tk.X, pady=4)
-
-        tk.Label(
-            path_row,
-            text="Dataset Folder:",
-            font=("Segoe UI", 9, "bold"),
-            fg=self.text_primary,
-            bg=self.panel_bg,
-            width=14,
-            anchor="w"
-        ).pack(side=tk.LEFT)
-
-        self.dataset_var = tk.StringVar(value=r"C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Sony\101MSDCF\CC\Interior\RedBox\SEL Copy")
-        self.path_entry = tk.Entry(
-            path_row,
-            textvariable=self.dataset_var,
-            font=("Segoe UI", 9),
-            bg=self.bg_dark,
-            fg=self.text_primary,
-            insertbackground=self.text_primary,
-            relief=tk.FLAT
-        )
-        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=3)
-
-        browse_btn = tk.Button(
-            path_row,
-            text="📁 Browse Folder...",
-            font=("Segoe UI", 9),
-            bg=self.accent_blue,
-            fg="#ffffff",
-            activebackground="#2563eb",
-            relief=tk.FLAT,
-            padx=10,
-            command=self._browse_dataset
-        )
-        browse_btn.pack(side=tk.RIGHT)
-
-        video_btn = tk.Button(
-            path_row,
-            text="🎬 Video Extractor...",
-            font=("Segoe UI", 9, "bold"),
-            bg="#0284c7",
-            fg="#ffffff",
-            activebackground="#0369a1",
-            relief=tk.FLAT,
-            padx=10,
-            command=self._open_video_extractor_dialog
-        )
-        video_btn.pack(side=tk.RIGHT, padx=(0, 6))
-        ToolTip(video_btn, "Open Professional Video to Frame Sequence Extractor:\nExtract 360° videos (.mp4, .mov, .insv) to PNG/JPEG sequences with custom FPS, resolution & blur filtering.")
-
-        splitter_btn = tk.Button(
-            path_row,
-            text="🌐 360° Rig Splitter...",
-            font=("Segoe UI", 9, "bold"),
-            bg="#7c3aed",
-            fg="#ffffff",
-            activebackground="#6d28d9",
-            relief=tk.FLAT,
-            padx=10,
-            command=self._open_panoramic_splitter_dialog
-        )
-        splitter_btn.pack(side=tk.RIGHT, padx=(0, 6))
-        ToolTip(splitter_btn, "Open 360° Multi-Camera Rig Projector & Panoramic Splitter:\nConvert 360° equirectangular panoramas into 6-face cubemap, 8-camera ring (50% overlap), or 14-camera dome pinhole rigs with transforms.json.")
-
-        # Live Dataset Status & Health Inspector Bar
-        status_row = tk.Frame(control_card, bg=self.panel_bg)
-        status_row.pack(fill=tk.X, pady=(2, 4))
-        self.dataset_status_lbl = tk.Label(
-            status_row,
-            text="🔍 Inspecting dataset folder...",
-            font=("Segoe UI", 8, "bold"),
-            fg=self.text_secondary,
-            bg=self.panel_bg,
-            anchor="w"
-        )
-        self.dataset_status_lbl.pack(side=tk.LEFT, padx=2)
-
-        # Options Grid: Fixed Left Column + Dynamic Right Panel
-        opts_grid = tk.Frame(control_card, bg=self.panel_bg)
-        opts_grid.pack(fill=tk.X, pady=(8, 4))
-
-        # Column 1: Engine Selection & Canvas / Stride (Fixed)
-        col1 = tk.Frame(opts_grid, bg=self.panel_bg)
-        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(4, 12))
-
-        tk.Label(col1, text="Alignment Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_omega = tk.Radiobutton(col1, text="VGGT-Omega (Fast, Low VRAM)", variable=self.engine_var, value="vggt_omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_omega.pack(anchor="w")
-        rb_ace0 = tk.Radiobutton(col1, text="ACE0 (Niantic Labs SfM)", variable=self.engine_var, value="ace0", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_ace0.pack(anchor="w")
-        rb_cusfm = tk.Radiobutton(col1, text="NVIDIA PyCuSFM (cuSFM GPU)", variable=self.engine_var, value="pycusfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_cusfm.pack(anchor="w")
-        rb_opensfm = tk.Radiobutton(col1, text="Mapillary OpenSfM (360° Spherical)", variable=self.engine_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_opensfm.pack(anchor="w")
-        rb_dvo = tk.Radiobutton(col1, text="360DVO (Deep 360° Visual Odometry)", variable=self.engine_var, value="360dvo", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_dvo.pack(anchor="w")
-
-        ToolTip(rb_omega, "VGGT-Omega (2025/2026): Compressed register token architecture. Reduces VRAM usage by ~60% while maintaining wide-baseline alignment.")
-        ToolTip(rb_ace0, "ACE0 (Niantic Labs ECCV 2024): Learning-based Structure-from-Motion. Trains an implicit scene coordinate regression network from scratch on unposed images. Ultra-fast, extremely low VRAM (~2GB), and highly robust.")
-        ToolTip(rb_cusfm, "NVIDIA PyCuSFM (cuSFM): High-throughput CUDA SfM framework by NVIDIA Isaac. Learned ALIKED/SuperPoint keypoints, LightGlue GPU matching, and cuDSS sparse bundle adjustment.")
-        ToolTip(rb_opensfm, "Mapillary OpenSfM: Native 360° equirectangular spherical bundle adjustment on unit bearing S² manifold. Designed for full spherical panoramas, street-level trajectories, and multi-camera rigs.")
-        ToolTip(rb_dvo, "360DVO (IEEE RA-L 2026): Deep visual odometry directly on continuous 360° equirectangular video and sequential spherical frames. Real-time (15-30 FPS) with spherical patch tracking.")
-
-        sub_row = tk.Frame(col1, bg=self.panel_bg)
-        sub_row.pack(anchor="w", pady=(4, 0))
-        tk.Label(sub_row, text="Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        res_cb = ttk.Combobox(sub_row, textvariable=self.res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
-        res_cb.pack(side=tk.LEFT, padx=(2, 6))
-        ToolTip(res_cb, "Canvas Resolution: 512 is fastest for preview/low VRAM; 1024/1536/2048 offers finer spatial detail for feature tracking on 40MP-60MP cameras.")
-
-        tk.Label(sub_row, text="Stride:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        stride_cb = ttk.Combobox(sub_row, textvariable=self.stride_var, values=["1", "2", "3", "4", "5"], state="readonly", width=4)
-        stride_cb.pack(side=tk.LEFT, padx=2)
-        ToolTip(stride_cb, "Keyframe Stride: Frame sampling interval. 1 processes every photo; 2 or 3 skips intermediate frames (ideal for dense video or drone flights).")
-
-        # Dynamic Options Container for Selected Alignment Engine
-        self.align_dynamic_container = tk.Frame(opts_grid, bg=self.panel_bg)
-        self.align_dynamic_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self._build_align_panels()
-        self.engine_var.trace_add("write", lambda *args: self._update_align_panel())
-        self._update_align_panel()
-
-        # Smart Cache & Memory Controls Row
-        cache_row = tk.Frame(control_card, bg=self.panel_bg)
-        cache_row.pack(fill=tk.X, pady=(6, 0))
-
-        cache_chk = tk.Checkbutton(
-            cache_row,
-            text="⚡ Smart Persistent Cache (.abu_cache) - Instant Re-runs (< 5s)",
-            variable=self.cache_var,
-            font=("Segoe UI", 9, "bold"),
-            fg="#60a5fa",
-            bg=self.panel_bg,
-            selectcolor=self.bg_dark,
-            activebackground=self.panel_bg
-        )
-        cache_chk.pack(side=tk.LEFT)
-        ToolTip(cache_chk, "Smart Persistent Cache (.abu_cache):\n• Reuses neural poses & 3D points when changing Point Cloud Density, Alignment Accuracy, or Lens Distortion.\n• Reuses 2D feature tracks when re-solving Ceres BA.\n• Skips 5-15 minutes of neural inference and tracking on repeated runs.")
-
-        clear_cache_btn = tk.Button(
-            cache_row,
-            text="🗑 Clear Cache",
-            font=("Segoe UI", 8),
-            bg="#2a2a3e",
-            fg=self.text_primary,
-            activebackground=self.accent_red,
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=8,
-            pady=1,
-            command=self._clear_dataset_cache
-        )
-        clear_cache_btn.pack(side=tk.LEFT, padx=(8, 16))
-        ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
-
-        self.vggt_cache_frame = tk.Frame(cache_row, bg=self.panel_bg)
-        self.vggt_cache_frame.pack(side=tk.LEFT)
-
-        tk.Label(self.vggt_cache_frame, text="Chunk [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
-        chunk_cb = ttk.Combobox(
-            self.vggt_cache_frame,
-            textvariable=self.chunk_size_var,
-            values=[
-                "16", "24", "32", "48", "64", "96", "128", 
-                "160", "192", "224", "256", "320", "384", "448", "512", "768", "1024"
-            ],
-            width=5
-        )
-        chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
-        ToolTip(chunk_cb, "Sliding-Window Chunk Size [VGGT / VGGT-Omega Only]:\nSubdivides large image collections into attention chunks connected via Sim(3) Umeyama alignment.\n• Stride & Res apply to all engines; Chunk and Anchor apply only to VGGT attention.")
-
-        tk.Label(self.vggt_cache_frame, text="Anchor [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
-        anchor_cb = ttk.Combobox(
-            self.vggt_cache_frame,
-            textvariable=self.anchor_var,
-            values=[
-                "4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256"
-            ],
-            width=5
-        )
-        anchor_cb.pack(side=tk.LEFT, padx=2)
-        ToolTip(anchor_cb, "Anchor Overlap Frames [VGGT / VGGT-Omega Only]:\nNumber of overlapping frames between consecutive sliding windows to guarantee continuous scale & pose registration.")
-
-        # 3. 3D Gaussian Splatting Training Suite Card (Abu Train)
-        train_card = tk.LabelFrame(
-            content_frame,
-            text=" 3D Gaussian Splatting Training Suite (Abu Train) ",
-            font=("Segoe UI", 10, "bold"),
-            fg=self.text_primary,
-            bg=self.panel_bg,
-            padx=14,
-            pady=8
-        )
-        train_card.pack(fill=tk.X, pady=(0, 8))
-
-        train_grid = tk.Frame(train_card, bg=self.panel_bg)
-        train_grid.pack(fill=tk.X, pady=(2, 4))
-
-        # Train Col 1: Auto-Train, Engine Selection & Common Iterations (Fixed)
-        tcol1 = tk.Frame(train_grid, bg=self.panel_bg)
-        tcol1.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(4, 12))
-
-        auto_chk = tk.Checkbutton(
-            tcol1,
-            text="⚡ Auto-Train 3DGS after Alignment finishes",
-            variable=self.auto_train_var,
-            font=("Segoe UI", 9, "bold"),
-            fg=self.accent_green,
-            bg=self.panel_bg,
-            selectcolor=self.bg_dark,
-            activebackground=self.panel_bg
-        )
-        auto_chk.pack(anchor="w", pady=(0, 4))
-        ToolTip(auto_chk, "When checked, Abu Align automatically kicks off 3DGS training immediately after photogrammetry alignment finishes.")
-
-        tk.Label(tcol1, text="Training Engine:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_t_lf = tk.Radiobutton(tcol1, text="LichtFeld Studio (Vulkan Live GUI + GUT)", variable=self.train_engine_var, value="lichtfeld", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_t_lf.pack(anchor="w")
-        rb_t_ns = tk.Radiobutton(tcol1, text="Nerfstudio Splatfacto (PyTorch SOTA + PLY)", variable=self.train_engine_var, value="splatfacto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_t_ns.pack(anchor="w")
-        rb_t_gr = tk.Radiobutton(tcol1, text="NVIDIA 3DGRUT / 3DGUT (Ray Traced & GUT)", variable=self.train_engine_var, value="3dgrut", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_t_gr.pack(anchor="w")
-        rb_t_pfgs = tk.Radiobutton(tcol1, text="PFGS360 (Pose-Free 360° GS - CVPR 2026)", variable=self.train_engine_var, value="pfgs360", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        rb_t_pfgs.pack(anchor="w")
-
-        ToolTip(rb_t_lf, "LichtFeld Studio: Native high-performance Vulkan/C++ 3DGS trainer with live real-time viewport (120+ FPS) and MCP bridge.")
-        ToolTip(rb_t_ns, "Nerfstudio Splatfacto: State-of-the-Art PyTorch 3DGS optimizer with automatic standalone Gaussian Splatting PLY exporter.")
-        ToolTip(rb_t_gr, "NVIDIA 3DGRUT / 3DGUT: NVIDIA Research framework for Gaussian ray tracing and unscented transform handling complex non-linear optics.")
-        ToolTip(rb_t_pfgs, "PFGS360 (CVPR 2026): Pose-Free Omnidirectional Gaussian Splatting for 360° videos with consistent depth priors. Jointly optimizes camera poses and 3D Gaussians directly from unposed equirectangular frames or OpenSfM/360DVO alignment handoff.")
-
-        t_iter_row = tk.Frame(tcol1, bg=self.panel_bg)
-        t_iter_row.pack(anchor="w", pady=(4, 0))
-        tk.Label(t_iter_row, text="Iterations:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        iter_cb = ttk.Combobox(
-            t_iter_row,
-            textvariable=self.train_iter_var,
-            values=[
-                "7,000 (Fast Preview)",
-                "15,000 (Balanced / Standard)",
-                "30,000 (Production High-Fidelity)"
-            ],
-            state="readonly",
-            width=26
-        )
-        iter_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(iter_cb, "Training duration: 7,000 steps (~1-2 min preview); 15,000 steps (~3-5 min standard); 30,000 steps (~7-10 min full production quality).")
-
-        # Dynamic Options Container for Selected Training Engine
-        self.train_dynamic_container = tk.Frame(train_grid, bg=self.panel_bg)
-        self.train_dynamic_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self._build_train_panels()
-        self.train_engine_var.trace_add("write", lambda *args: self._update_train_panel())
-        self._update_train_panel()
-
-        # 4. Action Buttons
-        action_bar = tk.Frame(content_frame, bg=self.bg_dark)
-        action_bar.pack(fill=tk.X, pady=(0, 6))
-
-        self.one_click_btn = tk.Button(
-            action_bar,
-            text="⚡  ONE-CLICK ALIGN & TRAIN",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_purple,
-            fg="#ffffff",
-            activebackground="#7c3aed",
-            relief=tk.FLAT,
-            padx=14,
-            pady=6,
-            command=self._start_one_click
-        )
-        self.one_click_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.start_btn = tk.Button(
-            action_bar,
-            text="▶  ALIGNMENT ONLY",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_green,
-            fg="#ffffff",
-            activebackground="#059669",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6,
-            command=self._start_alignment
-        )
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.train_only_btn = tk.Button(
-            action_bar,
-            text="🎯  TRAIN 3DGS ONLY",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_cyan,
-            fg="#ffffff",
-            activebackground="#0369a1",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6,
-            command=self._start_train_only
-        )
-        self.train_only_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.pause_btn = tk.Button(
-            action_bar,
-            text="⏸  PAUSE",
-            font=("Segoe UI", 10, "bold"),
-            bg="#f59e0b",
-            fg="#ffffff",
-            activebackground="#d97706",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6,
-            state=tk.DISABLED,
-            command=self._toggle_pause
-        )
-        self.pause_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.stop_btn = tk.Button(
-            action_bar,
-            text="■  STOP",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_red,
-            fg="#ffffff",
-            activebackground="#dc2626",
-            relief=tk.FLAT,
-            padx=10,
-            pady=6,
-            state=tk.DISABLED,
-            command=self._stop_alignment
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.open_folder_btn = tk.Button(
-            action_bar,
-            text="📁 Results",
-            font=("Segoe UI", 9),
-            bg=self.panel_bg,
-            fg=self.text_primary,
-            activebackground="#33334d",
-            relief=tk.FLAT,
-            padx=9,
-            pady=6,
-            command=self._open_results_folder
-        )
-        self.open_folder_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.models_btn = tk.Button(
-            action_bar,
-            text="📁 3DGS Models",
-            font=("Segoe UI", 9),
-            bg=self.panel_bg,
-            fg=self.text_primary,
-            activebackground="#33334d",
-            relief=tk.FLAT,
-            padx=9,
-            pady=6,
-            command=self._open_models_folder
-        )
-        self.models_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.logs_btn = tk.Button(
-            action_bar,
-            text="📁 Logs",
-            font=("Segoe UI", 9),
-            bg=self.panel_bg,
-            fg=self.text_primary,
-            activebackground="#33334d",
-            relief=tk.FLAT,
-            padx=9,
-            pady=6,
-            command=self._open_logs_folder
-        )
-        self.logs_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.viewer_btn = tk.Button(
-            action_bar,
-            text="🌐 3D Viewer",
-            font=("Segoe UI", 9),
-            bg=self.panel_bg,
-            fg=self.text_primary,
-            activebackground="#33334d",
-            relief=tk.FLAT,
-            padx=9,
-            pady=6,
-            command=self._launch_viewer
-        )
-        self.viewer_btn.pack(side=tk.LEFT)
-
-        # Attach interactive parameter tooltips
-        ToolTip(self.path_entry, "Dataset Folder: Directory containing JPG/PNG photos to align.")
-        ToolTip(browse_btn, "Browse: Open folder selector to pick your photoscanning dataset.")
-
-        ToolTip(self.one_click_btn, "One-Click Pipeline: Runs complete photogrammetry alignment and immediately launches 3DGS training automatically.")
-        ToolTip(self.start_btn, "Start Alignment Only: Runs photogrammetry and exports COLMAP, RealityCapture CSV, transforms.json, and 3dgs_dataset/.")
-        ToolTip(self.train_only_btn, "Train 3DGS Only: Train a 3D Gaussian Splatting model directly from an existing alignment (3dgs_dataset/ or results/).")
-        ToolTip(self.pause_btn, "Pause / Resume: Freeze or thaw the current alignment or training process tree without losing VRAM or progress.")
-        ToolTip(self.stop_btn, "Stop: Safely terminate the running alignment or training process and free GPU memory.")
-        ToolTip(self.open_folder_btn, "Open Results: Open output directory containing sparse reconstruction files, camera CSV, and dense PLY point cloud.")
-        ToolTip(self.models_btn, "Open 3DGS Models: Open output directory containing trained Gaussian Splatting .ply / .spz models.")
-        ToolTip(self.logs_btn, "Open Logs: Open the logs folder in Windows Explorer to inspect detailed diagnostic files.")
-        ToolTip(self.viewer_btn, "3D Browser Viewer: Launch interactive web browser viewer (http://localhost:8080) to inspect cameras and 3D point cloud in real time.")
-
-        # 5. Live Progress Console Card
-        console_card = tk.LabelFrame(
-            content_frame,
-            text=" Live Telemetry & Process Logs ",
-            font=("Segoe UI", 10, "bold"),
-            fg=self.text_primary,
-            bg=self.panel_bg,
-            padx=10,
-            pady=6
-        )
-        console_card.pack(fill=tk.BOTH, expand=True)
-
-        # Stage Breadcrumbs Flow
-        stages_bar = tk.Frame(console_card, bg=self.panel_bg)
-        stages_bar.pack(fill=tk.X, pady=(2, 6))
-
-        stage_names = [
-            "1. Scan",
-            "2. GPU Init",
-            "3. Preprocess",
-            "4. 3D Inf",
-            "5. Tracking & BA",
-            "6. 3DGS Train"
-        ]
-        self.stage_badges = []
-        for i, name in enumerate(stage_names):
-            badge = tk.Label(
-                stages_bar,
-                text=name,
-                font=("Segoe UI", 8, "bold"),
-                fg="#64748b",
-                bg="#232338",
-                padx=8,
-                pady=2,
-                relief=tk.FLAT
-            )
-            badge.pack(side=tk.LEFT, padx=(0, 2))
-            self.stage_badges.append(badge)
-            if i < len(stage_names) - 1:
-                sep = tk.Label(
-                    stages_bar,
-                    text="➔",
-                    font=("Segoe UI", 8),
-                    fg="#475569",
-                    bg=self.panel_bg
-                )
-                sep.pack(side=tk.LEFT, padx=(0, 2))
-
-        # Progress Bar & Real-Time Telemetry Bar
-        telemetry_frame = tk.Frame(console_card, bg=self.panel_bg)
-        telemetry_frame.pack(fill=tk.X, pady=(0, 4))
-
-        self.telemetry_lbl = tk.Label(
-            telemetry_frame,
-            text="Status: Ready | Pipeline Idle",
-            font=("Segoe UI", 9, "bold"),
-            fg=self.accent_blue,
-            bg=self.panel_bg
-        )
-        self.telemetry_lbl.pack(side=tk.LEFT)
-
-        self.eta_lbl = tk.Label(
-            telemetry_frame,
-            text="",
-            font=("Segoe UI", 9),
-            fg=self.accent_green,
-            bg=self.panel_bg
-        )
-        self.eta_lbl.pack(side=tk.RIGHT)
-
-        # High-Contrast Progress Bar Container (Border + Gauge + Percentage Readout)
-        prog_container = tk.Frame(
-            console_card,
-            bg="#11111b",
-            highlightbackground="#3b82f6",
-            highlightcolor="#3b82f6",
-            highlightthickness=1,
-            padx=2,
-            pady=2
-        )
-        prog_container.pack(fill=tk.X, pady=(0, 6))
-
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure(
-            "Abu.Horizontal.TProgressbar",
-            troughcolor="#11111b",
-            background="#3b82f6",
-            darkcolor="#2563eb",
-            lightcolor="#60a5fa",
-            bordercolor="#11111b",
-            thickness=18
-        )
-
-        self.progress_bar = ttk.Progressbar(
-            prog_container,
-            orient="horizontal",
-            mode="determinate",
-            style="Abu.Horizontal.TProgressbar"
-        )
-        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 6), pady=2)
-
-        self.pct_lbl = tk.Label(
-            prog_container,
-            text="  0.0% ",
-            font=("Segoe UI", 9, "bold"),
-            fg="#60a5fa",
-            bg="#11111b",
-            width=8
-        )
-        self.pct_lbl.pack(side=tk.RIGHT, padx=(0, 4))
-
-        # Real-Time System Hardware Telemetry Bar (CPU, RAM, GPU Core, VRAM Dedicated, Shared Paging, GPU Temp)
-        self.hw_bar = tk.Frame(
-            console_card,
-            bg="#161622",
-            highlightbackground="#2e2e44",
-            highlightcolor="#3b82f6",
-            highlightthickness=1,
-            padx=8,
-            pady=3
-        )
-        self.hw_bar.pack(fill=tk.X, pady=(0, 4))
-
-        tk.Label(
-            self.hw_bar,
-            text="⚡ HARDWARE:",
-            font=("Segoe UI", 8, "bold"),
-            fg="#38bdf8",
-            bg="#161622"
-        ).pack(side=tk.LEFT, padx=(0, 6))
-
-        self.hw_cpu_lbl = tk.Label(
-            self.hw_bar,
-            text="CPU: --%",
-            font=("Segoe UI", 8, "bold"),
-            fg="#e2e8f0",
-            bg="#232338",
-            padx=6,
-            pady=1
-        )
-        self.hw_cpu_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_cpu_lbl, "Total CPU Processor Utilization % across all cores.")
-
-        self.hw_ram_lbl = tk.Label(
-            self.hw_bar,
-            text="RAM: --/-- GB",
-            font=("Segoe UI", 8, "bold"),
-            fg="#e2e8f0",
-            bg="#232338",
-            padx=6,
-            pady=1
-        )
-        self.hw_ram_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_ram_lbl, "System Host RAM (Used / Total in GB and percentage).")
-
-        self.hw_gpu_lbl = tk.Label(
-            self.hw_bar,
-            text="GPU: --%",
-            font=("Segoe UI", 8, "bold"),
-            fg="#34d399",
-            bg="#232338",
-            padx=6,
-            pady=1
-        )
-        self.hw_gpu_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_gpu_lbl, "NVIDIA GPU Core Compute Utilization %.")
-
-        self.hw_temp_lbl = tk.Label(
-            self.hw_bar,
-            text="GPU Temp: --°C",
-            font=("Segoe UI", 8, "bold"),
-            fg="#fbbf24",
-            bg="#232338",
-            padx=6,
-            pady=1
-        )
-        self.hw_temp_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_temp_lbl, "NVIDIA GPU Core Temperature (°C).")
-
-        self.hw_vram_lbl = tk.Label(
-            self.hw_bar,
-            text="VRAM: --/-- GB",
-            font=("Segoe UI", 8, "bold"),
-            fg="#a78bfa",
-            bg="#232338",
-            padx=6,
-            pady=1
-        )
-        self.hw_vram_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_vram_lbl, "Dedicated GPU Video RAM (Used / Total in GB and percentage).")
-
-        self.hw_page_lbl = tk.Label(
-            self.hw_bar,
-            text="Paging: OK",
-            font=("Segoe UI", 8, "bold"),
-            fg="#10b981",
-            bg="#1e293b",
-            padx=6,
-            pady=1
-        )
-        self.hw_page_lbl.pack(side=tk.LEFT, padx=(0, 4))
-        ToolTip(self.hw_page_lbl, "Windows WDDM Shared Memory Paging Guard:\n• 'Paging: OK': Dedicated VRAM is within safe margins (<92%). Full 1,008 GB/s bandwidth.\n• '⚠️ VRAM SPILL': VRAM overcommitted, spilling into Shared GPU Memory over PCIe bus (~40x slower).")
-
-        console_toolbar = tk.Frame(console_card, bg=self.panel_bg)
-        console_toolbar.pack(fill=tk.X, pady=(0, 4))
-
-        self.log_status_lbl = tk.Label(
-            console_toolbar,
-            text="Log File: Ready (All runs saved to Abu_Align\\logs\\)",
-            font=("Segoe UI", 8),
-            fg=self.text_secondary,
-            bg=self.panel_bg
-        )
-        self.log_status_lbl.pack(side=tk.LEFT)
-
-        view_log_btn = tk.Button(
-            console_toolbar,
-            text="📄 View Latest Log",
-            font=("Segoe UI", 8),
-            bg="#29293d",
-            fg=self.text_primary,
-            activebackground="#33334d",
-            relief=tk.FLAT,
-            padx=8,
-            pady=2,
-            command=self._open_latest_log
-        )
-        view_log_btn.pack(side=tk.RIGHT)
-        ToolTip(view_log_btn, "Open the latest execution log in default text editor.")
-
-        self.console = ScrolledText(
-            console_card,
-            bg=self.console_bg,
-            fg="#a6accd",
-            insertbackground="#ffffff",
-            font=("Consolas", 9),
-            relief=tk.FLAT,
-            wrap=tk.WORD
-        )
-        self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.3.5 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        from desktop_ui import build_workspace
+        build_workspace(self, ToolTip)
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1897,10 +1176,10 @@ class AbuAlignApp:
             return
         path = self.dataset_var.get().strip()
         if not path:
-            self.dataset_status_lbl.config(text="⚠️ No dataset path specified.", fg="#f59e0b")
+            self.dataset_status_lbl.config(text="Choose a folder of photos or prepared training data to begin.", fg=self.text_secondary)
             return
         if not os.path.exists(path):
-            self.dataset_status_lbl.config(text=f"⚠️ Path not found: {path}", fg=self.accent_red)
+            self.dataset_status_lbl.config(text="Folder not found. Check the path or choose another folder.", fg=self.accent_red)
             return
 
         if os.path.isfile(path):
@@ -3221,10 +2500,10 @@ class AbuAlignApp:
                 viz_canvas.create_line(cx - max_r - 18, cy, cx + max_r + 18, cy, fill="#222233", width=1)
 
                 # Cardinal Labels
-                viz_canvas.create_text(cx, cy - max_r - 14, text="N (0°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"))
-                viz_canvas.create_text(cx + max_r + 16, cy, text="E (+90°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"), anchor="w")
-                viz_canvas.create_text(cx, cy + max_r + 14, text="S (180°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"))
-                viz_canvas.create_text(cx - max_r - 16, cy, text="W (-90°)", fill="#94a3b8", font=("Segoe UI", 8, "bold"), anchor="e")
+                viz_canvas.create_text(cx, cy - max_r - 14, text="N (0°)", fill="#a0adb5", font=("Segoe UI", 8, "bold"))
+                viz_canvas.create_text(cx + max_r + 16, cy, text="E (+90°)", fill="#a0adb5", font=("Segoe UI", 8, "bold"), anchor="w")
+                viz_canvas.create_text(cx, cy + max_r + 14, text="S (180°)", fill="#a0adb5", font=("Segoe UI", 8, "bold"))
+                viz_canvas.create_text(cx - max_r - 16, cy, text="W (-90°)", fill="#a0adb5", font=("Segoe UI", 8, "bold"), anchor="e")
 
                 # Color palette for overlap
                 ol = overlap_var.get()
@@ -3232,7 +2511,7 @@ class AbuAlignApp:
                     wedge_color = "#10b981"  # Optimal green
                     wedge_stipple = "gray25"
                 elif ol > 65.0:
-                    wedge_color = "#3b82f6"  # Blue
+                    wedge_color = "#70dbc0"  # Blue
                     wedge_stipple = "gray25"
                 elif ol >= 20.0:
                     wedge_color = "#f59e0b"  # Amber
@@ -3663,7 +2942,7 @@ class AbuAlignApp:
                     12, 30,
                     anchor="nw",
                     text=f"Azimuth: {orbit_state['yaw']:.1f}°  |  Elevation: {orbit_state['pitch']:.1f}°  |  Zoom: {orbit_state['dist']:.2f}x",
-                    fill="#94a3b8",
+                    fill="#a0adb5",
                     font=("Segoe UI", 7)
                 )
                 viz_canvas.create_text(
@@ -3888,9 +3167,22 @@ class AbuAlignApp:
         inspect_input_source()
         sync_math_and_ui()
 
+    def _clear_console(self):
+        self.console.configure(state="normal")
+        self.console.delete("1.0", tk.END)
+        self.console.configure(state="disabled")
+        self.workspace_tabs.select(self.activity_tab)
+
     def _log(self, text):
+        self.console.configure(state="normal")
         self.console.insert(tk.END, text)
-        self.console.see(tk.END)
+        # Bound the visible console; complete diagnostics remain in the session log.
+        lines = int(self.console.index("end-1c").split(".")[0])
+        if lines > 5000:
+            self.console.delete("1.0", f"{lines - 5000}.0")
+        self.console.configure(state="disabled")
+        if not hasattr(self, "follow_log_var") or self.follow_log_var.get():
+            self.console.see(tk.END)
 
     def _parse_train_iterations(self):
         iter_str = self.train_iter_var.get()
@@ -3940,11 +3232,11 @@ class AbuAlignApp:
             return
         for i, badge in enumerate(self.stage_badges):
             if i < stage_idx:
-                badge.config(bg="#065f46", fg="#34d399")
+                badge.config(bg="#24483f", fg="#70dbc0")
             elif i == stage_idx:
-                badge.config(bg="#2563eb", fg="#ffffff")
+                badge.config(bg="#70dbc0", fg="#111518")
             else:
-                badge.config(bg="#232338", fg="#64748b")
+                badge.config(bg="#242d32", fg="#a0adb5")
 
     def _toggle_pause(self):
         """
@@ -3981,13 +3273,13 @@ class AbuAlignApp:
                     except Exception:
                         pass
                 self.is_paused = False
-                self.pause_btn.config(text="⏸  PAUSE", bg="#f59e0b")
+                self.pause_btn.config(text="Pause", bg="#242d32")
                 self.telemetry_lbl.config(text="Status: ▶ Resumed and executing...", fg=self.accent_blue)
                 self._log("\n[PROCESS] ▶ Execution resumed by user.\n")
         except Exception as e:
             self._log(f"\n[ERROR] Failed to toggle pause: {e}\n")
 
-    def _start_alignment(self, force_auto_train=False):
+    def _start_alignment(self, force_auto_train=False, skip_auto_train=False):
         if self.is_running:
             return
 
@@ -4001,9 +3293,9 @@ class AbuAlignApp:
         self.start_btn.config(state=tk.DISABLED)
         self.one_click_btn.config(state=tk.DISABLED)
         self.train_only_btn.config(state=tk.DISABLED)
-        self.pause_btn.config(state=tk.NORMAL, text="⏸  PAUSE", bg="#f59e0b")
+        self.pause_btn.config(state=tk.NORMAL, text="Pause", bg="#242d32")
         self.stop_btn.config(state=tk.NORMAL)
-        self.console.delete(1.0, tk.END)
+        self._clear_console()
 
         self._set_stage(0)
         self.progress_bar["value"] = 0
@@ -4197,7 +3489,7 @@ class AbuAlignApp:
             else:
                 cmd.append("--no_pfgs_align_depth")
 
-        if force_auto_train or self.auto_train_var.get():
+        if not skip_auto_train and (force_auto_train or self.auto_train_var.get()):
             cmd.append("--train")
 
         self._log(f"Executing: {' '.join(cmd)}\n")
@@ -4247,7 +3539,7 @@ class AbuAlignApp:
                     "Camera Poses Required",
                     f"The selected dataset folder does not contain camera poses:\n{dataset_path}\n\n"
                     f"'{train_engine}' requires camera poses (sparse/0/ or transforms.json) generated by photogrammetry alignment.\n\n"
-                    f"Would you like to run '⚡ ONE-CLICK ALIGN & TRAIN' to automatically align photos and train 3DGS?",
+                    f"Would you like to run 'Align & train' to align these photos and train a 3DGS model?",
                     icon="question"
                 )
                 if resp:
@@ -4259,9 +3551,9 @@ class AbuAlignApp:
         self.start_btn.config(state=tk.DISABLED)
         self.one_click_btn.config(state=tk.DISABLED)
         self.train_only_btn.config(state=tk.DISABLED)
-        self.pause_btn.config(state=tk.NORMAL, text="⏸  PAUSE", bg="#f59e0b")
+        self.pause_btn.config(state=tk.NORMAL, text="Pause", bg="#242d32")
         self.stop_btn.config(state=tk.NORMAL)
-        self.console.delete(1.0, tk.END)
+        self._clear_console()
 
         self._set_stage(5)
         self.progress_bar["value"] = 0
@@ -4359,7 +3651,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4439,7 +3731,7 @@ class AbuAlignApp:
                     self.start_btn.config(state=tk.NORMAL)
                     self.one_click_btn.config(state=tk.NORMAL)
                     self.train_only_btn.config(state=tk.NORMAL)
-                    self.pause_btn.config(state=tk.DISABLED, text="⏸  PAUSE", bg="#f59e0b")
+                    self.pause_btn.config(state=tk.DISABLED, text="Pause", bg="#242d32")
                     self.stop_btn.config(state=tk.DISABLED)
                     self.is_paused = False
                     if code == 0:
@@ -4455,7 +3747,7 @@ class AbuAlignApp:
                         self.eta_lbl.config(text="Error")
                         self._log(f"\n[CRITICAL ERROR] Alignment exited with error code {code}. See traceback above.\n")
                     self.log_status_lbl.config(
-                        text="Log: Saved (Abu_Align\\logs\\)",
+                        text="Log: Saved (logs/)",
                         fg=self.text_secondary
                     )
                 else:
@@ -4556,7 +3848,7 @@ class AbuAlignApp:
                         except Exception:
                             pass
                     self.is_paused = True
-                    self.pause_btn.config(text="▶  RESUME", bg=self.accent_green)
+                    self.pause_btn.config(text="Resume", bg="#24483f")
                     self.telemetry_lbl.config(text="Status: Paused (Process tree suspended)", fg="#f59e0b")
                     self._log("\n[PAUSE] Alignment/Training process suspended by user.\n")
                 else:
@@ -4566,7 +3858,7 @@ class AbuAlignApp:
                         except Exception:
                             pass
                     self.is_paused = False
-                    self.pause_btn.config(text="⏸  PAUSE", bg="#f59e0b")
+                    self.pause_btn.config(text="Pause", bg="#242d32")
                     self.telemetry_lbl.config(text="Status: Resumed", fg=self.accent_blue)
                     self._log("\n[RESUME] Alignment/Training process resumed by user.\n")
             else:
@@ -4602,7 +3894,7 @@ class AbuAlignApp:
             self.start_btn.config(state=tk.NORMAL)
             self.one_click_btn.config(state=tk.NORMAL)
             self.train_only_btn.config(state=tk.NORMAL)
-            self.pause_btn.config(state=tk.DISABLED, text="⏸  PAUSE", bg="#f59e0b")
+            self.pause_btn.config(state=tk.DISABLED, text="Pause", bg="#242d32")
             self.stop_btn.config(state=tk.DISABLED)
             self.telemetry_lbl.config(text="Status: Aborted by user", fg=self.accent_red)
 
@@ -4671,7 +3963,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.5 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4753,7 +4045,7 @@ class AbuAlignApp:
             text="▼ Next",
             font=("Segoe UI", 8),
             bg="#2a2a3e",
-            fg="#f8fafc",
+            fg="#e7edef",
             relief=tk.FLAT,
             padx=6,
             pady=1,
@@ -4766,7 +4058,7 @@ class AbuAlignApp:
             text="▲ Prev",
             font=("Segoe UI", 8),
             bg="#2a2a3e",
-            fg="#f8fafc",
+            fg="#e7edef",
             relief=tk.FLAT,
             padx=6,
             pady=1,
@@ -4784,7 +4076,7 @@ class AbuAlignApp:
             text="✕ Close",
             font=("Segoe UI", 8, "bold"),
             bg="#374151",
-            fg="#f8fafc",
+            fg="#e7edef",
             activebackground=self.accent_red,
             activeforeground="#ffffff",
             relief=tk.FLAT,
@@ -4831,10 +4123,10 @@ class AbuAlignApp:
         text_widget = ScrolledText(
             content_pane,
             wrap=tk.WORD,
-            bg="#11111b",
+            bg="#111518",
             fg="#e2e8f0",
             insertbackground="#ffffff",
-            selectbackground="#3b82f6",
+            selectbackground="#70dbc0",
             selectforeground="#ffffff",
             font=("Segoe UI", 10),
             padx=20,
@@ -4847,7 +4139,7 @@ class AbuAlignApp:
         text_widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), foreground="#60a5fa", spacing1=14, spacing3=6)
         text_widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), foreground="#38bdf8", spacing1=12, spacing3=4)
         text_widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), foreground="#a5b4fc", spacing1=8, spacing3=2)
-        text_widget.tag_configure("code_block", font=("Consolas", 9), background="#1e1e2e", foreground="#fdba74", spacing1=2, spacing3=2)
+        text_widget.tag_configure("code_block", font=("Consolas", 9), background="#1a2024", foreground="#fdba74", spacing1=2, spacing3=2)
         text_widget.tag_configure("bullet", font=("Segoe UI", 10), foreground="#93c5fd")
         text_widget.tag_configure("alert_note", font=("Segoe UI", 9, "bold"), foreground="#38bdf8")
         text_widget.tag_configure("alert_warn", font=("Segoe UI", 9, "bold"), foreground="#f59e0b")
@@ -4945,14 +4237,14 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.5\n"
+            "Abu Align & Train - Version 0.0.3.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
             "• Automated Workflows: One-Click Align & Train, Auto-Handoff, & Standalone 3DGS Training\n"
             "• Standardized 3DGS Factory: Universal 3dgs_dataset/ (sparse/0/, images/, transforms.json, points.ply)\n"
             "• Distortion & Optics: Gaussian Unscented Transform (GUT) & Self-Calibrated Brown-Conrady\n"
-            "• Telemetry: Real-time progress bars, loss curves, PSNR, and persistent logs in Abu_Align\\logs\\\n"
+            "• Telemetry: Real-time progress bars, loss curves, PSNR, and persistent logs in logs/\n"
             "• Scalability: Smart Auto-Chunking & VRAM Guard for large multi-sensor datasets\n\n"
             "Target Integrations: LichtFeld Studio, Postshot, Nerfstudio, RealityScan, COLMAP\n"
             "Developer: saemranian"

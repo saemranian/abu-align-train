@@ -92,6 +92,7 @@ def create_version_snapshot(version_str: str) -> None:
     os.makedirs(target_dir, exist_ok=True)
     snapshot_files = [
         "abu_align_gui.py",
+        "desktop_ui.py",
         "align_cli.py",
         "train_engine.py",
         "opensfm_engine.py",
@@ -132,6 +133,7 @@ def sync_files_with_version(new_version: str) -> List[str]:
     # Canonical files to update with regex patterns
     targets = [
         os.path.join(ROOT_DIR, "abu_align_gui.py"),
+        os.path.join(ROOT_DIR, "desktop_ui.py"),
         os.path.join(ROOT_DIR, "align_cli.py"),
         os.path.join(ROOT_DIR, "train_engine.py"),
         os.path.join(ROOT_DIR, "launcher.cs"),

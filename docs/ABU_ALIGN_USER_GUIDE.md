@@ -1,12 +1,45 @@
 # Abu Align & Train: Complete User Guide & Technical Manual
 
 **Software:** Abu Align & Train (Unified Neural Photogrammetry & 3D Gaussian Splatting Suite)  
-**Version:** v0.0.2.5  
+**Version:** v0.0.3.6
 **Maintainer:** saemranian  
 **Target Environments:** Windows 10/11 (CUDA 12.x+), Linux / RunPod Cloud GPU  
 **Integrated Align Engines:** VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO  
 **Integrated Train Engines:** LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT / 3DGUT, PFGS360  
 **Target Applications:** Postshot, LichtFeld Studio, RealityCapture, MeshLab, Nerfstudio, COLMAP  
+
+---
+
+## Desktop workspace (v0.0.3.6)
+
+The desktop UI uses three focused tabs: **Alignment**, **Training**, and
+**Activity**. Dataset selection, presets, progress, and run controls remain
+visible across tabs. Choose a dataset with **Browse folder** or Ctrl+O.
+
+- **Alignment:** select an engine, image resolution, frame stride, and its
+  detailed parameters. Settings groups wrap as the window narrows. Scroll or
+  use Tab to reach remaining controls; focused controls scroll into view.
+- **Training:** choose the training engine and iterations. **Train after
+  alignment** determines whether the main workflow button includes training.
+- **Activity:** inspect the read-only session log and open Results, Models,
+  Logs, or the 3D viewer. Turn off **Follow log** to inspect earlier messages.
+  The visible console retains about 5,000 lines; the full run log remains on
+  disk. **Monitor** opens live hardware readings. Larger windows also show
+  stages and telemetry inline; compact windows prioritize the log.
+
+**Align & train / Start alignment** follows the automatic training option.
+**Align only** always skips training. **Train only** uses an existing
+reconstruction or a supported pose-free workflow. Starting a run opens Activity.
+Pause and Stop become available during a run.
+
+Use **Save as…** (Ctrl+Shift+S) to save a profile, then select it and choose
+**Load**. Profiles keep all engine settings, but preserve the current dataset.
+Use Alt+1/2/3 or Ctrl+Tab to switch tabs. Buttons support Enter and Space;
+parameter tooltips appear on hover or keyboard focus and dismiss with Escape.
+
+The Video frames and 360° splitter tools remain available beside the presets.
+The workflow guidance below describes the same engines; older screenshots and
+all-caps action names refer to the previous layout.
 
 ---
 

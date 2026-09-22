@@ -22,7 +22,12 @@ class PresetTests(unittest.TestCase):
         self.info = patch("abu_align_gui.messagebox.showinfo").start()
         self.addCleanup(patch.stopall)
         self.addCleanup(self.temp.cleanup)
-        self.addCleanup(self.root.destroy)
+        self.addCleanup(self.close_root)
+
+    def close_root(self):
+        for callback in self.root.tk.call("after", "info"):
+            self.root.after_cancel(callback)
+        self.root.destroy()
 
     def save(self, name="Tour – Fast"):
         with patch("abu_align_gui.simpledialog.askstring", return_value=name):
