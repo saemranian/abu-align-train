@@ -1,10 +1,11 @@
 """
 Abu Align & Train - 3D Gaussian Splatting Training Engine
 ==========================================================
-Integrates 3 premier 3DGS training engines:
+Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
 2. Nerfstudio Splatfacto (State-of-the-Art PyTorch 3DGS + PLY exporter)
 3. NVIDIA 3DGRUT / 3DGUT (Gaussian Ray Tracing & Unscented Transform)
+4. PFGS360 (CVPR 2026 Pose-Free Omnidirectional Gaussian Splatting + Consistent Depth Priors)
 
 Provides unified execution, real-time telemetry streaming, and automated
 3D Gaussian Splat (.ply, .spz, .splat) model generation.
@@ -45,6 +46,22 @@ THREEDGRUT_REPO_CANDIDATES = [
     r"C:\Users\USer\3dgrut",
 ]
 
+PFGS360_NS_TRAIN_CANDIDATES = [
+    r"C:\Users\USer\miniconda3\envs\pfgs360\Scripts\ns-train.exe",
+    r"C:\Users\USer\miniconda3\envs\nerfstudio\Scripts\ns-train.exe",
+    r"C:\Users\USer\miniconda3\envs\gs_clean\Scripts\ns-train.exe",
+    os.path.join(os.path.expanduser("~"), "miniconda3", "envs", "pfgs360", "Scripts", "ns-train.exe"),
+    "/opt/conda/envs/pfgs360/bin/ns-train",
+]
+
+PFGS360_NS_EXPORT_CANDIDATES = [
+    r"C:\Users\USer\miniconda3\envs\pfgs360\Scripts\ns-export.exe",
+    r"C:\Users\USer\miniconda3\envs\nerfstudio\Scripts\ns-export.exe",
+    r"C:\Users\USer\miniconda3\envs\gs_clean\Scripts\ns-export.exe",
+    os.path.join(os.path.expanduser("~"), "miniconda3", "envs", "pfgs360", "Scripts", "ns-export.exe"),
+    "/opt/conda/envs/pfgs360/bin/ns-export",
+]
+
 
 def get_lichtfeld_executable() -> Optional[str]:
     for p in LICHTFELD_CANDIDATES:
@@ -72,6 +89,22 @@ def get_3dgrut_repo() -> Optional[str]:
         if os.path.isdir(p) and os.path.isfile(os.path.join(p, "train.py")):
             return p
     return None
+
+
+def get_pfgs360_train_executable() -> Optional[str]:
+    for p in PFGS360_NS_TRAIN_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    # Fallback to general ns-train
+    return get_nerfstudio_train_executable()
+
+
+def get_pfgs360_export_executable() -> Optional[str]:
+    for p in PFGS360_NS_EXPORT_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    # Fallback to general ns-export
+    return get_nerfstudio_export_executable()
 
 
 # ----------------------------------------------------------------------
@@ -482,7 +515,167 @@ def train_3dgrut(
 
 
 # ----------------------------------------------------------------------
-# 4. Master 3DGS Training Dispatcher
+# 4. PFGS360 Trainer (CVPR 2026 Pose-Free 360° Omnidirectional 3DGS)
+# ----------------------------------------------------------------------
+def train_pfgs360(
+    dataset_dir: str,
+    output_dir: str,
+    iterations: int = 30000,
+    depth_type: str = "unik3d",
+    dataparser_mode: str = "auto",
+    spherical_aware: bool = True,
+    consist_aware: bool = True,
+    inlier_growth: bool = True,
+    filter_sky: bool = True,
+    match_views: int = 0,
+    densify_views: int = 0,
+    sh_degree: int = 3,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> str:
+    """
+    Executes 360° Omnidirectional Gaussian Splatting using PFGS360 (CVPR 2026).
+    Supports both pose-free direct learning and OpenSfM / 360DVO alignment handoff.
+    """
+    def log(msg):
+        if progress_callback:
+            progress_callback(msg)
+        else:
+            print(msg)
+
+    ns_train_exe = get_pfgs360_train_executable()
+    ns_export_exe = get_pfgs360_export_executable()
+    if not ns_train_exe:
+        raise FileNotFoundError(
+            f"PFGS360 ns-train executable not found. Checked: {PFGS360_NS_TRAIN_CANDIDATES}"
+        )
+
+    os.makedirs(output_dir, exist_ok=True)
+    dataset_abs = os.path.abspath(dataset_dir)
+
+    # Determine optimal dataparser:
+    # 1. If opensfm/reconstruction.json exists (from OpenSfM or 360DVO), use opensfm-dataparser
+    # 2. Otherwise use ob3d-dataparser for pose-free egocentric frames
+    rec_json = os.path.join(dataset_abs, "opensfm", "reconstruction.json")
+    if dataparser_mode == "auto":
+        if os.path.isfile(rec_json):
+            active_dp = "opensfm-dataparser"
+        else:
+            active_dp = "ob3d-dataparser"
+    else:
+        active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") else dataparser_mode
+
+    # Ensure metadata.json exists if opensfm-dataparser is active
+    if active_dp == "opensfm-dataparser":
+        try:
+            from opensfm_engine import ensure_opensfm_metadata
+            ensure_opensfm_metadata(dataset_abs)
+        except Exception:
+            pass
+
+    log(f"      * Initializing PFGS360 Engine (CVPR 2026)...")
+    log(f"      * ns-train:    {ns_train_exe}")
+    log(f"      * Dataparser:  {active_dp.upper()}")
+    log(f"      * Depth Prior: {depth_type.upper()} (Omnidirectional)")
+    log(f"      * Spherical:   {'Enabled (S² Manifold)' if spherical_aware else 'Disabled'}")
+    log(f"      * Inlier-Grow: {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
+    log(f"      * Filter Sky:  {'Enabled (>50m)' if filter_sky else 'Disabled'}")
+    log(f"      * Dataset:     {dataset_abs}")
+    log(f"      * Output Dir:  {output_dir}")
+    log(f"      * Max Steps:   {iterations:,}")
+
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    scripts_dir = os.path.dirname(ns_train_exe)
+    env["PATH"] = f"{scripts_dir};{os.path.dirname(scripts_dir)};{env.get('PATH', '')}"
+
+    cmd = [
+        ns_train_exe,
+        "pfgs360",
+        "--data", dataset_abs,
+        "--max-num-iterations", str(iterations),
+        "--output-dir", output_dir,
+        "--pipeline.model.sh-degree", str(sh_degree),
+        "--pipeline.model.depth-type", depth_type,
+    ]
+    if not spherical_aware:
+        cmd.extend(["--pipeline.model.spherical-aware", "False"])
+    if not inlier_growth:
+        cmd.extend(["--pipeline.model.inlier-growth", "False"])
+    if filter_sky:
+        cmd.extend(["--pipeline.model.filter-sky", "True"])
+    if match_views > 0:
+        cmd.extend(["--pipeline.model.match-views", str(match_views)])
+    if densify_views > 0:
+        cmd.extend(["--pipeline.model.densify-views", str(densify_views)])
+
+    # Append dataparser and its specific options
+    cmd.append(active_dp)
+    if active_dp == "opensfm-dataparser":
+        cmd.extend(["--eval-mode", "all"])
+    elif active_dp == "ob3d-dataparser":
+        cmd.extend(["--trajectory-type", "Egocentric"])
+
+    log(f"      * Launching command: {' '.join(cmd)}")
+    start_time = time.time()
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        encoding="utf-8",
+        errors="replace",
+        env=env
+    )
+
+    last_report_time = time.time()
+    for line in proc.stdout:
+        line_s = line.strip()
+        if not line_s:
+            continue
+        lower = line_s.lower()
+        if any(keyword in lower for keyword in ["iter", "step", "loss", "psnr", "point", "viser", "pose", "densify", "depth"]):
+            now = time.time()
+            if now - last_report_time >= 0.25 or any(k in lower for k in ["done", "finish", "export", "saved"]):
+                log(f"        [PFGS360] {line_s}")
+                last_report_time = now
+
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"PFGS360 exited with return code {proc.returncode}")
+
+    # Export Gaussian Splatting .ply if ns-export is available
+    config_files = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
+    if config_files and ns_export_exe:
+        best_config = max(config_files, key=os.path.getmtime)
+        export_ply_path = os.path.join(output_dir, "pfgs360_splat.ply")
+        log(f"      * Exporting PFGS360 Gaussian Splat to PLY: {export_ply_path}")
+        export_cmd = [
+            ns_export_exe,
+            "gaussian-splat",
+            "--load-config", best_config,
+            "--output-dir", output_dir
+        ]
+        try:
+            subprocess.run(export_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        except Exception as ex:
+            log(f"      * [Warning] ns-export failed: {ex}")
+
+    ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
+                     glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
+    if ply_candidates:
+        best_ply = max(ply_candidates, key=os.path.getmtime)
+        log(f"      * [PFGS360] Training complete! Model exported: {best_ply} ({time.time()-start_time:.1f}s)")
+        return best_ply
+
+    log(f"      * [PFGS360] Training complete in {time.time()-start_time:.1f}s.")
+    return output_dir
+
+
+# ----------------------------------------------------------------------
+# 5. Master 3DGS Training Dispatcher
 # ----------------------------------------------------------------------
 def run_3dgs_training(
     engine: str,
@@ -501,6 +694,11 @@ def run_3dgs_training(
     enable_mip: bool = False,
     representation: str = "3dgut",
     bvh_backend: str = "optix",
+    pfgs_depth: str = "unik3d",
+    pfgs_dataparser: str = "auto",
+    pfgs_filter_sky: bool = True,
+    pfgs_match_views: int = 0,
+    pfgs_densify_views: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -528,6 +726,10 @@ def run_3dgs_training(
         progress_callback(f" Sparsity:    {'Enabled' if enable_sparsity else 'Disabled'}")
         progress_callback(f" Mip-Filter:  {'Enabled' if enable_mip else 'Disabled'}")
         progress_callback(f" SH Degree:   {sh_degree}")
+        if "pfgs" in engine_clean:
+            progress_callback(f" Depth Model: {pfgs_depth.upper()}")
+            progress_callback(f" Dataparser:  {pfgs_dataparser.upper()}")
+            progress_callback(f" Filter Sky:  {'Enabled' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
 
     if engine_clean in ["lichtfeld", "lichtfeld_studio", "lfs"]:
@@ -572,8 +774,21 @@ def run_3dgs_training(
             sh_degree=sh_degree,
             progress_callback=progress_callback
         )
+    elif engine_clean in ["pfgs360", "pfgs", "pfgs_360"]:
+        return train_pfgs360(
+            dataset_dir=dataset_dir,
+            output_dir=target_models_dir,
+            iterations=iterations,
+            depth_type=pfgs_depth,
+            dataparser_mode=pfgs_dataparser,
+            filter_sky=pfgs_filter_sky,
+            match_views=pfgs_match_views,
+            densify_views=pfgs_densify_views,
+            sh_degree=sh_degree,
+            progress_callback=progress_callback
+        )
     else:
-        raise ValueError(f"Unknown 3DGS training engine: '{engine}'. Supported: 'lichtfeld', 'splatfacto', '3dgrut'")
+        raise ValueError(f"Unknown 3DGS training engine: '{engine}'. Supported: 'lichtfeld', 'splatfacto', '3dgrut', 'pfgs360'")
 
 
 # ----------------------------------------------------------------------
@@ -584,7 +799,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Abu Align & Train - 3D Gaussian Splatting Training Engine CLI")
     parser.add_argument("--dataset", "-d", required=True, help="Path to dataset directory or 3dgs_dataset folder")
     parser.add_argument("--output", "-o", default=None, help="Destination directory for 3dgs_models")
-    parser.add_argument("--engine", "-e", choices=["lichtfeld", "splatfacto", "3dgrut"], default="lichtfeld", help="3DGS Training Engine")
+    parser.add_argument("--engine", "-e", choices=["lichtfeld", "splatfacto", "3dgrut", "pfgs360"], default="lichtfeld", help="3DGS Training Engine")
     parser.add_argument("--iterations", "-i", type=int, default=30000, help="Max training iterations (default: 30000; quick test: 7000)")
     parser.add_argument("--mode", "-m", choices=["interactive", "headless"], default="interactive", help="Viewport mode")
     parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT)")
@@ -598,6 +813,11 @@ if __name__ == "__main__":
     parser.add_argument("--representation", choices=["3dgut", "3dgrut"], default="3dgut", help="Representation mode for 3DGRUT")
     parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, help="Spherical Harmonics degree")
+    parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Depth prior for PFGS360")
+    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 (auto, opensfm, ob3d, odgs)")
+    parser.add_argument("--pfgs_filter_sky", action="store_true", default=True, help="Filter sky in PFGS360")
+    parser.add_argument("--pfgs_match_views", type=int, default=0, help="Window size for PFGS360 pose matching")
+    parser.add_argument("--pfgs_densify_views", type=int, default=0, help="Window size for PFGS360 densification")
 
     args = parser.parse_args()
 
@@ -653,6 +873,11 @@ if __name__ == "__main__":
             enable_mip=args.enable_mip,
             representation=args.representation,
             bvh_backend=args.bvh_backend,
+            pfgs_depth=args.pfgs_depth,
+            pfgs_dataparser=args.pfgs_dataparser,
+            pfgs_filter_sky=args.pfgs_filter_sky,
+            pfgs_match_views=args.pfgs_match_views,
+            pfgs_densify_views=args.pfgs_densify_views,
             progress_callback=print
         )
     except Exception as e:

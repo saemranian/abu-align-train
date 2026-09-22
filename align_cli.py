@@ -77,9 +77,9 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.1 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.2 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
-   Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT
+   Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
 """
     print(banner)
@@ -1028,7 +1028,7 @@ def main():
 
     # 3D Gaussian Splatting Training Suite Options
     parser.add_argument("--train", action="store_true", help="Automatically train 3D Gaussian Splatting model after alignment finishes")
-    parser.add_argument("--train_engine", type=str, choices=["lichtfeld", "splatfacto", "3dgrut"], default="lichtfeld", help="3DGS training engine (default: lichtfeld)")
+    parser.add_argument("--train_engine", type=str, choices=["lichtfeld", "splatfacto", "3dgrut", "pfgs360"], default="lichtfeld", help="3DGS training engine (default: lichtfeld)")
     parser.add_argument("--train_iterations", type=int, default=30000, help="Number of 3DGS training iterations (default: 30000; quick test: 7000)")
     parser.add_argument("--train_mode", type=str, choices=["interactive", "headless"], default="interactive", help="Training view mode: 'interactive' (live visualizer) or 'headless' (background)")
     parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT) for enhanced non-linear optics")
@@ -1042,6 +1042,12 @@ def main():
     parser.add_argument("--representation", choices=["3dgut", "3dgrut"], default="3dgut", help="Representation mode for 3DGRUT")
     parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, choices=[0, 1, 2, 3], help="Spherical harmonics degree (default: 3)")
+    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 ('auto', 'opensfm', 'ob3d', 'odgs')")
+    parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Monocular depth prior for PFGS360 (default: unik3d)")
+    parser.add_argument("--pfgs_filter_sky", action="store_true", default=True, help="Filter sky areas (>50m) in PFGS360")
+    parser.add_argument("--no_pfgs_filter_sky", dest="pfgs_filter_sky", action="store_false", help="Do not filter sky in PFGS360")
+    parser.add_argument("--pfgs_match_views", type=int, default=0, help="Window size for PFGS360 pose matching")
+    parser.add_argument("--pfgs_densify_views", type=int, default=0, help="Window size for PFGS360 densification")
 
     args = parser.parse_args()
 
@@ -1498,6 +1504,8 @@ def main():
         "splatfacto": "Nerfstudio Splatfacto (PyTorch SOTA + PLY)",
         "nerfstudio": "Nerfstudio Splatfacto (PyTorch SOTA + PLY)",
         "3dgrut": "NVIDIA 3DGRUT / 3DGUT (Ray Traced & GUT)",
+        "pfgs360": "PFGS360 (Pose-Free 360° Omnidirectional GS - CVPR 2026)",
+        "pfgs": "PFGS360 (Pose-Free 360° Omnidirectional GS - CVPR 2026)",
     }
     train_engine_label = train_engine_labels.get(str(args.train_engine).lower(), str(args.train_engine))
     auto_train_label = "Auto-Train Enabled (Active)" if args.train else "Disabled (Standby / Alignment Only)"
@@ -1581,11 +1589,18 @@ def main():
             f"   * Sparsity Pruning (ADMM): {'Enabled (lambda=0.001)' if getattr(args, 'enable_sparsity', False) else 'Disabled'}",
             f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
         ])
+    elif "pfgs" in train_eng_clean:
+        report_lines.extend([
+            f"   * Depth Prior Engine:      {getattr(args, 'pfgs_depth', 'unik3d').upper()} (Omnidirectional)",
+            f"   * Dataparser Routing:      {getattr(args, 'pfgs_dataparser', 'auto').upper()}",
+            f"   * Sky Area Filter:         {'Enabled (>50m)' if getattr(args, 'pfgs_filter_sky', True) else 'Disabled'}",
+            f"   * SH Degree:               {getattr(args, 'sh_degree', 3)}",
+        ])
 
     report_lines.extend([
         "----------------------------------------------------------------------",
         f" Output Directory:     {output_dir}",
-        f"   |-- 3dgs_dataset/              (Universal input for LichtFeld, Nerfstudio, 3DGRUT)",
+        f"   |-- 3dgs_dataset/              (Universal input for LichtFeld, Splatfacto, 3DGRUT, PFGS360)",
         f"   |     |-- images/              (Direct link/staged photos)",
         f"   |     |-- sparse/0/            (COLMAP cameras, images, points3D)",
         f"   |     \\-- transforms.json      (Standard NeRF / 3DGS camera transforms)",
@@ -1633,6 +1648,11 @@ def main():
                 enable_mip=getattr(args, "enable_mip", False),
                 representation=getattr(args, "representation", "3dgut"),
                 bvh_backend=getattr(args, "bvh_backend", "optix"),
+                pfgs_depth=getattr(args, "pfgs_depth", "unik3d"),
+                pfgs_dataparser=getattr(args, "pfgs_dataparser", "auto"),
+                pfgs_filter_sky=getattr(args, "pfgs_filter_sky", True),
+                pfgs_match_views=getattr(args, "pfgs_match_views", 0),
+                pfgs_densify_views=getattr(args, "pfgs_densify_views", 0),
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:

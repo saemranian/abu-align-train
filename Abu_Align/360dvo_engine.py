@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import numpy as np
 import cv2
+import json
 from typing import List, Tuple, Dict, Optional
 
 def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
@@ -38,8 +39,8 @@ def tum_trajectory_to_colmap(
     trajectory_file: str,
     image_names: List[str],
     output_sparse_dir: str,
-    width: int,
-    height: int,
+    width: int = 1024,
+    height: int = 512,
     point_cloud_ply: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
@@ -119,6 +120,94 @@ def tum_trajectory_to_colmap(
         pass
 
     return True, f"Converted {num_to_write} frames to COLMAP format."
+
+
+def tum_trajectory_to_opensfm(
+    trajectory_file: str,
+    image_names: List[str],
+    output_opensfm_dir: str,
+    width: int = 1024,
+    height: int = 512,
+    points_ply: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Converts robotics TUM trajectory format (timestamp tx ty tz qx qy qz qw)
+    into standard Mapillary OpenSfM reconstruction.json and metadata.json,
+    enabling native 360° ingestion by PFGS360's OpenSfMDataParser.
+    """
+    os.makedirs(output_opensfm_dir, exist_ok=True)
+    if not os.path.isfile(trajectory_file):
+        return False, f"Trajectory file not found: {trajectory_file}"
+
+    poses = []
+    with open(trajectory_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 8:
+                t = float(parts[0])
+                tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
+                qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
+                poses.append((t, np.array([tx, ty, tz]), np.array([qx, qy, qz, qw])))
+
+    if not poses:
+        return False, "No valid pose records found in trajectory file."
+
+    num_to_write = min(len(poses), len(image_names))
+    shots = {}
+    valid_names = []
+
+    for idx in range(num_to_write):
+        t, t_c2w, q_c2w = poses[idx]
+        R_c2w = quaternion_to_rotation_matrix(q_c2w)
+
+        # Invert camera-to-world (c2w) to world-to-camera (w2c) for OpenSfM convention
+        R_w2c = R_c2w.T
+        t_w2c = -R_w2c @ t_c2w
+
+        # OpenSfM represents rotation as a 3-element Rodrigues axis-angle vector
+        r_rod, _ = cv2.Rodrigues(R_w2c.astype(np.float64))
+        r_vec = r_rod.flatten().tolist()
+        t_vec = t_w2c.flatten().tolist()
+
+        img_name = image_names[idx]
+        valid_names.append(img_name)
+        shots[img_name] = {
+            "camera": "camera_360",
+            "rotation": [round(float(v), 8) for v in r_vec],
+            "translation": [round(float(v), 8) for v in t_vec]
+        }
+
+    reconstruction = [{
+        "cameras": {
+            "camera_360": {
+                "projection_type": "spherical",
+                "width": int(width),
+                "height": int(height)
+            }
+        },
+        "shots": shots,
+        "points": {}
+    }]
+
+    reconstruction_json = os.path.join(output_opensfm_dir, "reconstruction.json")
+    with open(reconstruction_json, "w", encoding="utf-8") as f:
+        json.dump(reconstruction, f, indent=4)
+
+    # Write metadata.json for train/test split (required by PFGS360 OpenSfMDataParser)
+    dataset_parent = os.path.dirname(output_opensfm_dir)
+    metadata_json = os.path.join(dataset_parent, "metadata.json")
+    test_step = max(1, len(valid_names) // 10) if len(valid_names) >= 5 else 1
+    metadata_payload = {
+        "train": valid_names,
+        "test": valid_names[::test_step]
+    }
+    with open(metadata_json, "w", encoding="utf-8") as f:
+        json.dump(metadata_payload, f, indent=4)
+
+    return True, f"Converted {num_to_write} frames to OpenSfM reconstruction.json & metadata.json."
 
 
 class ThreeSixtyDVOEngine:
@@ -308,6 +397,17 @@ def run_360dvo_reconstruction(
         height=h
     )
     log(f"[*] {msg}")
+
+    opensfm_dir = os.path.join(output_dir, "opensfm")
+    log("[*] Converting TUM Trajectory to OpenSfM format for PFGS360...")
+    s_osfm, msg_osfm = tum_trajectory_to_opensfm(
+        trajectory_file=trajectory_txt,
+        image_names=image_names,
+        output_opensfm_dir=opensfm_dir,
+        width=w,
+        height=h
+    )
+    log(f"[*] {msg_osfm}")
 
     # Load into pycolmap.Reconstruction
     try:

@@ -217,4 +217,62 @@ class OpenSfMEngine:
                 shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points.ply"))
                 break
 
+        # Also preserve OpenSfM reconstruction.json and metadata.json for direct PFGS360 training
+        rec_json = os.path.join(self.output_dir, "reconstruction.json")
+        if os.path.isfile(rec_json):
+            osfm_target = os.path.join(target_3dgs_dir, "opensfm")
+            os.makedirs(osfm_target, exist_ok=True)
+            shutil.copy2(rec_json, os.path.join(osfm_target, "reconstruction.json"))
+            ensure_opensfm_metadata(target_3dgs_dir)
+
         return True
+
+
+def ensure_opensfm_metadata(dataset_dir: str) -> bool:
+    """
+    Ensures <dataset_dir>/metadata.json exists with valid train and test splits,
+    which is required by PFGS360's OpenSfMDataParser for spherical 3DGS training.
+    """
+    dataset_dir = os.path.abspath(dataset_dir)
+    meta_path = os.path.join(dataset_dir, "metadata.json")
+    if os.path.isfile(meta_path):
+        return True
+
+    rec_cands = [
+        os.path.join(dataset_dir, "opensfm", "reconstruction.json"),
+        os.path.join(dataset_dir, "reconstruction.json")
+    ]
+    valid_names = []
+    for rec_path in rec_cands:
+        if os.path.isfile(rec_path):
+            try:
+                with open(rec_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    shots = data[0].get("shots", {})
+                    valid_names = sorted(list(shots.keys()))
+                    if valid_names:
+                        break
+            except Exception:
+                pass
+
+    if not valid_names:
+        img_dir = os.path.join(dataset_dir, "images")
+        if os.path.isdir(img_dir):
+            valid_names = sorted([
+                f for f in os.listdir(img_dir)
+                if f.lower().endswith((".png", ".jpg", ".jpeg", ".exr"))
+            ])
+
+    if not valid_names:
+        return False
+
+    test_step = max(1, len(valid_names) // 10) if len(valid_names) >= 5 else 1
+    metadata_payload = {
+        "train": valid_names,
+        "test": valid_names[::test_step]
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(metadata_payload, f, indent=4)
+
+    return True

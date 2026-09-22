@@ -1,7 +1,7 @@
 """
-Abu Align & Train Version 0.0.2.1
+Abu Align & Train Version 0.0.2.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
-Built on VGGT, VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM, and 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, and NVIDIA 3DGRUT
+Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
 
 import os
@@ -199,7 +199,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.2 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -320,6 +320,14 @@ class AbuAlignApp:
         self.grut_sparsity_var = tk.BooleanVar(value=False)
         self.grut_sh_var = tk.StringVar(value="3")
 
+        # PFGS360 (CVPR 2026) Specific Options
+        self.pfgs_depth_var = tk.StringVar(value="unik3d")
+        self.pfgs_dataparser_var = tk.StringVar(value="auto")
+        self.pfgs_filter_sky_var = tk.BooleanVar(value=True)
+        self.pfgs_spherical_var = tk.BooleanVar(value=True)
+        self.pfgs_inlier_var = tk.BooleanVar(value=True)
+        self.pfgs_sh_var = tk.StringVar(value="3")
+
         # Legacy aliases for backward compatibility
         self.train_mode_var = self.lf_mode_var
         self.gut_var = self.lf_gut_var
@@ -375,7 +383,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.1",
+            text="v0.0.2.2",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -608,10 +616,13 @@ class AbuAlignApp:
         rb_t_ns.pack(anchor="w")
         rb_t_gr = tk.Radiobutton(tcol1, text="NVIDIA 3DGRUT / 3DGUT (Ray Traced & GUT)", variable=self.train_engine_var, value="3dgrut", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_t_gr.pack(anchor="w")
+        rb_t_pfgs = tk.Radiobutton(tcol1, text="PFGS360 (Pose-Free 360° GS - CVPR 2026)", variable=self.train_engine_var, value="pfgs360", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_t_pfgs.pack(anchor="w")
 
         ToolTip(rb_t_lf, "LichtFeld Studio: Native high-performance Vulkan/C++ 3DGS trainer with live real-time viewport (120+ FPS) and MCP bridge.")
         ToolTip(rb_t_ns, "Nerfstudio Splatfacto: State-of-the-Art PyTorch 3DGS optimizer with automatic standalone Gaussian Splatting PLY exporter.")
         ToolTip(rb_t_gr, "NVIDIA 3DGRUT / 3DGUT: NVIDIA Research framework for Gaussian ray tracing and unscented transform handling complex non-linear optics.")
+        ToolTip(rb_t_pfgs, "PFGS360 (CVPR 2026): Pose-Free Omnidirectional Gaussian Splatting for 360° videos with consistent depth priors. Jointly optimizes camera poses and 3D Gaussians directly from unposed equirectangular frames or OpenSfM/360DVO alignment handoff.")
 
         t_iter_row = tk.Frame(tcol1, bg=self.panel_bg)
         t_iter_row.pack(anchor="w", pady=(4, 0))
@@ -1028,7 +1039,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.1 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nTriple 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, & NVIDIA 3DGRUT.\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.2 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1431,11 +1442,67 @@ class AbuAlignApp:
         gr_sh_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(gr_sh_cb, "Spherical Harmonics Degree:\nDegree 3 is standard for realistic directional shine and reflections.")
 
+        # =========================================================================
+        # 4. PFGS360 (Pose-Free Omnidirectional 360° GS - CVPR 2026) Subpanel
+        # =========================================================================
+        self.panel_train_pfgs360 = tk.Frame(self.train_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Dataparser & Alignment Handoff
+        pfgs_col1 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
+        pfgs_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(pfgs_col1, text="Dataparser / Handoff Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect (Handoff or Pose-Free)", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d1.pack(anchor="w")
+        rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff Parser", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d2.pack(anchor="w")
+        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (Omni-Egocentric)", variable=self.pfgs_dataparser_var, value="ob3d", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d3.pack(anchor="w")
+        ToolTip(rb_pfgs_d1, "Auto-Detect [Recommended]:\nIf OpenSfM or 360DVO reconstruction exists, uses OpenSfM dataparser handoff.\nOtherwise, activates Pose-Free omnidirectional egocentric mode directly from unposed 360° video frames.")
+        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nLoads poses, spherical coordinates, and camera extrinsics from opensfm/reconstruction.json.")
+        ToolTip(rb_pfgs_d3, "Pose-Free Direct:\nTrains directly on unposed 360° equirectangular video frames using joint camera pose solving and UniK3D depth priors without prior SfM.")
+
+        # Col B: Depth Prior Model & Spherical Geometry
+        pfgs_col2 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
+        pfgs_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(pfgs_col2, text="Depth Prior & Spherical Geometry:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        depth_row = tk.Frame(pfgs_col2, bg=self.panel_bg)
+        depth_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(depth_row, text="Depth Model:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        depth_cb = ttk.Combobox(depth_row, textvariable=self.pfgs_depth_var, values=["UniK3D", "midas", "zoedepth"], state="readonly", width=10)
+        depth_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(depth_cb, "Depth Prior Model:\n• UniK3D [CVPR 2026 Recommended]: Geometrically consistent omnidirectional spherical depth prior.\n• midas: Multi-condition robust monocular depth.\n• zoedepth: Metric relative zero-shot depth estimation.")
+
+        pfgs_sph_chk = tk.Checkbutton(pfgs_col2, text="SCA-PE (Spherical Coords PE)", variable=self.pfgs_spherical_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        pfgs_sph_chk.pack(anchor="w")
+        ToolTip(pfgs_sph_chk, "Spherical Coordinate Aware Positional Encoding (SCA-PE):\nMaps Gaussians directly across omnidirectional spherical coordinates to eliminate pole pinch distortion.")
+
+        pfgs_inlier_chk = tk.Checkbutton(pfgs_col2, text="DIA-Densify (Inlier Depth Growth)", variable=self.pfgs_inlier_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        pfgs_inlier_chk.pack(anchor="w")
+        ToolTip(pfgs_inlier_chk, "Depth Inlier Aware Densification (DIA-Densify):\nUses depth-consistent backprojected inliers to guide 3D Gaussian splitting and cloning.")
+
+        # Col C: Sky Masking & Viewport
+        pfgs_col3 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
+        pfgs_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(pfgs_col3, text="Optics, Sky Mask & Export:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        sky_chk = tk.Checkbutton(pfgs_col3, text="Filter Sky & Infinity Pixels", variable=self.pfgs_filter_sky_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        sky_chk.pack(anchor="w")
+        ToolTip(sky_chk, "Sky Filtering:\nFilters out distant sky / infinite distance pixels to prevent floaters in outdoor 360° panoramas.")
+
+        pfgs_sh_row = tk.Frame(pfgs_col3, bg=self.panel_bg)
+        pfgs_sh_row.pack(anchor="w", pady=(2, 2))
+        tk.Label(pfgs_sh_row, text="SH Degree:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        pfgs_sh_cb = ttk.Combobox(pfgs_sh_row, textvariable=self.pfgs_sh_var, values=["0", "1", "2", "3", "4"], state="readonly", width=4)
+        pfgs_sh_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(pfgs_sh_cb, "Spherical Harmonics Degree:\nDegree 3 is standard. Degree 4 provides ultra-rich specular highlights.")
+
     def _update_train_panel(self):
         engine = self.train_engine_var.get()
         self.panel_train_lichtfeld.pack_forget()
         self.panel_train_nerfstudio.pack_forget()
         self.panel_train_3dgrut.pack_forget()
+        self.panel_train_pfgs360.pack_forget()
 
         if engine == "lichtfeld":
             self.panel_train_lichtfeld.pack(fill=tk.BOTH, expand=True)
@@ -1443,6 +1510,8 @@ class AbuAlignApp:
             self.panel_train_nerfstudio.pack(fill=tk.BOTH, expand=True)
         elif engine == "3dgrut":
             self.panel_train_3dgrut.pack(fill=tk.BOTH, expand=True)
+        elif engine == "pfgs360":
+            self.panel_train_pfgs360.pack(fill=tk.BOTH, expand=True)
 
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1730,6 +1799,16 @@ class AbuAlignApp:
                 cmd.append("--exposure_correction")
             if self.grut_sparsity_var.get():
                 cmd.append("--enable_sparsity")
+        elif train_engine == "pfgs360":
+            cmd.extend([
+                "--pfgs_depth", self.pfgs_depth_var.get().lower(),
+                "--pfgs_dataparser", self.pfgs_dataparser_var.get(),
+                "--sh_degree", str(self.pfgs_sh_var.get()),
+            ])
+            if self.pfgs_filter_sky_var.get():
+                cmd.append("--pfgs_filter_sky")
+            else:
+                cmd.append("--no_pfgs_filter_sky")
 
         if force_auto_train or self.auto_train_var.get():
             cmd.append("--train")
@@ -1820,6 +1899,14 @@ class AbuAlignApp:
                 cmd.append("--exposure_correction")
             if self.grut_sparsity_var.get():
                 cmd.append("--enable_sparsity")
+        elif train_engine == "pfgs360":
+            cmd.extend([
+                "--pfgs_depth", self.pfgs_depth_var.get().lower(),
+                "--pfgs_dataparser", self.pfgs_dataparser_var.get(),
+                "--sh_degree", str(self.pfgs_sh_var.get()),
+            ])
+            if self.pfgs_filter_sky_var.get():
+                cmd.append("--pfgs_filter_sky")
 
         self._log(f"Executing Standalone 3DGS Training: {' '.join(cmd)}\n")
         self._log(f"Session Log: {self.active_log_path}\n\n")
@@ -1835,7 +1922,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -2140,7 +2227,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.1 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.2 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -2357,10 +2444,10 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.1\n"
+            "Abu Align & Train - Version 0.0.2.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
-            "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, & NVIDIA 3DGRUT\n"
+            "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
             "• Automated Workflows: One-Click Align & Train, Auto-Handoff, & Standalone 3DGS Training\n"
             "• Standardized 3DGS Factory: Universal 3dgs_dataset/ (sparse/0/, images/, transforms.json, points.ply)\n"
             "• Distortion & Optics: Gaussian Unscented Transform (GUT) & Self-Calibrated Brown-Conrady\n"
