@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.4
+Abu Align & Train Version 0.0.2.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -199,7 +199,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.5 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -342,6 +342,8 @@ class AbuAlignApp:
 
         self._build_menu()
         self._build_ui()
+        self.dataset_var.trace_add("write", self._validate_dataset)
+        self._validate_dataset()
         self._check_queue()
         self.root.after(500, self._update_hardware_telemetry)
 
@@ -393,7 +395,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.4",
+            text="v0.0.2.5",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -433,9 +435,10 @@ class AbuAlignApp:
         content_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
 
         # Top Control Card
+        # Top Control Card: Project & Dataset Workspace
         control_card = tk.LabelFrame(
             content_frame,
-            text=" Alignment Configuration ",
+            text=" Project & Dataset Workspace (Shared Alignment & Training Input) ",
             font=("Segoe UI", 10, "bold"),
             fg=self.text_primary,
             bg=self.panel_bg,
@@ -510,6 +513,19 @@ class AbuAlignApp:
         )
         splitter_btn.pack(side=tk.RIGHT, padx=(0, 6))
         ToolTip(splitter_btn, "Open 360° Multi-Camera Rig Projector & Panoramic Splitter:\nConvert 360° equirectangular panoramas into 6-face cubemap, 8-camera ring (50% overlap), or 14-camera dome pinhole rigs with transforms.json.")
+
+        # Live Dataset Status & Health Inspector Bar
+        status_row = tk.Frame(control_card, bg=self.panel_bg)
+        status_row.pack(fill=tk.X, pady=(2, 4))
+        self.dataset_status_lbl = tk.Label(
+            status_row,
+            text="🔍 Inspecting dataset folder...",
+            font=("Segoe UI", 8, "bold"),
+            fg=self.text_secondary,
+            bg=self.panel_bg,
+            anchor="w"
+        )
+        self.dataset_status_lbl.pack(side=tk.LEFT, padx=2)
 
         # Options Grid: Fixed Left Column + Dynamic Right Panel
         opts_grid = tk.Frame(control_card, bg=self.panel_bg)
@@ -590,7 +606,7 @@ class AbuAlignApp:
         clear_cache_btn.pack(side=tk.LEFT, padx=(8, 16))
         ToolTip(clear_cache_btn, "Purge .abu_cache for the currently selected dataset to force a fresh neural inference.")
 
-        tk.Label(cache_row, text="Chunk:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        tk.Label(cache_row, text="Chunk [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
         chunk_cb = ttk.Combobox(
             cache_row,
             textvariable=self.chunk_size_var,
@@ -601,9 +617,9 @@ class AbuAlignApp:
             width=5
         )
         chunk_cb.pack(side=tk.LEFT, padx=(2, 8))
-        ToolTip(chunk_cb, "Sliding-window chunk size for large datasets. Select a preset (up to 1,024) or type any custom number directly into the box.")
+        ToolTip(chunk_cb, "Sliding-Window Chunk Size [VGGT / VGGT-Omega Only]:\nSubdivides large image collections into attention chunks connected via Sim(3) Umeyama alignment.\n• Stride & Res apply to all engines; Chunk and Anchor apply only to VGGT attention.")
 
-        tk.Label(cache_row, text="Anchor:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        tk.Label(cache_row, text="Anchor [VGGT]:", font=("Segoe UI", 8, "bold"), fg="#93c5fd", bg=self.panel_bg).pack(side=tk.LEFT)
         anchor_cb = ttk.Combobox(
             cache_row,
             textvariable=self.anchor_var,
@@ -613,7 +629,7 @@ class AbuAlignApp:
             width=5
         )
         anchor_cb.pack(side=tk.LEFT, padx=2)
-        ToolTip(anchor_cb, "Anchor overlap frames connecting consecutive sliding windows. Select a preset or type any custom number directly into the box.")
+        ToolTip(anchor_cb, "Anchor Overlap Frames [VGGT / VGGT-Omega Only]:\nNumber of overlapping frames between consecutive sliding windows to guarantee continuous scale & pose registration.")
 
         # 3. 3D Gaussian Splatting Training Suite Card (Abu Train)
         train_card = tk.LabelFrame(
@@ -1077,7 +1093,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.4 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.5 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1627,6 +1643,58 @@ class AbuAlignApp:
         )
         if vfile:
             self.dataset_var.set(vfile)
+
+    def _validate_dataset(self, *_):
+        if not hasattr(self, "dataset_status_lbl"):
+            return
+        path = self.dataset_var.get().strip()
+        if not path:
+            self.dataset_status_lbl.config(text="⚠️ No dataset path specified.", fg="#f59e0b")
+            return
+        if not os.path.exists(path):
+            self.dataset_status_lbl.config(text=f"⚠️ Path not found: {path}", fg=self.accent_red)
+            return
+
+        if os.path.isfile(path):
+            ext = os.path.splitext(path)[1].lower()
+            if ext in [".mp4", ".mov", ".insv", ".avi", ".mkv", ".webm", ".m4v"]:
+                self.dataset_status_lbl.config(
+                    text=f"🎬 Video File: {os.path.basename(path)} | Click 'Video Extractor...' or use 360DVO for direct video odometry.",
+                    fg="#38bdf8"
+                )
+            else:
+                self.dataset_status_lbl.config(text=f"📄 Selected file: {os.path.basename(path)}", fg=self.text_secondary)
+            return
+
+        # Folder inspection
+        img_exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+        try:
+            entries = os.listdir(path)
+        except Exception as e:
+            self.dataset_status_lbl.config(text=f"⚠️ Cannot read folder: {e}", fg=self.accent_red)
+            return
+
+        img_count = sum(1 for f in entries if os.path.splitext(f)[1].lower() in img_exts)
+        vid_count = sum(1 for f in entries if os.path.splitext(f)[1].lower() in {".mp4", ".mov", ".insv", ".avi", ".mkv"})
+        
+        has_sparse = os.path.isdir(os.path.join(path, "sparse", "0")) or os.path.isdir(os.path.join(path, "3dgs_dataset", "sparse", "0"))
+        has_transforms = os.path.isfile(os.path.join(path, "transforms.json")) or os.path.isfile(os.path.join(path, "3dgs_dataset", "transforms.json"))
+        has_results = os.path.isdir(os.path.join(path, "results"))
+
+        poses_str = "✓ Prior SfM Poses Found" if (has_sparse or has_transforms) else ("✓ Alignment Results Present" if has_results else "No Prior Poses")
+        
+        if img_count > 0:
+            status_text = f"✓ Ready: {img_count} photos detected  |  {poses_str}  |  Ready for Align & Train"
+            self.dataset_status_lbl.config(text=status_text, fg=self.accent_green)
+        elif vid_count > 0:
+            status_text = f"🎬 {vid_count} video file(s) found. Use 'Video Extractor...' to generate frame sequence for alignment."
+            self.dataset_status_lbl.config(text=status_text, fg="#38bdf8")
+        elif has_results or has_sparse:
+            status_text = f"✓ Photogrammetry dataset ({poses_str}). Ready for Train 3DGS Only."
+            self.dataset_status_lbl.config(text=status_text, fg="#a855f7")
+        else:
+            status_text = "⚠️ No image or video files detected in this folder. Please select a valid photo folder."
+            self.dataset_status_lbl.config(text=status_text, fg="#f59e0b")
 
     def _open_video_extractor_dialog(self):
         """
@@ -2568,6 +2636,36 @@ class AbuAlignApp:
             messagebox.showerror("Error", f"train_engine.py not found at:\n{self.train_script}")
             return
 
+        train_engine = self.train_engine_var.get()
+        # Smart check: if training engine requires camera poses, ensure poses exist
+        if train_engine != "pfgs360":
+            has_poses = False
+            for cand in [
+                os.path.join(dataset_path, "3dgs_dataset", "sparse", "0"),
+                os.path.join(dataset_path, "sparse", "0"),
+                os.path.join(dataset_path, "transforms.json"),
+            ]:
+                if os.path.exists(cand):
+                    has_poses = True
+                    break
+            if not has_poses and os.path.isdir(os.path.join(dataset_path, "results")):
+                for sub in os.listdir(os.path.join(dataset_path, "results")):
+                    if os.path.isdir(os.path.join(dataset_path, "results", sub, "3dgs_dataset")):
+                        has_poses = True
+                        break
+
+            if not has_poses:
+                resp = messagebox.askyesno(
+                    "Camera Poses Required",
+                    f"The selected dataset folder does not contain camera poses:\n{dataset_path}\n\n"
+                    f"'{train_engine}' requires camera poses (sparse/0/ or transforms.json) generated by photogrammetry alignment.\n\n"
+                    f"Would you like to run '⚡ ONE-CLICK ALIGN & TRAIN' to automatically align photos and train 3DGS?",
+                    icon="question"
+                )
+                if resp:
+                    self._start_one_click()
+                return
+
         self.is_running = True
         self.is_paused = False
         self.start_btn.config(state=tk.DISABLED)
@@ -2653,7 +2751,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.4 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.5 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -2964,9 +3062,9 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.4 - {title}")
-        doc_win.geometry("960x780")
-        doc_win.minsize(800, 550)
+        doc_win.title(f"Abu Align v0.0.2.5 - {title}")
+        doc_win.geometry("1060x820")
+        doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
 
         # Header toolbar
@@ -3087,12 +3185,42 @@ class AbuAlignApp:
         )
         close_btn.pack(side=tk.RIGHT, padx=4)
 
-        # ScrolledText display
-        text_frame = tk.Frame(doc_win, bg=self.bg_dark, padx=12, pady=8)
-        text_frame.pack(fill=tk.BOTH, expand=True)
+        # Two-Panel Layout (Left Sidebar for Table of Contents, Right for Document Viewer)
+        paned = tk.PanedWindow(doc_win, orient=tk.HORIZONTAL, bg=self.bg_dark, sashwidth=4, sashrelief=tk.FLAT)
+        paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        # Left Panel: Topics Navigation Sidebar
+        nav_frame = tk.Frame(paned, bg=self.panel_bg, width=260)
+        nav_frame.pack_propagate(False)
+        paned.add(nav_frame, minsize=210, width=270)
+
+        nav_hdr = tk.Frame(nav_frame, bg=self.panel_bg, padx=10, pady=8)
+        nav_hdr.pack(fill=tk.X)
+        tk.Label(nav_hdr, text="📑  TOPICS & CHAPTERS", font=("Segoe UI", 9, "bold"), fg=self.accent_blue, bg=self.panel_bg).pack(anchor="w")
+
+        topic_listbox = tk.Listbox(
+            nav_frame,
+            font=("Segoe UI", 9),
+            bg="#141420",
+            fg="#cbd5e1",
+            selectbackground=self.accent_blue,
+            selectforeground="#ffffff",
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            activestyle="none"
+        )
+        topic_scroll = ttk.Scrollbar(nav_frame, orient=tk.VERTICAL, command=topic_listbox.yview)
+        topic_listbox.configure(yscrollcommand=topic_scroll.set)
+        topic_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        topic_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 2), pady=(0, 8))
+
+        # Right Panel: ScrolledText Document Reader
+        content_pane = tk.Frame(paned, bg=self.bg_dark)
+        paned.add(content_pane, minsize=450)
 
         text_widget = ScrolledText(
-            text_frame,
+            content_pane,
             wrap=tk.WORD,
             bg="#11111b",
             fg="#e2e8f0",
@@ -3100,16 +3228,16 @@ class AbuAlignApp:
             selectbackground="#3b82f6",
             selectforeground="#ffffff",
             font=("Segoe UI", 10),
-            padx=18,
-            pady=14,
+            padx=20,
+            pady=16,
             relief=tk.FLAT
         )
         text_widget.pack(fill=tk.BOTH, expand=True)
 
         # Configure styling tags
-        text_widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), foreground="#60a5fa", spacing1=12, spacing3=6)
-        text_widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), foreground="#38bdf8", spacing1=10, spacing3=4)
-        text_widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), foreground="#a5b4fc", spacing1=6, spacing3=2)
+        text_widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), foreground="#60a5fa", spacing1=14, spacing3=6)
+        text_widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), foreground="#38bdf8", spacing1=12, spacing3=4)
+        text_widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), foreground="#a5b4fc", spacing1=8, spacing3=2)
         text_widget.tag_configure("code_block", font=("Consolas", 9), background="#1e1e2e", foreground="#fdba74", spacing1=2, spacing3=2)
         text_widget.tag_configure("bullet", font=("Segoe UI", 10), foreground="#93c5fd")
         text_widget.tag_configure("alert_note", font=("Segoe UI", 9, "bold"), foreground="#38bdf8")
@@ -3117,8 +3245,10 @@ class AbuAlignApp:
         text_widget.tag_configure("hr", font=("Segoe UI", 4), foreground="#374151")
         text_widget.tag_configure("search_hl", background="#854d0e", foreground="#ffffff")
         text_widget.tag_configure("search_current", background="#dc2626", foreground="#ffffff")
+        text_widget.tag_configure("topic_hl", background="#1e3a8a", foreground="#ffffff")
 
         # Load file and parse Markdown
+        topic_bookmarks = []
         try:
             with open(doc_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -3126,16 +3256,26 @@ class AbuAlignApp:
             in_code_block = False
             for line in lines:
                 sline = line.strip()
+                cur_line_index = text_widget.index(tk.INSERT)
+
                 if sline.startswith("```"):
                     in_code_block = not in_code_block
                     text_widget.insert(tk.END, line, "code_block")
                 elif in_code_block:
                     text_widget.insert(tk.END, line, "code_block")
                 elif sline.startswith("# "):
+                    title_text = sline[2:].strip()
+                    topic_listbox.insert(tk.END, f"📌 {title_text}")
+                    topic_bookmarks.append((title_text, cur_line_index))
                     text_widget.insert(tk.END, line, "h1")
                 elif sline.startswith("## "):
+                    title_text = sline[3:].strip()
+                    topic_listbox.insert(tk.END, f"  ▸ {title_text}")
+                    topic_bookmarks.append((title_text, cur_line_index))
                     text_widget.insert(tk.END, line, "h2")
                 elif sline.startswith("### "):
+                    title_text = sline[4:].strip()
+                    topic_bookmarks.append((title_text, cur_line_index))
                     text_widget.insert(tk.END, line, "h3")
                 elif sline.startswith("- ") or sline.startswith("* "):
                     text_widget.insert(tk.END, "  • ", "bullet")
@@ -3150,6 +3290,21 @@ class AbuAlignApp:
                     text_widget.insert(tk.END, line)
 
             text_widget.config(state=tk.DISABLED)
+
+            def on_topic_click(event=None):
+                sel = topic_listbox.curselection()
+                if sel:
+                    idx = sel[0]
+                    if idx < len(topic_bookmarks):
+                        pos = topic_bookmarks[idx][1]
+                        text_widget.see(pos)
+                        text_widget.tag_remove("topic_hl", "1.0", tk.END)
+                        end_pos = f"{pos} lineend"
+                        text_widget.tag_add("topic_hl", pos, end_pos)
+                        text_widget.after(2000, lambda: text_widget.tag_remove("topic_hl", "1.0", tk.END))
+
+            topic_listbox.bind("<<ListboxSelect>>", on_topic_click)
+
         except Exception as e:
             text_widget.insert(tk.END, f"Error reading document: {e}")
 
@@ -3181,7 +3336,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.4\n"
+            "Abu Align & Train - Version 0.0.2.5\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

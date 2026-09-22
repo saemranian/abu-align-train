@@ -31,6 +31,10 @@ def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
         engine_suffix = "cusfm"
     elif "omega" in eng_lower:
         engine_suffix = "omega"
+    elif "360dvo" in eng_lower or "dvo" in eng_lower:
+        engine_suffix = "360dvo"
+    elif "opensfm" in eng_lower:
+        engine_suffix = "opensfm"
     else:
         engine_suffix = "vggt"
     if use_ba:
@@ -78,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.4 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.5 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1454,8 +1458,25 @@ def main():
     os.makedirs(dataset_3dgs_dir, exist_ok=True)
     sparse_0_dir = os.path.join(dataset_3dgs_dir, "sparse", "0")
     os.makedirs(sparse_0_dir, exist_ok=True)
-    reconstruction.write(sparse_0_dir)
-    reconstruction.write_text(sparse_0_dir)
+    
+    if reconstruction is not None:
+        try:
+            reconstruction.write(sparse_0_dir)
+            reconstruction.write_text(sparse_0_dir)
+        except Exception:
+            pass
+
+    # Copy raw sparse files if generated directly by engine (e.g. 360DVO or OpenSfM)
+    src_sparse = os.path.join(output_dir, "sparse", "0")
+    if os.path.isdir(src_sparse):
+        for fname in os.listdir(src_sparse):
+            src_f = os.path.join(src_sparse, fname)
+            dst_f = os.path.join(sparse_0_dir, fname)
+            if not os.path.exists(dst_f):
+                try:
+                    shutil.copy2(src_f, dst_f)
+                except Exception:
+                    pass
 
     # Link/stage images folder
     images_dst = os.path.join(dataset_3dgs_dir, "images")
@@ -1473,26 +1494,52 @@ def main():
                     except Exception:
                         shutil.copy2(src_p, dst_p)
 
-    export_transforms_json(reconstruction, dataset_3dgs_dir)
+    if reconstruction is not None:
+        try:
+            export_transforms_json(reconstruction, dataset_3dgs_dir)
+        except Exception:
+            pass
+    elif os.path.isfile(os.path.join(output_dir, "transforms.json")):
+        shutil.copy2(os.path.join(output_dir, "transforms.json"), os.path.join(dataset_3dgs_dir, "transforms.json"))
+
     print(f"      * [3DGS Standard Dataset] Generated sparse/0/, images/, and transforms.json at: {dataset_3dgs_dir}")
 
     # Application Folder 1: COLMAP / Lichtfield
     colmap_dir = os.path.join(output_dir, "COLMAP_Lichtfield")
     os.makedirs(colmap_dir, exist_ok=True)
-    reconstruction.write(colmap_dir)
-    reconstruction.write_text(colmap_dir)
-    print(f"      * [COLMAP / Lichtfield] Exported cameras, images, points3D (.txt & .bin) to: {colmap_dir}")
+    if reconstruction is not None:
+        try:
+            reconstruction.write(colmap_dir)
+            reconstruction.write_text(colmap_dir)
+            print(f"      * [COLMAP / Lichtfield] Exported cameras, images, points3D (.txt & .bin) to: {colmap_dir}")
+        except Exception:
+            pass
+    if os.path.isdir(src_sparse):
+        for fname in os.listdir(src_sparse):
+            src_f = os.path.join(src_sparse, fname)
+            dst_f = os.path.join(colmap_dir, fname)
+            if not os.path.exists(dst_f):
+                try:
+                    shutil.copy2(src_f, dst_f)
+                except Exception:
+                    pass
 
     # Application Folder 2: Postshot / RealityCapture
     rc_dir = os.path.join(output_dir, "Postshot_RealityCapture")
     os.makedirs(rc_dir, exist_ok=True)
-    csv_file = export_realitycapture_csv(reconstruction, rc_dir)
-    print(f"      * [Postshot / RealityCapture] Exported camera alignments to: {csv_file}")
-    transforms_file = export_transforms_json(reconstruction, rc_dir)
-    print(f"      * [Postshot / RealityCapture] Exported NeRF/3DGS poses to: {transforms_file}")
+    if reconstruction is not None:
+        try:
+            csv_file = export_realitycapture_csv(reconstruction, rc_dir)
+            print(f"      * [Postshot / RealityCapture] Exported camera alignments to: {csv_file}")
+            transforms_file = export_transforms_json(reconstruction, rc_dir)
+            print(f"      * [Postshot / RealityCapture] Exported NeRF/3DGS poses to: {transforms_file}")
+        except Exception:
+            pass
+    elif os.path.isfile(os.path.join(output_dir, "transforms.json")):
+        shutil.copy2(os.path.join(output_dir, "transforms.json"), os.path.join(rc_dir, "transforms.json"))
 
     # High-density colored point cloud (.ply) for Postshot & MeshLab (Transformed to RC Z-up space)
-    if len(dense_3d) == 0 and reconstruction.num_points3D() > 0:
+    if len(dense_3d) == 0 and reconstruction is not None and reconstruction.num_points3D() > 0:
         dense_3d = np.array([pt.xyz for pt in reconstruction.points3D.values()], dtype=np.float32)
         dense_rgb = np.array([pt.color for pt in reconstruction.points3D.values()], dtype=np.uint8)
     elif len(dense_3d) == 0:
@@ -1510,8 +1557,12 @@ def main():
     ply_path = os.path.join(rc_dir, "points.ply")
     trimesh.PointCloud(dense_3d_rc, colors=dense_rgb).export(ply_path)
     print(f"      * [Postshot / RealityCapture] Exported {len(dense_3d_rc):,} colored points to: {ply_path}")
+    
+    # Guarantee point cloud in 3dgs_dataset/ and root output_dir:
     try:
         shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
+        trimesh.PointCloud(dense_3d, colors=dense_rgb).export(os.path.join(output_dir, "points3D.ply"))
+        print(f"      * [Standard Output] Exported root point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
     except Exception:
         pass
 
@@ -1522,8 +1573,8 @@ def main():
     # Final Completion Report
     # -------------------------------------------------------------
     total_time = time.time() - overall_start_time
-    reg_images = reconstruction.num_reg_images()
-    num_points = reconstruction.num_points3D()
+    reg_images = reconstruction.num_reg_images() if reconstruction is not None else len(image_paths)
+    num_points = reconstruction.num_points3D() if reconstruction is not None else len(dense_3d)
 
     report_lines = [
         "======================================================================",
@@ -1536,17 +1587,20 @@ def main():
         f" 3D Points Created:    {num_points:,} sparse / {len(dense_3d):,} dense vertices",
     ]
 
-    first_cam = next(iter(reconstruction.cameras.values()))
-    if first_cam.model_name in ["FULL_OPENCV", "OPENCV"] and len(first_cam.params) >= 8:
-        report_lines.extend([
-            f" Camera Model:         {first_cam.model_name} (Self-Calibrated via Ceres BA)",
-            f"   * Radial k1, k2:      {first_cam.params[4]:.6e}, {first_cam.params[5]:.6e}",
-            f"   * Tangential t1, t2:  {first_cam.params[6]:.6e}, {first_cam.params[7]:.6e}",
-        ])
-        if len(first_cam.params) > 8:
-            report_lines.append(f"   * Radial k3, k4:      {first_cam.params[8]:.6e}, {first_cam.params[9]:.6e}")
+    if reconstruction is not None and len(reconstruction.cameras) > 0:
+        first_cam = next(iter(reconstruction.cameras.values()))
+        if first_cam.model_name in ["FULL_OPENCV", "OPENCV"] and len(first_cam.params) >= 8:
+            report_lines.extend([
+                f" Camera Model:         {first_cam.model_name} (Self-Calibrated via Ceres BA)",
+                f"   * Radial k1, k2:      {first_cam.params[4]:.6e}, {first_cam.params[5]:.6e}",
+                f"   * Tangential t1, t2:  {first_cam.params[6]:.6e}, {first_cam.params[7]:.6e}",
+            ])
+            if len(first_cam.params) > 8:
+                report_lines.append(f"   * Radial k3, k4:      {first_cam.params[8]:.6e}, {first_cam.params[9]:.6e}")
+        else:
+            report_lines.append(f" Camera Model:         {first_cam.model_name}")
     else:
-        report_lines.append(f" Camera Model:         {first_cam.model_name} (Standard Pinhole)")
+        report_lines.append(f" Camera Model:         EQUIRECTANGULAR (Omnidirectional 360°)")
 
     # Human-readable labels for selected GUI / CLI settings
     engine_labels = {

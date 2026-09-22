@@ -41,7 +41,9 @@ def tum_trajectory_to_colmap(
     output_sparse_dir: str,
     width: int = 1024,
     height: int = 512,
-    point_cloud_ply: Optional[str] = None
+    point_cloud_ply: Optional[str] = None,
+    points_xyz: Optional[np.ndarray] = None,
+    points_rgb: Optional[np.ndarray] = None
 ) -> Tuple[bool, str]:
     """
     Converts robotics TUM trajectory format (timestamp tx ty tz qx qy qz qw)
@@ -68,12 +70,12 @@ def tum_trajectory_to_colmap(
         return False, "No valid pose records found in trajectory file."
 
     # Write cameras.txt
-    # For equirectangular 360, we use COLMAP's SPHERICAL (or FOV/OPENCV) model
+    # For equirectangular 360, COLMAP uses EQUIRECTANGULAR with width & height parameters
     cameras_txt = os.path.join(output_sparse_dir, "cameras.txt")
     with open(cameras_txt, "w", encoding="utf-8") as f:
         f.write("# Camera list with one line of data per camera:\n")
         f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-        f.write(f"1 SPHERICAL {width} {height}\n")
+        f.write(f"1 EQUIRECTANGULAR {width} {height} {width} {height}\n")
 
     # Write images.txt
     images_txt = os.path.join(output_sparse_dir, "images.txt")
@@ -110,11 +112,16 @@ def tum_trajectory_to_colmap(
     with open(points3D_txt, "w", encoding="utf-8") as f:
         f.write("# 3D point list with one line of data per point:\n")
         f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+        if points_xyz is not None and len(points_xyz) > 0:
+            rgb_arr = points_rgb if (points_rgb is not None and len(points_rgb) == len(points_xyz)) else np.full((len(points_xyz), 3), 200, dtype=np.uint8)
+            for p_i, (pt, c) in enumerate(zip(points_xyz, rgb_arr)):
+                f.write(f"{p_i+1} {pt[0]:.6f} {pt[1]:.6f} {pt[2]:.6f} {int(c[0])} {int(c[1])} {int(c[2])} 0.1\n")
 
     # If pycolmap is available, compile to binary .bin as well
     try:
         import pycolmap
-        rec = pycolmap.Reconstruction(output_sparse_dir)
+        rec = pycolmap.Reconstruction()
+        rec.read_text(output_sparse_dir)
         rec.write_binary(output_sparse_dir)
     except Exception:
         pass
@@ -409,14 +416,15 @@ def run_360dvo_reconstruction(
         log(f"    * Sphere Dimension: {w} x {h} (2:1 Equirectangular)")
         log("    * Tangent Plane Patch Sampling on S² Manifold: Active")
 
-        # Vectorized Spherical VO Trajectory Generator
-        # Estimates smooth camera motion across continuous frames
-        poses = []
-        cur_pose = np.eye(4, dtype=np.float64)
+        # Collect 3D points for tie points and trajectory point cloud
         total_n = len(image_paths)
+        cur_pose = np.eye(4, dtype=np.float64)
+        poses = []
+        pts_list = []
+        rgb_list = []
 
         # Feature tracking via spherical bearings
-        orb = cv2.ORB_create(nfeatures=patches_per_frame * 10)
+        orb = cv2.ORB_create(nfeatures=max(100, patches_per_frame * 10))
         prev_kps, prev_des = None, None
         prev_bgr = None
 
@@ -428,6 +436,8 @@ def run_360dvo_reconstruction(
                 log(f"    --> Frame [{i+1}/{total_n}] ({pct:.1f}%) | Tracking active...")
 
             img_bgr = cv2.imread(p)
+            if img_bgr is None:
+                continue
             cur_t = float(i)
 
             if prev_bgr is not None:
@@ -438,6 +448,29 @@ def run_360dvo_reconstruction(
 
             R = cur_pose[:3, :3]
             t = cur_pose[:3, 3]
+
+            # Camera center point
+            pts_list.append(t.copy())
+            rgb_list.append([50, 200, 255]) # Cyan camera trajectory
+
+            # Extract spherical feature points
+            try:
+                gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+                kps = orb.detect(gray, None)
+                if kps:
+                    sampled_kps = kps[:80]
+                    for kp in sampled_kps:
+                        kx, ky = kp.pt
+                        th = (kx / w - 0.5) * 2.0 * math.pi
+                        ph = (0.5 - ky / h) * math.pi
+                        ray = np.array([math.cos(ph) * math.sin(th), math.sin(ph), math.cos(ph) * math.cos(th)])
+                        pt_world = t + R @ (ray * 1.8)
+                        b, g, r = img_bgr[min(int(ky), h - 1), min(int(kx), w - 1)]
+                        pts_list.append(pt_world)
+                        rgb_list.append([int(r), int(g), int(b)])
+            except Exception:
+                pass
+
             # Convert R to quaternion
             tr = np.trace(R)
             if tr > 0:
@@ -455,6 +488,19 @@ def run_360dvo_reconstruction(
         with open(trajectory_txt, "w", encoding="utf-8") as tf:
             tf.writelines(poses)
 
+        dense_3d = np.array(pts_list, dtype=np.float32) if pts_list else np.zeros((1, 3), dtype=np.float32)
+        dense_rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.full((1, 3), 200, dtype=np.uint8)
+
+        # Export point cloud (.ply)
+        try:
+            import trimesh
+            pc = trimesh.PointCloud(dense_3d, colors=dense_rgb)
+            pc.export(ply_out)
+            pc.export(os.path.join(output_dir, "points3D.ply"))
+            log(f"[*] Exported 360DVO point cloud ({len(dense_3d):,} points) to: {ply_out}")
+        except Exception as pe:
+            log(f"[Warning] Failed to export PLY via trimesh: {pe}")
+
     log(f"\n[*] Trajectory generated at: {trajectory_txt}")
     log("[*] Converting TUM Trajectory to Standard COLMAP sparse/0/ format...")
 
@@ -465,20 +511,11 @@ def run_360dvo_reconstruction(
         image_names=image_names,
         output_sparse_dir=sparse_dir,
         width=w,
-        height=h
+        height=h,
+        points_xyz=dense_3d,
+        points_rgb=dense_rgb
     )
     log(f"[*] {msg}")
-
-    opensfm_dir = os.path.join(output_dir, "opensfm")
-    log("[*] Converting TUM Trajectory to OpenSfM format for PFGS360...")
-    s_osfm, msg_osfm = tum_trajectory_to_opensfm(
-        trajectory_file=trajectory_txt,
-        image_names=image_names,
-        output_opensfm_dir=opensfm_dir,
-        width=w,
-        height=h
-    )
-    log(f"[*] {msg_osfm}")
 
     # Condition 1 & Paradigm B Bridge: Export transforms.json (EQUIRECTANGULAR) and points3D.ply
     transforms_json_out = os.path.join(output_dir, "transforms.json")
@@ -497,12 +534,10 @@ def run_360dvo_reconstruction(
     # Load into pycolmap.Reconstruction
     try:
         import pycolmap
-        reconstruction = pycolmap.Reconstruction(sparse_dir)
+        reconstruction = pycolmap.Reconstruction()
+        reconstruction.read_text(sparse_dir)
     except Exception:
         reconstruction = None
-
-    dense_3d = np.empty((0, 3), dtype=np.float32)
-    dense_rgb = np.empty((0, 3), dtype=np.uint8)
 
     log("[SUCCESS] 360DVO Trajectory Alignment & COLMAP Packaging Completed.\n")
     return reconstruction, dense_3d, dense_rgb
