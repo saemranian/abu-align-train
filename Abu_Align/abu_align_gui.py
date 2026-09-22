@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.8
+Abu Align & Train Version 0.0.2.9
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -200,7 +200,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.8 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.9 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -397,7 +397,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.8",
+            text="v0.0.2.9",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -1098,7 +1098,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.8 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.9 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1550,15 +1550,15 @@ class AbuAlignApp:
         pfgs_col1 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
         pfgs_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(pfgs_col1, text="Dataparser / Handoff Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect (Smart Route: Handoff vs Pose-Free)", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d1 = tk.Radiobutton(pfgs_col1, text="Auto-Detect [Recommended: 100% GPU with Pre-Aligned Poses]", variable=self.pfgs_dataparser_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d1.pack(anchor="w")
-        rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff (Requires SfM)", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff [Instant 100% GPU]", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d2.pack(anchor="w")
-        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (No Prior SfM Required)", variable=self.pfgs_dataparser_var, value="posefree", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct [Unposed Video only - CPU Pose Phase]", variable=self.pfgs_dataparser_var, value="posefree", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d3.pack(anchor="w")
-        ToolTip(rb_pfgs_d1, "Auto-Detect [Default]:\nAutomatically checks if an OpenSfM or 360DVO reconstruction exists.\n• If found: routes to OpenSfM handoff.\n• If not found (unposed video): automatically activates Pose-Free Direct mode.")
-        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading poses and extrinsics from opensfm/reconstruction.json.")
-        ToolTip(rb_pfgs_d3, "Pose-Free Direct:\nForces direct joint camera pose estimation and 3DGS training from raw 360° equirectangular video frames without any SfM alignment.")
+        ToolTip(rb_pfgs_d1, "Auto-Detect [Recommended Default]:\nChecks if pre-aligned camera poses exist (OpenSfM, 360DVO, or COLMAP).\n• If found: loads poses in <0.5s and runs 100% RTX 4090 GPU training immediately!\n• If unposed video: runs direct pose-free registration on CPU.")
+        ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading pre-aligned poses from reconstruction.json or transforms.json.\n• Bypasses CPU matching phase completely.\n• Maximizes RTX 4090 CUDA GPU utilization from step 0.")
+        ToolTip(rb_pfgs_d3, "Pose-Free Direct [CVPR 2026 Paradigm A]:\nFor raw unaligned video clips without any prior SfM.\n• Warning: Computes relative poses progressively on CPU before training,\ncausing lower GPU utilization (10-25%) until camera poses are resolved.")
 
         # Col B: Depth Prior Model & Spherical Geometry
         pfgs_col2 = tk.Frame(self.panel_train_pfgs360, bg=self.panel_bg)
@@ -4065,7 +4065,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.8 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.9 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4376,7 +4376,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.8 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.9 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4650,7 +4650,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.8\n"
+            "Abu Align & Train - Version 0.0.2.9\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

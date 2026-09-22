@@ -114,7 +114,7 @@ def solve_spherical_relative_pose(
 
         A = np.zeros((8, 9))
         for k in range(8):
-            A[k] = np.kron(sub_b1[k], sub_b2[k])
+            A[k] = np.kron(sub_b2[k], sub_b1[k])
 
         _, _, vt = np.linalg.svd(A)
         E_cand = vt[-1].reshape(3, 3)
@@ -630,8 +630,23 @@ def run_360dvo_reconstruction(
 
                     # 2. Relative Pose Estimation on S^2 Manifold
                     R_rel, t_rel, inliers = solve_spherical_relative_pose(b1, b2, max_iters=150)
-                    step_len = 0.05 * max(1, stride)
-                    t_step = t_rel * step_len if np.linalg.norm(t_rel) > 1e-4 else np.array([0.0, 0.0, step_len], dtype=np.float64)
+
+                    # Dynamic scale estimation from translational disparity on S^2:
+                    # Derotate b1 into frame 2 to isolate pure translational parallax
+                    b1_derot = (R_rel @ b1[inliers].T).T
+                    dots = np.clip(np.sum(b2[inliers] * b1_derot, axis=1), -1.0, 1.0)
+                    disp_rad = np.arccos(dots)
+                    med_disp = float(np.median(disp_rad)) if len(disp_rad) > 0 else 0.0
+
+                    # Dynamic step length: stationary if parallax < 0.12 deg, else proportional to scene depth
+                    if med_disp < 0.002:
+                        step_len = 0.0
+                    else:
+                        step_len = float(np.clip(med_disp * 3.2, 0.005, 0.30)) * max(1, stride)
+
+                    t_norm = np.linalg.norm(t_rel)
+                    t_dir = (t_rel / t_norm) if t_norm > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                    t_step = t_dir * step_len
 
                     # Update camera pose in world coordinates:
                     R_next = cur_R @ R_rel.T
@@ -639,7 +654,7 @@ def run_360dvo_reconstruction(
                     cur_R = R_next
                     cur_t = C_next
 
-                    # 3. Multi-View Ray Triangulation
+                    # 3. Multi-View Ray Triangulation with Strict Parallax & Geometry Checks
                     in_p1 = val_p1[inliers]
                     in_b1 = b1[inliers]
                     in_b2 = b2[inliers]
@@ -659,39 +674,24 @@ def run_360dvo_reconstruction(
                         b_dot = np.dot(ray1, ray2)
                         denom = 1.0 - b_dot * b_dot
                         if denom > 1e-4:
-                            d_dot_w0 = np.dot(ray1, w0)
-                            e_dot_w0 = np.dot(ray2, w0)
-                            l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
-                            l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
-                            if 0.2 < l1 < 60.0 and 0.2 < l2 < 60.0:
-                                pt1 = C1 + l1 * ray1
-                                pt2 = C2 + l2 * ray2
-                                if np.linalg.norm(pt1 - pt2) < 0.25 * min(l1, l2):
-                                    P_mid = (pt1 + pt2) / 2.0
-                                    u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
-                                    b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
-                                    pts_list.append(P_mid)
-                                    rgb_list.append([int(r_c), int(g_c), int(b_c)])
-
-                                    # DAS-Feat Tangent Plane Patch Expansion:
-                                    # Samples neighboring sub-points on the patch tangent plane
-                                    # directly proportional to patch density
-                                    patch_step = max(2, int(patches_per_frame / 32))
-                                    for du, dv in [(-patch_step, 0), (patch_step, 0), (0, -patch_step), (0, patch_step)]:
-                                        pu = min(max(u_k + du, 0), w - 1)
-                                        pv = min(max(v_k + dv, 0), h - 1)
-                                        d_th = (du / float(w)) * 2.0 * math.pi
-                                        d_ph = -(dv / float(h)) * math.pi
-                                        pt_patch = P_mid + R1 @ np.array([math.sin(d_th)*l1, -math.sin(d_ph)*l1, 0.0]) * 0.02
-                                        b_p, g_p, r_p = prev_im_bgr[pv, pu]
-                                        pts_list.append(pt_patch)
-                                        rgb_list.append([int(r_p), int(g_p), int(b_p)])
+                            # Filter ill-conditioned near-zero and degenerate parallax
+                            ang_parallax = math.degrees(math.acos(np.clip(b_dot, -1.0, 1.0)))
+                            if 1.0 <= ang_parallax <= 80.0:
+                                d_dot_w0 = np.dot(ray1, w0)
+                                e_dot_w0 = np.dot(ray2, w0)
+                                l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
+                                l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
+                                if 0.2 < l1 < 60.0 and 0.2 < l2 < 60.0:
+                                    pt1 = C1 + l1 * ray1
+                                    pt2 = C2 + l2 * ray2
+                                    if np.linalg.norm(pt1 - pt2) < 0.15 * min(l1, l2):
+                                        P_mid = (pt1 + pt2) / 2.0
+                                        u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
+                                        b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
+                                        pts_list.append(P_mid)
+                                        rgb_list.append([int(r_c), int(g_c), int(b_c)])
                 else:
-                    cur_t += cur_R @ np.array([0.0, 0.0, 0.05 * max(1, stride)], dtype=np.float64)
-
-            # Record camera center point with trajectory color
-            pts_list.append(cur_t.copy())
-            rgb_list.append([50, 200, 255]) # Cyan camera trajectory marker
+                    pass
 
             # Extract keypoints for tracking into next frame
             kps_new = cv2.goodFeaturesToTrack(

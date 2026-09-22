@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.2.8 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.2.9 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -851,6 +851,8 @@ def train_pfgs360(
     if not os.path.isfile(rec_json):
         rec_json = os.path.join(dataset_abs, "reconstruction.json")
 
+    has_sparse = os.path.isdir(os.path.join(dataset_abs, "sparse", "0"))
+
     if dataparser_mode == "auto":
         is_posed_tf = False
         if os.path.isfile(tf_json):
@@ -866,31 +868,55 @@ def train_pfgs360(
 
         if os.path.isfile(rec_json):
             active_dp = "opensfm-dataparser"
-            dp_mode_label = "OpenSfM / 360DVO Handoff (opensfm-dataparser)"
+            dp_mode_label = "OpenSfM / 360DVO Handoff (opensfm-dataparser - Instant 100% GPU)"
         elif is_posed_tf:
             active_dp = "nerfstudio-data"
-            dp_mode_label = "Transforms.json Handoff (nerfstudio-data - Paradigm B)"
+            dp_mode_label = "Transforms.json Handoff (nerfstudio-data - Instant 100% GPU)"
+        elif has_sparse:
+            active_dp = "nerfstudio-data"
+            dp_mode_label = "COLMAP Sparse Model Handoff (nerfstudio-data - Instant 100% GPU)"
         else:
             active_dp = "posefree-dataparser"
-            dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3)"
+            dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3 - CPU Matching Phase)"
     elif dataparser_mode in ["nerfstudio", "nerfstudio-data", "transforms"]:
         active_dp = "nerfstudio-data"
-        dp_mode_label = "Transforms.json Handoff (nerfstudio-data)"
+        dp_mode_label = "Transforms.json Handoff (nerfstudio-data - Instant 100% GPU)"
     elif dataparser_mode in ["opensfm", "handoff"]:
         active_dp = "opensfm-dataparser"
-        dp_mode_label = "OpenSfM Handoff (opensfm-dataparser)"
+        dp_mode_label = "OpenSfM Handoff (opensfm-dataparser - Instant 100% GPU)"
     elif dataparser_mode in ["ob3d", "egocentric"]:
         active_dp = "ob3d-dataparser"
         dp_mode_label = "OB3D Egocentric Dataparser"
     elif dataparser_mode in ["posefree", "pose-free", "direct"]:
         active_dp = "posefree-dataparser"
-        dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3)"
+        dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3 - CPU Matching Phase)"
+        if os.path.isfile(rec_json) or os.path.isfile(tf_json) or has_sparse:
+            log("      * [NOTICE] Dataset already contains pre-aligned camera poses (from OpenSfM/360DVO/COLMAP).")
+            log("      * [NOTICE] 'Pose-Free Direct' mode forces PFGS360 to discard prior poses and solve camera")
+            log("      *          trajectories from scratch on CPU view-by-view (NearestNeighbors).")
+            log("      * [TIP] To train immediately at full 100% RTX 4090 GPU capacity without waiting for CPU pose")
+            log("      *       calculation, set Dataparser Mode to 'Auto-Detect' or 'OpenSfM / 360DVO Handoff'.")
     else:
         active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") and dataparser_mode != "nerfstudio-data" else dataparser_mode
         dp_mode_label = active_dp
 
-    # Ensure metadata.json exists if opensfm-dataparser is active
+    if active_dp in ["opensfm-dataparser", "nerfstudio-data"]:
+        log("      * [FULL GPU POWER] Pre-aligned camera poses detected! Bypassing CPU matching to engage 100% RTX 4090 GPU immediately.")
+
+    # Ensure opensfm/reconstruction.json and metadata.json exist if opensfm-dataparser is active
     if active_dp == "opensfm-dataparser":
+        osfm_dir = os.path.join(dataset_abs, "opensfm")
+        os.makedirs(osfm_dir, exist_ok=True)
+        target_rec = os.path.join(osfm_dir, "reconstruction.json")
+        if not os.path.isfile(target_rec):
+            for cand in [
+                os.path.join(dataset_abs, "reconstruction.json"),
+                os.path.join(os.path.dirname(dataset_abs), "reconstruction.json"),
+                os.path.join(os.path.dirname(dataset_abs), "opensfm", "reconstruction.json")
+            ]:
+                if os.path.isfile(cand):
+                    shutil.copy2(cand, target_rec)
+                    break
         try:
             from opensfm_engine import ensure_opensfm_metadata
             ensure_opensfm_metadata(dataset_abs)

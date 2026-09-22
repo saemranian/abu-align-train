@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.8 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.9 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1407,38 +1407,13 @@ def main():
             else:
                 raise RuntimeError("OpenSfM pipeline execution encountered an error.")
         else:
-            print("      * [NOTICE] Native OpenSfM CLI not found on local system PATH.")
-            if args.projection.lower() in ["equirectangular", "spherical"] and not getattr(args, "split_panorama", False):
-                print("      * [SPHERICAL S² SOLVER] Processing native 360° Equirectangular images directly on S² manifold...")
-                from dvo360_engine import run_360dvo_reconstruction
-                reconstruction, dense_3d, dense_rgb = run_360dvo_reconstruction(
-                    image_paths=image_paths,
-                    output_dir=output_dir,
-                    weights_path=getattr(args, "dvo_weights", None),
-                    patches_per_frame=128,  # High precision density for SfM quality
-                    stride=args.stride,
-                    enable_viz=False
-                )
-            else:
-                print("      * [AUTO-FALLBACK] Slicing into Rectilinear Pinhole Views for Photogrammetric Alignment...")
-                from equirectangular_transcoder import transcode_dataset
-                cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
-                total_saved, msg = transcode_dataset(
-                    input_dir=scan_dir,
-                    output_dir=cubemap_dir,
-                    face_size=args.cubemap_res
-                )
-                print(f"      * {msg}")
-                cubemap_paths = sorted([
-                    os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
-                    if os.path.splitext(f.lower())[1] in valid_exts
-                ])
-                if model is None:
-                    print("      * [AUTO-INIT] Dynamically loading VGGT-Omega foundation model for alignment...")
-                    model, vggt_res = load_vggt_omega_model(device, dtype, getattr(args, "checkpoint", None))
-                reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
-                    "vggt_omega", model, cubemap_paths, len(cubemap_paths), len(cubemap_paths), device, dtype, vggt_res, args
-                )
+            print("      * [NOTICE] Native OpenSfM binary CLI not detected in system PATH.")
+            print("      * [SPHERICAL S² SOLVER] Engaging Native Python Spherical Structure-from-Motion Engine...")
+            reconstruction, dense_3d, dense_rgb = opensfm.run_spherical_sfm(
+                image_paths=image_paths,
+                output_dir=output_dir,
+                stride=args.stride
+            )
 
         inf_elapsed = time.time() - inf_start
         print()
