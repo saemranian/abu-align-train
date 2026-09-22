@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.3.3 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.3.4 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -952,6 +952,7 @@ def train_pfgs360(
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
     scripts_dir = os.path.dirname(ns_train_exe)
     env["PATH"] = f"{scripts_dir};{os.path.dirname(scripts_dir)};{env.get('PATH', '')}"
 
@@ -1033,13 +1034,15 @@ def train_pfgs360(
                 clean_line = clean_line.encode("ascii", errors="replace").decode("ascii")
 
         lower = clean_line.lower()
-        if any(keyword in lower for keyword in ["iter", "step", "loss", "psnr", "point", "viser", "pose", "densify", "depth"]):
+        if any(keyword in lower for keyword in ["iter", "step", "loss", "psnr"]):
             now = time.time()
-            if now - last_report_time >= 0.25 or any(k in lower for k in ["done", "finish", "export", "saved"]):
+            if now - last_report_time >= 0.5 or any(k in lower for k in ["done", "finish", "export", "saved"]):
                 log(f"        [PFGS360] {clean_line}")
                 last_report_time = now
         elif any(keyword in lower for keyword in ["error", "modulenotfounderror", "traceback", "fatal", "unsupported"]):
             log(f"        [PFGS360-ERR] {clean_line}")
+        else:
+            log(f"        [PFGS360] {clean_line}")
 
     proc.wait()
     if proc.returncode != 0:
@@ -1132,6 +1135,40 @@ def run_3dgs_training(
     engine_clean = engine.lower().strip()
     target_models_dir = os.path.join(output_dir, f"{engine_clean}_models")
     os.makedirs(target_models_dir, exist_ok=True)
+
+    # Smart dataset discovery: if dataset_dir doesn't directly contain poses,
+    # search standard Abu Align subdirectories (e.g. 3dgs_dataset, results/sparse_*/3dgs_dataset)
+    discovered_dataset = None
+    if not (os.path.isfile(os.path.join(dataset_dir, "transforms.json")) or 
+            os.path.isfile(os.path.join(dataset_dir, "reconstruction.json")) or
+            os.path.isfile(os.path.join(dataset_dir, "opensfm", "reconstruction.json")) or
+            os.path.isdir(os.path.join(dataset_dir, "sparse", "0"))):
+        
+        cand_3dgs = os.path.join(dataset_dir, "3dgs_dataset")
+        if os.path.isfile(os.path.join(cand_3dgs, "transforms.json")) or os.path.isfile(os.path.join(cand_3dgs, "opensfm", "reconstruction.json")):
+            discovered_dataset = cand_3dgs
+        else:
+            cand_results = os.path.join(dataset_dir, "results")
+            if not os.path.isdir(cand_results):
+                cand_parent_results = os.path.join(os.path.dirname(dataset_dir), "results")
+                if os.path.isdir(cand_parent_results):
+                    cand_results = cand_parent_results
+            
+            if os.path.isdir(cand_results):
+                subdirs = [os.path.join(cand_results, d) for d in os.listdir(cand_results) if d.startswith("sparse_")]
+                subdirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                for sd in subdirs:
+                    target_cand = os.path.join(sd, "3dgs_dataset")
+                    if os.path.isfile(os.path.join(target_cand, "transforms.json")) or os.path.isfile(os.path.join(target_cand, "opensfm", "reconstruction.json")):
+                        discovered_dataset = target_cand
+                        break
+
+    if discovered_dataset:
+        if engine_clean in ["lichtfeld", "splatfacto", "3dgrut"] or (engine_clean in ["pfgs360", "pfgs"] and str(pfgs_dataparser).lower() != "posefree"):
+            if progress_callback:
+                progress_callback(f"      * [SMART DISCOVERY] Auto-resolved raw image folder to latest aligned dataset:")
+                progress_callback(f"        -> {discovered_dataset}")
+            dataset_dir = discovered_dataset
 
     if progress_callback:
         progress_callback(f"======================================================================")

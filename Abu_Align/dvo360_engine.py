@@ -671,6 +671,13 @@ def run_360dvo_reconstruction(
 
                     t_norm = np.linalg.norm(t_rel)
                     t_dir = (t_rel / t_norm) if t_norm > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                    
+                    # Align translation direction with forward continuous motion
+                    if 'prev_t_dir' in locals() and prev_t_dir is not None:
+                        if np.dot(t_dir, prev_t_dir) < -0.2:
+                            t_dir = -t_dir
+                    prev_t_dir = t_dir.copy()
+
                     t_step = t_dir * step_len
 
                     # Update camera pose in world coordinates:
@@ -701,15 +708,15 @@ def run_360dvo_reconstruction(
                         if denom > 1e-4:
                             # Filter ill-conditioned near-zero and degenerate parallax
                             ang_parallax = math.degrees(math.acos(np.clip(b_dot, -1.0, 1.0)))
-                            if 1.0 <= ang_parallax <= 80.0:
+                            if 1.5 <= ang_parallax <= 65.0:
                                 d_dot_w0 = np.dot(ray1, w0)
                                 e_dot_w0 = np.dot(ray2, w0)
                                 l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
                                 l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
-                                if 0.2 < l1 < 60.0 and 0.2 < l2 < 60.0:
+                                if 0.2 < l1 < 35.0 and 0.2 < l2 < 35.0:
                                     pt1 = C1 + l1 * ray1
                                     pt2 = C2 + l2 * ray2
-                                    if np.linalg.norm(pt1 - pt2) < 0.15 * min(l1, l2):
+                                    if np.linalg.norm(pt1 - pt2) < 0.08 * min(l1, l2):
                                         P_mid = (pt1 + pt2) / 2.0
                                         u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
                                         b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
@@ -741,53 +748,12 @@ def run_360dvo_reconstruction(
             if len(window_cams) > max(4, local_ba_window):
                 window_cams.pop(0)
 
-            # Periodic ODBA sliding-window local bundle adjustment
-            if local_ba_window >= 4 and len(window_cams) >= 4 and len(pts_list) >= 15 and (i % 4 == 0 or i == total_n - 1):
-                try:
-                    n_win = len(window_cams)
-                    R_anchor, C_anchor = window_cams[0]["R"], window_cams[0]["C"]
-                    p_win = []
-                    for w_idx in range(1, n_win):
-                        rv, _ = cv2.Rodrigues(window_cams[w_idx]["R"])
-                        p_win.extend(rv.flatten().tolist())
-                        p_win.extend(window_cams[w_idx]["C"].flatten().tolist())
-                    p_win = np.array(p_win, dtype=np.float64)
-
-                    sub_pts = pts_list[-min(len(pts_list), 100):]
-
-                    def odba_residuals(p):
-                        res = []
-                        c_map = {0: (R_anchor, C_anchor)}
-                        for w_idx in range(1, n_win):
-                            rv = p[(w_idx - 1)*6 : (w_idx - 1)*6+3]
-                            cv_val = p[(w_idx - 1)*6+3 : (w_idx - 1)*6+6]
-                            R_mat, _ = cv2.Rodrigues(rv)
-                            c_map[w_idx] = (R_mat, cv_val)
-
-                        for pt in sub_pts:
-                            r0 = R_anchor.T @ (pt - C_anchor)
-                            nr0 = np.linalg.norm(r0)
-                            r_last = c_map[n_win - 1][0].T @ (pt - c_map[n_win - 1][1])
-                            nr_last = np.linalg.norm(r_last)
-                            if nr0 > 1e-4 and nr_last > 1e-4:
-                                b0 = r0 / nr0
-                                b_last = r_last / nr_last
-                                res.append(float(np.dot(b0, b_last) - 1.0))
-                        return np.array(res, dtype=np.float64)
-
-                    if len(sub_pts) >= 8:
-                        res_ba = scipy.optimize.least_squares(odba_residuals, p_win, loss='cauchy', f_scale=0.04, max_nfev=15)
-                        p_opt = res_ba.x
-                        for w_idx in range(1, n_win):
-                            rv = p_opt[(w_idx - 1)*6 : (w_idx - 1)*6+3]
-                            cv_val = p_opt[(w_idx - 1)*6+3 : (w_idx - 1)*6+6]
-                            R_mat, _ = cv2.Rodrigues(rv)
-                            window_cams[w_idx]["R"] = R_mat
-                            window_cams[w_idx]["C"] = cv_val
-                        cur_R = window_cams[-1]["R"].copy()
-                        cur_t = window_cams[-1]["C"].copy()
-                except Exception:
-                    pass
+            # Local trajectory smoothing (3-frame moving average) to suppress high-frequency jitter
+            if len(window_cams) >= 3:
+                recent_Cs = np.array([wc["C"] for wc in window_cams[-3:]])
+                smoothed_C = np.mean(recent_Cs, axis=0)
+                cur_t = 0.7 * cur_t + 0.3 * smoothed_C
+                window_cams[-1]["C"] = cur_t.copy()
 
             # Record TUM trajectory pose (timestamp tx ty tz qx qy qz qw)
             q = rotation_matrix_to_quaternion(cur_R)

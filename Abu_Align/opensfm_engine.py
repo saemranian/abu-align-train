@@ -94,7 +94,7 @@ def solve_spherical_essential_matrix(
         Eb1 = (E_proj @ b1.T).T
         Etb2 = (E_proj.T @ b2.T).T
         num = np.sum(b2 * Eb1, axis=1) ** 2
-        den = np.sum(Eb1[:, :2]**2, axis=1) + np.sum(Etb2[:, :2]**2, axis=1) + 1e-9
+        den = np.sum(Eb1**2, axis=1) + np.sum(Etb2**2, axis=1) + 1e-9
         err = num / den
 
         inliers = err < thresh
@@ -168,8 +168,8 @@ def solve_spherical_essential_matrix(
 def triangulate_multiview_rays(
     bearing_rays_world: List[np.ndarray],
     camera_centers: List[np.ndarray],
-    min_parallax_deg: float = 0.5,
-    max_chordal_err: float = 0.08
+    min_parallax_deg: float = 1.0,
+    max_chordal_err: float = 0.04
 ) -> Optional[np.ndarray]:
     """
     Computes optimal closed-form 3D point from M >= 2 bearing rays in world coordinates.
@@ -204,11 +204,11 @@ def triangulate_multiview_rays(
     except np.linalg.LinAlgError:
         return None
 
-    # Cheirality & reprojection check: point must be in front of all cameras (0.1m < depth < 100m)
+    # Cheirality & reprojection check: point must be in front of all cameras (0.2m < depth < 40m)
     for d, C in zip(bearing_rays_world, camera_centers):
         diff = X - C
         depth = np.dot(diff, d)
-        if depth < 0.1 or depth > 100.0:
+        if depth < 0.2 or depth > 40.0:
             return None
         norm_diff = np.linalg.norm(diff)
         if norm_diff < 1e-4:
@@ -901,12 +901,33 @@ def run_opensfm_spherical_sfm(
             res_opt = scipy.optimize.least_squares(
                 resection_loss,
                 p0,
-                method='lm',
-                max_nfev=25
+                loss='cauchy',
+                f_scale=0.03,
+                max_nfev=35
             )
             r_opt = res_opt.x[:3]
             C_opt = res_opt.x[3:6]
-            R_opt, _ = cv2.Rodrigues(r_opt)
+            # Motion continuity gate: reject divergence if camera position teleports
+            step_dist = float(np.linalg.norm(C_opt - C_init))
+            max_allowable_jump = max(1.2, 0.3 * abs(best_candidate - nearest_reg))
+            if step_dist > max_allowable_jump:
+                # Resection diverged due to outliers: fallback to nearest pose + relative pairwise odometry
+                pair_key = (nearest_reg, best_candidate) if (nearest_reg, best_candidate) in pairwise_matches else ((best_candidate, nearest_reg) if (best_candidate, nearest_reg) in pairwise_matches else None)
+                if pair_key is not None:
+                    p_info = pairwise_matches[pair_key]
+                    if pair_key == (nearest_reg, best_candidate):
+                        R_rel = p_info["R_rel"]
+                        t_rel = p_info["t_rel"]
+                    else:
+                        R_rel = p_info["R_rel"].T
+                        t_rel = -p_info["R_rel"].T @ p_info["t_rel"]
+                    t_dir = t_rel / max(np.linalg.norm(t_rel), 1e-6)
+                    R_opt = R_init @ R_rel.T
+                    C_opt = C_init + R_init @ (t_dir * (0.05 * abs(best_candidate - nearest_reg)))
+                else:
+                    R_opt, C_opt = R_init, C_init
+            else:
+                R_opt, _ = cv2.Rodrigues(r_opt)
         except Exception:
             R_opt, C_opt = R_init, C_init
 
