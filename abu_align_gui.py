@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.4
+Abu Align & Train Version 0.0.3.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -11,13 +11,17 @@ import glob
 import subprocess
 import threading
 import queue
+import json
+import re
+import tempfile
+from pathlib import Path
 try:
     import psutil
 except ImportError:
     psutil = None
 import math
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 
 # Ensure parent directory is on sys.path so vggt and dependencies can be imported from any subfolder
@@ -200,7 +204,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.5 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -346,6 +350,14 @@ class AbuAlignApp:
         self.pfgs_sky_depth_var = tk.StringVar(value="50.0")
         self.pfgs_sh_var = tk.StringVar(value="3")
 
+        # Capture configuration only, before legacy aliases and UI state exist.
+        self._preset_vars = {
+            name.removesuffix("_var"): value for name, value in vars(self).items()
+            if isinstance(value, tk.Variable)
+        }
+        self.presets_dir = Path(__file__).resolve().parent / "presets"
+        self.preset_var = tk.StringVar(value="")
+
         # Legacy aliases for backward compatibility
         self.train_mode_var = self.lf_mode_var
         self.gut_var = self.lf_gut_var
@@ -360,6 +372,105 @@ class AbuAlignApp:
         self._validate_dataset()
         self._check_queue()
         self.root.after(500, self._update_hardware_telemetry)
+
+    def _preset_path(self, name):
+        name = name.strip()
+        if (not name or len(name) > 100 or name.endswith(".")
+                or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
+                or name.split(".")[0].upper() in
+                {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)],
+                 *[f"LPT{i}" for i in range(1, 10)]}):
+            raise ValueError("Use a name of 1–100 characters without Windows filename symbols or reserved names.")
+        path = self.presets_dir / (name + ".json")
+        if path.resolve().parent != self.presets_dir.resolve():
+            raise ValueError("Presets must be stored inside the presets folder.")
+        return path
+
+    def _refresh_presets(self):
+        try:
+            names = sorted((p.stem for p in self.presets_dir.glob("*.json") if p.is_file()),
+                           key=str.casefold)
+            self.preset_combo.configure(values=names)
+        except OSError as exc:
+            messagebox.showerror("Presets unavailable", str(exc), parent=self.root)
+
+    def _validate_preset(self, profile):
+        if (not isinstance(profile, dict) or type(profile.get("schema_version")) is not int
+                or profile["schema_version"] != 1):
+            raise ValueError("Unsupported preset format. Expected schema version 1.")
+        settings = profile.get("settings")
+        if not isinstance(settings, dict) or set(settings) != set(self._preset_vars):
+            raise ValueError("This preset has missing or unknown configuration fields.")
+        # Derive allowed choices from the actual controls to avoid a second option list.
+        choices = {}
+        def collect(widget):
+            if isinstance(widget, ttk.Combobox) and str(widget.cget("state")) == "readonly":
+                choices[str(widget.cget("textvariable"))] = set(widget.cget("values"))
+            elif isinstance(widget, (tk.Radiobutton, ttk.Radiobutton)):
+                choices.setdefault(str(widget.cget("variable")), set()).add(str(widget.cget("value")))
+            for child in widget.winfo_children():
+                collect(child)
+        collect(self.root)
+        for key, var in self._preset_vars.items():
+            value = settings[key]
+            expected = bool if isinstance(var, tk.BooleanVar) else str
+            if type(value) is not expected:
+                raise ValueError(f"Invalid type for {key}: expected {expected.__name__}.")
+            if str(var) in choices and value not in choices[str(var)]:
+                raise ValueError(f"Unsupported value for {key}: {value!r}.")
+        return settings
+
+    def _save_preset(self):
+        name = simpledialog.askstring("Save preset", "Profile name:",
+                                      initialvalue=self.preset_var.get(), parent=self.root)
+        if name is None:
+            return
+        temporary = None
+        try:
+            path = self._preset_path(name)
+            profile = {"schema_version": 1,
+                       "settings": {key: var.get() for key, var in self._preset_vars.items()}}
+            self._validate_preset(profile)
+            if path.exists() and not messagebox.askyesno(
+                    "Replace preset?", f"Replace '{path.stem}'?", parent=self.root):
+                return
+            self.presets_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.presets_dir,
+                                             suffix=".tmp", delete=False) as stream:
+                temporary = stream.name
+                json.dump(profile, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            os.replace(temporary, path)
+            temporary = None
+            self._refresh_presets()
+            self.preset_var.set(path.stem)
+            self._log(f"[Preset] Saved '{path.stem}'.\n")
+        except (OSError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Could not save preset", str(exc), parent=self.root)
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    def _load_preset(self):
+        if self.is_running:
+            messagebox.showinfo("Pipeline running", "Stop the current run before loading a preset.",
+                                parent=self.root)
+            return
+        try:
+            path = self._preset_path(self.preset_var.get())
+            with path.open(encoding="utf-8") as stream:
+                settings = self._validate_preset(json.load(stream))
+            # Validate the entire document before changing any control.
+            for key, value in settings.items():
+                self._preset_vars[key].set(value)
+            self._update_align_panel()
+            self._update_train_panel()
+            self._log(f"[Preset] Loaded '{path.stem}'. Dataset selection preserved.\n")
+        except (OSError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Could not load preset", str(exc), parent=self.root)
 
     def _build_menu(self):
         menubar = tk.Menu(self.root, bg=self.panel_bg, fg=self.text_primary)
@@ -409,7 +520,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.3.4",
+            text="v0.0.3.5",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -460,6 +571,21 @@ class AbuAlignApp:
             pady=10
         )
         control_card.pack(fill=tk.X, pady=(0, 8))
+
+        preset_row = tk.Frame(control_card, bg=self.panel_bg)
+        preset_row.pack(fill=tk.X, pady=4)
+        tk.Label(preset_row, text="User Preset:", width=14, anchor="w",
+                 font=("Segoe UI", 9, "bold"), fg=self.text_primary,
+                 bg=self.panel_bg).pack(side=tk.LEFT)
+        self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_var,
+                                         state="readonly", postcommand=self._refresh_presets)
+        self.preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        for label, command in [("Load", self._load_preset), ("Save As…", self._save_preset)]:
+            tk.Button(preset_row, text=label, command=command, bg=self.accent_blue,
+                      fg="white", relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=3)
+        ToolTip(self.preset_combo, "Save and restore all alignment and training settings.\n"
+                "The current dataset and separate tool dialogs are not included.")
+        self._refresh_presets()
 
         # Dataset Path Selection
         path_row = tk.Frame(control_card, bg=self.panel_bg)
@@ -1110,7 +1236,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.3.4 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.3.5 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -4233,7 +4359,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.4 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.5 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4545,7 +4671,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.4 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.5 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4819,7 +4945,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.4\n"
+            "Abu Align & Train - Version 0.0.3.5\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

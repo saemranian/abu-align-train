@@ -183,3 +183,7 @@ datasets/
 *.tar.gz
 *.7z
 .runpod/
+
+# Personal GUI profiles (may contain local model paths)
+/presets/*.json
+/presets/*.tmp
