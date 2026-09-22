@@ -13,6 +13,7 @@ import glob
 import copy
 import shutil
 import argparse
+from pathlib import Path
 from datetime import datetime
 
 # Ensure parent directory is on sys.path so vggt and dependencies can always be imported
@@ -77,7 +78,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.2.4 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -980,7 +981,15 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
+    parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
     parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
+    # Video Frame Extraction Options
+    parser.add_argument("--video_fps", type=float, default=5.0, help="Target FPS when extracting from video input (default: 5.0)")
+    parser.add_argument("--video_format", choices=["jpg", "png"], default="jpg", help="Format for extracted video frames (default: jpg)")
+    parser.add_argument("--video_quality", type=int, default=95, help="JPEG quality (1-100) for extracted frames (default: 95)")
+    parser.add_argument("--video_resolution", choices=["native", "8k", "5.7k", "4k", "2k", "1k"], default="native", help="Resolution for extracted video frames")
+    parser.add_argument("--video_blur", type=float, default=0.0, help="Laplacian variance threshold to discard blurred frames (default: 0.0, disabled)")
+    parser.add_argument("--extract_video_only", action="store_true", help="Extract video frames to sequence and exit without running alignment")
     # 360DVO Deep Visual Odometry Options
     parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
     parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
@@ -991,6 +1000,15 @@ def main():
     parser.add_argument("--opensfm_matcher", type=str, choices=["words", "flann", "exhaustive"], default="words", help="Feature matcher for OpenSfM (default: words)")
     parser.add_argument("--cubemap_transcode", action="store_true", help="Automatically slice 360 equirectangular images into 6 rectilinear pinhole cubemaps")
     parser.add_argument("--cubemap_res", type=int, default=1024, help="Resolution per cubemap face (default: 1024)")
+    # Phase 3: 360° Multi-Camera Rig Projector & Panoramic Splitter
+    parser.add_argument("--split_panorama", action="store_true", help="Split 360° panoramas into a virtual multi-camera pinhole rig")
+    parser.add_argument("--split_mode", type=str, choices=["ring", "cubemap", "dome"], default="ring", help="Rig projection mode ('ring', 'cubemap', 'dome'; default: ring)")
+    parser.add_argument("--split_cameras", type=int, default=8, help="Number of virtual cameras when split_mode=ring (default: 8 => 50%% overlap)")
+    parser.add_argument("--split_fov", type=float, default=90.0, help="Field of View per virtual camera in degrees (default: 90.0)")
+    parser.add_argument("--split_res", type=int, default=1024, help="Resolution per pinhole view (default: 1024)")
+    parser.add_argument("--split_format", choices=["jpg", "png"], default="jpg", help="Split image output format (default: jpg)")
+    parser.add_argument("--split_quality", type=int, default=95, help="JPEG quality for split images (default: 95)")
+    parser.add_argument("--split_only", action="store_true", help="Perform panoramic splitting into virtual camera rig and exit without aligning")
     parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
@@ -1042,7 +1060,7 @@ def main():
     parser.add_argument("--representation", choices=["3dgut", "3dgrut"], default="3dgut", help="Representation mode for 3DGRUT")
     parser.add_argument("--bvh_backend", choices=["optix", "cuda"], default="optix", help="BVH backend for 3DGRUT")
     parser.add_argument("--sh_degree", type=int, default=3, choices=[0, 1, 2, 3], help="Spherical harmonics degree (default: 3)")
-    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 ('auto', 'opensfm', 'ob3d', 'odgs')")
+    parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 ('auto', 'opensfm', 'posefree', 'ob3d', 'odgs')")
     parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Monocular depth prior for PFGS360 (default: unik3d)")
     parser.add_argument("--pfgs_filter_sky", action="store_true", default=True, help="Filter sky areas (>50m) in PFGS360")
     parser.add_argument("--no_pfgs_filter_sky", dest="pfgs_filter_sky", action="store_false", help="Do not filter sky in PFGS360")
@@ -1051,10 +1069,44 @@ def main():
 
     args = parser.parse_args()
 
-    input_dir = os.path.abspath(args.input)
-    if not os.path.isdir(input_dir):
-        print(f"\n[ERROR] Input directory not found: {input_dir}")
+    input_path = os.path.abspath(args.input)
+    if os.path.isfile(input_path):
+        from video_extractor import is_video_file, prepare_dataset_from_video_or_images
+        if is_video_file(input_path):
+            video_fps = getattr(args, "video_fps", 5.0)
+            video_fmt = getattr(args, "video_format", "jpg")
+            video_q = getattr(args, "video_quality", 95)
+            video_res = getattr(args, "video_resolution", "native")
+            video_blur = getattr(args, "video_blur", 0.0)
+
+            target_ds = os.path.join(os.path.dirname(input_path), f"{Path(input_path).stem}_dataset")
+            print(f"[*] Detected video input: {Path(input_path).name}")
+            print(f"[*] Extracting frames -> {target_ds} ({video_fps} FPS, {video_res.upper()}, {video_fmt.upper()})...")
+
+            extracted_ds, was_extracted = prepare_dataset_from_video_or_images(
+                input_path=input_path,
+                target_dataset_dir=target_ds,
+                target_fps=video_fps,
+                image_format=video_fmt,
+                quality=video_q,
+                resolution=video_res if video_res != "native" else None,
+                blur_threshold=video_blur,
+                progress_callback=lambda p: print(f"    Extracting frame {p['current_frame']}/{p['total_frames']} ({p['percent']:.1f}%)", end="\r"),
+            )
+            print()
+            input_dir = extracted_ds
+            if getattr(args, "extract_video_only", False):
+                print(f"[*] Video extraction complete: {os.path.join(extracted_ds, 'images')}")
+                print(f"[*] Exiting (--extract_video_only).")
+                sys.exit(0)
+        else:
+            print(f"\n[ERROR] Input file is not a supported video or folder: {input_path}")
+            sys.exit(1)
+    elif not os.path.isdir(input_path):
+        print(f"\n[ERROR] Input directory or video not found: {input_path}")
         sys.exit(1)
+    else:
+        input_dir = input_path
 
     print_banner()
     overall_start_time = time.time()
@@ -1108,30 +1160,62 @@ def main():
     print(f"      * Target Output: {output_dir}")
     print()
 
-    # 360° Equirectangular Cubemap Transcoding (if requested or auto-detected for non-OpenSfM engines)
+    # 360° Multi-Camera Rig Projector & Panoramic Splitter (Phase 3)
     is_equirectangular = (orig_w == 2 * orig_h)
-    if getattr(args, "cubemap_transcode", False) or (is_equirectangular and args.engine not in ["opensfm"]):
-        print("      * [360 TRANSCODER] Equirectangular 360° panoramas detected.")
-        print(f"      * Transcoding into 6 rectilinear 90° pinhole cubemaps (Face size: {args.cubemap_res}px)...")
-        from equirectangular_transcoder import transcode_dataset
-        cubemap_dir = os.path.join(output_dir, "cubemap_pinhole_frames")
-        total_saved, msg = transcode_dataset(
+    needs_splitting = (
+        getattr(args, "split_panorama", False)
+        or getattr(args, "split_only", False)
+        or getattr(args, "cubemap_transcode", False)
+        or (is_equirectangular and args.engine not in ["opensfm", "360dvo", "dvo360", "pfgs360"])
+    )
+    if needs_splitting:
+        split_mode = "cubemap" if (getattr(args, "cubemap_transcode", False) and not getattr(args, "split_panorama", False) and not getattr(args, "split_only", False)) else getattr(args, "split_mode", "ring")
+        split_cams = getattr(args, "split_cameras", 8)
+        split_fov = getattr(args, "split_fov", 90.0)
+        split_res = getattr(args, "split_res", getattr(args, "cubemap_res", 1024))
+        split_fmt = getattr(args, "split_format", "jpg")
+        split_qual = getattr(args, "split_quality", 95)
+
+        cams_info = split_cams if split_mode == "ring" else ("6" if split_mode == "cubemap" else "14")
+        print(f"      * [360 RIG PROJECTOR] 360° Equirectangular dataset detected ({orig_w}x{orig_h}).")
+        print(f"      * Projecting into {split_mode.upper()} multi-camera pinhole rig ({cams_info} views/pano, {split_fov}° FOV, {split_res}x{split_res}px)...")
+
+        from panoramic_splitter import split_panorama_dataset
+        rig_out_dir = os.path.join(output_dir, f"rig_{split_mode}_frames")
+        res = split_panorama_dataset(
             input_dir=scan_dir,
-            output_dir=cubemap_dir,
-            face_size=args.cubemap_res
+            output_dir=rig_out_dir,
+            mode=split_mode,
+            num_cameras=split_cams,
+            fov_deg=split_fov,
+            crop_size=split_res,
+            image_format=split_fmt,
+            quality=split_qual,
+            export_transforms_json=True,
+            progress_callback=lambda cur, tot, name: print(f"        Splitting panorama {cur}/{tot}: {name}", end="\r"),
         )
-        print(f"      * {msg}")
+        print()
+        print(f"      * [OK] Generated {res['total_views']} pinhole views with transforms.json in {res['output_dir']}")
+
+        if getattr(args, "split_only", False):
+            print(f"\n[*] Multi-camera rig projection complete!")
+            print(f"[*] Images directory:    {res['images_dir']}")
+            if res.get("transforms_path"):
+                print(f"[*] Transforms manifest: {res['transforms_path']}")
+            print(f"[*] Exiting (--split_only).")
+            sys.exit(0)
+
         cubemap_paths = sorted([
-            os.path.join(cubemap_dir, f) for f in os.listdir(cubemap_dir)
+            os.path.join(res["images_dir"], f) for f in os.listdir(res["images_dir"])
             if os.path.splitext(f.lower())[1] in valid_exts
         ])
         if cubemap_paths:
             image_paths = cubemap_paths
             num_frames = len(image_paths)
-            scan_dir = cubemap_dir
+            scan_dir = res["images_dir"]
             with Image.open(image_paths[0]) as sample_img:
                 orig_w, orig_h = sample_img.size
-            print(f"      * Transcoded Pinhole Keyframes: {num_frames} ({orig_w}x{orig_h})")
+            print(f"      * Projected Rig Pinhole Views for Alignment: {num_frames} ({orig_w}x{orig_h})")
             print()
 
     # -------------------------------------------------------------

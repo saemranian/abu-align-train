@@ -210,6 +210,77 @@ def tum_trajectory_to_opensfm(
     return True, f"Converted {num_to_write} frames to OpenSfM reconstruction.json & metadata.json."
 
 
+def tum_trajectory_to_transforms_json(
+    trajectory_file: str,
+    image_names: List[str],
+    output_transforms_file: str,
+    width: int = 1024,
+    height: int = 512,
+    ply_source: Optional[str] = None,
+    output_ply_dest: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Converts TUM trajectory format (timestamp tx ty tz qx qy qz qw)
+    into Nerfstudio-compliant transforms.json with "camera_model": "EQUIRECTANGULAR"
+    according to 360° Data Intake & Alignment Pipeline specification (Paradigm B).
+    Also copies/links dense_points.ply to points3D.ply.
+    """
+    if not os.path.isfile(trajectory_file):
+        return False, f"Trajectory file not found: {trajectory_file}"
+
+    poses = []
+    with open(trajectory_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 8:
+                t = float(parts[0])
+                tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
+                qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
+                poses.append((t, np.array([tx, ty, tz]), np.array([qx, qy, qz, qw])))
+
+    if not poses:
+        return False, "No valid pose records found in trajectory file."
+
+    num_to_write = min(len(poses), len(image_names))
+    frames = []
+
+    for idx in range(num_to_write):
+        t, t_c2w, q_c2w = poses[idx]
+        R_c2w = quaternion_to_rotation_matrix(q_c2w)
+
+        c2w = np.eye(4, dtype=np.float64)
+        c2w[:3, :3] = R_c2w
+        c2w[:3, 3] = t_c2w
+
+        img_name = image_names[idx]
+        frames.append({
+            "file_path": f"images/{img_name}",
+            "transform_matrix": c2w.tolist()
+        })
+
+    transforms_payload = {
+        "camera_model": "EQUIRECTANGULAR",
+        "w": int(width),
+        "h": int(height),
+        "frames": frames
+    }
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_transforms_file)), exist_ok=True)
+    with open(output_transforms_file, "w", encoding="utf-8") as tf:
+        json.dump(transforms_payload, tf, indent=2)
+
+    if ply_source and os.path.isfile(ply_source) and output_ply_dest:
+        try:
+            shutil.copy2(ply_source, output_ply_dest)
+        except Exception:
+            pass
+
+    return True, f"Generated transforms.json (EQUIRECTANGULAR, {num_to_write} frames) at {output_transforms_file}"
+
+
 class ThreeSixtyDVOEngine:
     """
     Manages execution of 360DVO deep visual odometry network,
@@ -408,6 +479,20 @@ def run_360dvo_reconstruction(
         height=h
     )
     log(f"[*] {msg_osfm}")
+
+    # Condition 1 & Paradigm B Bridge: Export transforms.json (EQUIRECTANGULAR) and points3D.ply
+    transforms_json_out = os.path.join(output_dir, "transforms.json")
+    points3d_dest = os.path.join(output_dir, "points3D.ply")
+    s_tf, msg_tf = tum_trajectory_to_transforms_json(
+        trajectory_file=trajectory_txt,
+        image_names=image_names,
+        output_transforms_file=transforms_json_out,
+        width=w,
+        height=h,
+        ply_source=ply_out if os.path.isfile(ply_out) else None,
+        output_ply_dest=points3d_dest
+    )
+    log(f"[*] {msg_tf}")
 
     # Load into pycolmap.Reconstruction
     try:

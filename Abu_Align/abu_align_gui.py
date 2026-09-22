@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.2
+Abu Align & Train Version 0.0.2.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -199,7 +199,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.2 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.2.4 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -279,6 +279,10 @@ class AbuAlignApp:
         self.opensfm_feat_var = tk.StringVar(value="sift")
         self.opensfm_transcode_var = tk.BooleanVar(value=True)
         self.opensfm_matcher_var = tk.StringVar(value="words")
+        self.rig_split_mode_var = tk.StringVar(value="ring")
+        self.rig_num_cams_var = tk.StringVar(value="8")
+        self.rig_fov_var = tk.StringVar(value="90")
+        self.rig_res_var = tk.StringVar(value="1024")
 
         # 360DVO Deep Visual Odometry Specific Options
         self.dvo_patches_var = tk.StringVar(value="96")
@@ -349,6 +353,7 @@ class AbuAlignApp:
         file_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open Dataset Folder...", command=self._browse_dataset)
+        file_menu.add_command(label="Open Video File...", command=self._browse_video)
         file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
         file_menu.add_command(label="📁 Open 3DGS Models Folder", command=self._open_models_folder)
         file_menu.add_separator()
@@ -357,13 +362,18 @@ class AbuAlignApp:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
 
+        # Tools Menu
+        tools_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="Tools", menu=tools_menu)
+        tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
+        tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
+        tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
+
         # Help Menu
         help_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
         menubar.add_cascade(label="Help & Documentation", menu=help_menu)
         help_menu.add_command(label="📖 User Guide & Fundamentals Manual", command=self._open_user_guide)
         help_menu.add_command(label="📐 AI vs Traditional Architecture Whitepaper", command=self._open_architecture_doc)
-        help_menu.add_separator()
-        help_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
         help_menu.add_separator()
         help_menu.add_command(label="ℹ️ About Abu Align & Train", command=self._show_about_box)
 
@@ -383,7 +393,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.2",
+            text="v0.0.2.4",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -462,16 +472,44 @@ class AbuAlignApp:
 
         browse_btn = tk.Button(
             path_row,
-            text="Browse...",
+            text="📁 Browse Folder...",
             font=("Segoe UI", 9),
             bg=self.accent_blue,
             fg="#ffffff",
             activebackground="#2563eb",
             relief=tk.FLAT,
-            padx=12,
+            padx=10,
             command=self._browse_dataset
         )
         browse_btn.pack(side=tk.RIGHT)
+
+        video_btn = tk.Button(
+            path_row,
+            text="🎬 Video Extractor...",
+            font=("Segoe UI", 9, "bold"),
+            bg="#0284c7",
+            fg="#ffffff",
+            activebackground="#0369a1",
+            relief=tk.FLAT,
+            padx=10,
+            command=self._open_video_extractor_dialog
+        )
+        video_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        ToolTip(video_btn, "Open Professional Video to Frame Sequence Extractor:\nExtract 360° videos (.mp4, .mov, .insv) to PNG/JPEG sequences with custom FPS, resolution & blur filtering.")
+
+        splitter_btn = tk.Button(
+            path_row,
+            text="🌐 360° Rig Splitter...",
+            font=("Segoe UI", 9, "bold"),
+            bg="#7c3aed",
+            fg="#ffffff",
+            activebackground="#6d28d9",
+            relief=tk.FLAT,
+            padx=10,
+            command=self._open_panoramic_splitter_dialog
+        )
+        splitter_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        ToolTip(splitter_btn, "Open 360° Multi-Camera Rig Projector & Panoramic Splitter:\nConvert 360° equirectangular panoramas into 6-face cubemap, 8-camera ring (50% overlap), or 14-camera dome pinhole rigs with transforms.json.")
 
         # Options Grid: Fixed Left Column + Dynamic Right Panel
         opts_grid = tk.Frame(control_card, bg=self.panel_bg)
@@ -1039,7 +1077,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.2 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.2.4 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1231,14 +1269,37 @@ class AbuAlignApp:
         osfm_match_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(osfm_match_cb, "Matcher Strategy:\n• words: Visual Bag-of-Words vocabulary tree indexing.\n• flann: Fast approximate nearest neighbors.\n• exhaustive: Full pairwise matching.")
 
-        # Col C: 360° Cubemap Transcoding & 3DGS Bridge
+        # Col C: 360° Multi-Camera Rig Projector & 3DGS Bridge
         osfm_col3 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
         osfm_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(osfm_col3, text="360° to 3DGS Training Bridge:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        tk.Label(osfm_col3, text="360° Multi-Camera Rig Projector:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
 
-        tc_chk = tk.Checkbutton(osfm_col3, text="⚡ Auto-Transcode 6-Face Cubemaps", variable=self.opensfm_transcode_var, font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        tc_chk.pack(anchor="w", pady=(2, 4))
-        ToolTip(tc_chk, "Auto-Transcode 6-Face Pinhole Cubemap:\nConverts 360° spherical panoramas into 6 distortion-free rectilinear 90° views.\nEnables immediate Gaussian Splatting training in LichtFeld Studio & Nerfstudio Splatfacto.")
+        tc_chk = tk.Checkbutton(osfm_col3, text="⚡ Auto-Project Multi-Camera Rig", variable=self.opensfm_transcode_var, font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        tc_chk.pack(anchor="w", pady=(1, 2))
+        ToolTip(tc_chk, "Auto-Project Multi-Camera Rig:\nConverts 360° spherical panoramas into virtual rectilinear pinhole arrays (e.g. 8-camera ring @ 50% overlap or 6-face cubemap).\nEnables immediate Gaussian Splatting training in LichtFeld Studio & Nerfstudio Splatfacto.")
+
+        rig_row = tk.Frame(osfm_col3, bg=self.panel_bg)
+        rig_row.pack(anchor="w", pady=(1, 2))
+        tk.Label(rig_row, text="Rig:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        rig_cb = ttk.Combobox(rig_row, textvariable=self.rig_split_mode_var, values=["ring", "cubemap", "dome"], state="readonly", width=8)
+        rig_cb.pack(side=tk.LEFT, padx=(2, 6))
+
+        tk.Label(rig_row, text="Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        rig_res_cb = ttk.Combobox(rig_row, textvariable=self.rig_res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=5)
+        rig_res_cb.pack(side=tk.LEFT, padx=(2, 4))
+
+        rig_dlg_btn = tk.Button(
+            osfm_col3,
+            text="🌐 Open Rig Projector Dialog...",
+            font=("Segoe UI", 8, "bold"),
+            bg="#7c3aed",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=6,
+            pady=2,
+            command=self._open_panoramic_splitter_dialog
+        )
+        rig_dlg_btn.pack(anchor="w", pady=(2, 0))
 
         # =========================================================================
         # 5. 360DVO Subpanel (Deep Visual Odometry for 360° Cameras)
@@ -1455,7 +1516,7 @@ class AbuAlignApp:
         rb_pfgs_d1.pack(anchor="w")
         rb_pfgs_d2 = tk.Radiobutton(pfgs_col1, text="OpenSfM / 360DVO Handoff (Requires SfM)", variable=self.pfgs_dataparser_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d2.pack(anchor="w")
-        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (No Prior SfM Required)", variable=self.pfgs_dataparser_var, value="ob3d", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_pfgs_d3 = tk.Radiobutton(pfgs_col1, text="Pose-Free Direct (No Prior SfM Required)", variable=self.pfgs_dataparser_var, value="posefree", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_pfgs_d3.pack(anchor="w")
         ToolTip(rb_pfgs_d1, "Auto-Detect [Default]:\nAutomatically checks if an OpenSfM or 360DVO reconstruction exists.\n• If found: routes to OpenSfM handoff.\n• If not found (unposed video): automatically activates Pose-Free Direct mode.")
         ToolTip(rb_pfgs_d2, "OpenSfM / 360DVO Handoff:\nForces loading poses and extrinsics from opensfm/reconstruction.json.")
@@ -1553,6 +1614,670 @@ class AbuAlignApp:
         folder = filedialog.askdirectory(initialdir=self.dataset_var.get())
         if folder:
             self.dataset_var.set(folder)
+
+    def _browse_video(self):
+        initial = os.path.dirname(self.dataset_var.get()) if os.path.isfile(self.dataset_var.get()) else self.dataset_var.get()
+        vfile = filedialog.askopenfilename(
+            initialdir=initial,
+            title="Select 360° or Planar Video File",
+            filetypes=[
+                ("Video Files", "*.mp4 *.mov *.insv *.avi *.mkv *.webm *.m4v"),
+                ("All Files", "*.*")
+            ]
+        )
+        if vfile:
+            self.dataset_var.set(vfile)
+
+    def _open_video_extractor_dialog(self):
+        """
+        Launches the dedicated Video to Frame Sequence Extractor dialog.
+        Allows extracting any 360° or planar video into JPEG/PNG sequences with professional options.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("🎬 Video to Frame Sequence Extractor - Abu Align")
+        dialog.geometry("740x630")
+        dialog.minsize(680, 560)
+        dialog.configure(bg=self.bg_dark)
+        dialog.transient(self.root)
+
+        # Header
+        hdr = tk.Frame(dialog, bg=self.panel_bg, padx=14, pady=10)
+        hdr.pack(fill=tk.X, padx=12, pady=(12, 8))
+        tk.Label(
+            hdr,
+            text="🎬 VIDEO TO FRAME SEQUENCE EXTRACTOR",
+            font=("Segoe UI", 12, "bold"),
+            fg="#38bdf8",
+            bg=self.panel_bg
+        ).pack(anchor="w")
+        tk.Label(
+            hdr,
+            text="Extract 360° Equirectangular or Planar video files into high-fidelity image sequences for photogrammetry & 3DGS.",
+            font=("Segoe UI", 9),
+            fg=self.text_secondary,
+            bg=self.panel_bg
+        ).pack(anchor="w", pady=(2, 0))
+
+        content = tk.Frame(dialog, bg=self.bg_dark, padx=12)
+        content.pack(fill=tk.BOTH, expand=True)
+
+        # 1. Paths Card
+        paths_card = tk.LabelFrame(
+            content,
+            text=" Video Input & Destination ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        paths_card.pack(fill=tk.X, pady=(0, 8))
+
+        vid_in_var = tk.StringVar()
+        current_in = self.dataset_var.get().strip()
+        if os.path.isfile(current_in) and any(current_in.lower().endswith(ext) for ext in [".mp4", ".mov", ".insv", ".avi", ".mkv"]):
+            vid_in_var.set(current_in)
+
+        out_dir_var = tk.StringVar()
+        if vid_in_var.get():
+            out_dir_var.set(os.path.join(os.path.dirname(vid_in_var.get()), f"{Path(vid_in_var.get()).stem}_frames"))
+
+        # Row 1: Input Video
+        r1 = tk.Frame(paths_card, bg=self.panel_bg)
+        r1.pack(fill=tk.X, pady=3)
+        tk.Label(r1, text="Input Video:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        in_entry = tk.Entry(r1, textvariable=vid_in_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        in_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+
+        def browse_in():
+            f = filedialog.askopenfilename(
+                title="Select Video File",
+                filetypes=[("Video Files", "*.mp4 *.mov *.insv *.avi *.mkv *.webm"), ("All Files", "*.*")]
+            )
+            if f:
+                vid_in_var.set(f)
+                if not out_dir_var.get():
+                    out_dir_var.set(os.path.join(os.path.dirname(f), f"{Path(f).stem}_frames"))
+
+        tk.Button(r1, text="Browse Video...", font=("Segoe UI", 8), bg=self.accent_blue, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_in).pack(side=tk.RIGHT)
+
+        # Row 2: Destination Folder
+        r2 = tk.Frame(paths_card, bg=self.panel_bg)
+        r2.pack(fill=tk.X, pady=3)
+        tk.Label(r2, text="Output Folder:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        out_entry = tk.Entry(r2, textvariable=out_dir_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+
+        def browse_out():
+            d = filedialog.askdirectory(title="Select Output Directory for Frames")
+            if d:
+                out_dir_var.set(d)
+
+        tk.Button(r2, text="Browse Folder...", font=("Segoe UI", 8), bg="#29293d", fg=self.text_primary, relief=tk.FLAT, padx=8, command=browse_out).pack(side=tk.RIGHT)
+
+        # 2. Controls Card
+        ctrl_card = tk.LabelFrame(
+            content,
+            text=" Professional Extraction Controls ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        ctrl_card.pack(fill=tk.X, pady=(0, 8))
+
+        # Grid of controls
+        g1 = tk.Frame(ctrl_card, bg=self.panel_bg)
+        g1.pack(fill=tk.X, pady=2)
+
+        mode_var = tk.StringVar(value="fps")
+        fps_var = tk.StringVar(value="5.0")
+        stride_var = tk.StringVar(value="1")
+        fmt_var = tk.StringVar(value="jpg")
+        qual_var = tk.StringVar(value="95")
+        res_var = tk.StringVar(value="native")
+        hwaccel_var = tk.BooleanVar(value=True)
+        blur_filter_var = tk.BooleanVar(value=False)
+        blur_val_var = tk.StringVar(value="30")
+
+        tk.Label(g1, text="Extraction Mode:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        mode_cb = ttk.Combobox(g1, textvariable=mode_var, values=["fps", "stride", "keyframes", "all"], state="readonly", width=10)
+        mode_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g1, text="Target FPS:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        fps_entry = tk.Entry(g1, textvariable=fps_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=6, relief=tk.FLAT)
+        fps_entry.pack(side=tk.LEFT, padx=(0, 16), ipady=1)
+
+        tk.Label(g1, text="Frame Stride:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        stride_entry = tk.Entry(g1, textvariable=stride_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        stride_entry.pack(side=tk.LEFT, ipady=1)
+
+        g2 = tk.Frame(ctrl_card, bg=self.panel_bg)
+        g2.pack(fill=tk.X, pady=(6, 2))
+
+        tk.Label(g2, text="Image Format:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        fmt_cb = ttk.Combobox(g2, textvariable=fmt_var, values=["jpg", "png"], state="readonly", width=6)
+        fmt_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g2, text="JPEG Quality:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        qual_entry = tk.Entry(g2, textvariable=qual_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        qual_entry.pack(side=tk.LEFT, padx=(0, 16), ipady=1)
+
+        tk.Label(g2, text="Resolution:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        res_cb = ttk.Combobox(g2, textvariable=res_var, values=["native", "8k", "5.7k", "4k", "2k", "1k"], state="readonly", width=8)
+        res_cb.pack(side=tk.LEFT)
+
+        g3 = tk.Frame(ctrl_card, bg=self.panel_bg)
+        g3.pack(fill=tk.X, pady=(6, 2))
+
+        hw_chk = tk.Checkbutton(g3, text="⚡ NVIDIA NVDEC / CUDA Hardware Acceleration", variable=hwaccel_var, font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        hw_chk.pack(side=tk.LEFT)
+
+        blur_chk = tk.Checkbutton(g3, text="🔍 Filter Motion Blur (Laplacian >", variable=blur_filter_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        blur_chk.pack(side=tk.LEFT, padx=(16, 2))
+        blur_entry = tk.Entry(g3, textvariable=blur_val_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=4, relief=tk.FLAT)
+        blur_entry.pack(side=tk.LEFT, ipady=1)
+        tk.Label(g3, text=")", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT)
+
+        # 3. Status & Progress Card
+        prog_card = tk.LabelFrame(
+            content,
+            text=" Progress & Telemetry ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        prog_card.pack(fill=tk.X, pady=(0, 8))
+
+        dlg_pbar = ttk.Progressbar(prog_card, mode="determinate")
+        dlg_pbar.pack(fill=tk.X, pady=(2, 4))
+
+        status_lbl = tk.Label(prog_card, text="Status: Ready to extract.", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, anchor="w")
+        status_lbl.pack(fill=tk.X)
+
+        # 4. Action Buttons
+        btn_row = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=10)
+        btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+
+        extract_btn = tk.Button(
+            btn_row,
+            text="▶ Start Frame Extraction",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.accent_green,
+            fg="#ffffff",
+            activebackground="#059669",
+            relief=tk.FLAT,
+            padx=16,
+            pady=6
+        )
+        extract_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        use_ds_btn = tk.Button(
+            btn_row,
+            text="✓ Set as Active Dataset in Abu Align",
+            font=("Segoe UI", 9),
+            bg="#29293d",
+            fg=self.text_primary,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            state=tk.DISABLED
+        )
+        use_ds_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        open_folder_btn = tk.Button(
+            btn_row,
+            text="📁 Open Folder",
+            font=("Segoe UI", 9),
+            bg="#29293d",
+            fg=self.text_primary,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            state=tk.DISABLED
+        )
+        open_folder_btn.pack(side=tk.LEFT)
+
+        close_btn = tk.Button(
+            btn_row,
+            text="Close",
+            font=("Segoe UI", 9),
+            bg="#1f1f2e",
+            fg=self.text_secondary,
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            command=dialog.destroy
+        )
+        close_btn.pack(side=tk.RIGHT)
+
+        def set_as_dataset():
+            d = out_dir_var.get().strip()
+            if os.path.isdir(d):
+                self.dataset_var.set(d)
+                messagebox.showinfo("Dataset Set", f"Updated Abu Align dataset path to:\n{d}")
+                dialog.destroy()
+
+        use_ds_btn.config(command=set_as_dataset)
+
+        def open_folder():
+            d = out_dir_var.get().strip()
+            if os.path.isdir(d):
+                os.startfile(d)
+
+        open_folder_btn.config(command=open_folder)
+
+        def run_extraction_worker():
+            in_v = vid_in_var.get().strip()
+            out_d = out_dir_var.get().strip()
+            if not in_v or not os.path.exists(in_v):
+                messagebox.showerror("Error", "Please select a valid input video file or folder.")
+                return
+            if not out_d:
+                out_d = os.path.join(os.path.dirname(in_v), f"{Path(in_v).stem}_frames")
+                out_dir_var.set(out_d)
+
+            extract_btn.config(state=tk.DISABLED, text="⏳ Extracting...")
+            close_btn.config(state=tk.DISABLED)
+            dlg_pbar["value"] = 0
+            status_lbl.config(text="Status: Initializing extraction...", fg="#38bdf8")
+
+            def on_progress(p):
+                cur = p.get("current_frame", 0)
+                tot = p.get("total_frames", 1)
+                pct = p.get("percent", 0.0)
+                rate = p.get("fps_rate", 0.0)
+                status_txt = f"Status: Extracting frame {cur}/{tot} ({pct:.1f}%) | {rate:.1f} FPS"
+                dialog.after(0, lambda: [
+                    dlg_pbar.configure(value=pct),
+                    status_lbl.configure(text=status_txt, fg="#38bdf8")
+                ])
+
+            def worker():
+                try:
+                    from video_extractor import extract_video_frames
+                    mode = mode_var.get()
+                    fps_val = float(fps_var.get()) if mode == "fps" else 5.0
+                    stride_val = int(stride_var.get()) if mode == "stride" else 1
+                    qual_val = int(qual_var.get())
+                    res_val = res_var.get() if res_var.get() != "native" else None
+                    blur_val = float(blur_val_var.get()) if blur_filter_var.get() else 0.0
+
+                    res = extract_video_frames(
+                        video_path=in_v,
+                        output_dir=out_d,
+                        mode=mode,
+                        fps=fps_val,
+                        stride=stride_val,
+                        image_format=fmt_var.get(),
+                        quality=qual_val,
+                        resolution=res_val,
+                        blur_threshold=blur_val,
+                        use_hwaccel=hwaccel_var.get(),
+                        progress_callback=on_progress,
+                    )
+                    tot = res.get("total_frames", 0)
+                    sec = res.get("elapsed_seconds", 0.0)
+                    fps_r = res.get("fps_rate", 0.0)
+
+                    def on_done():
+                        dlg_pbar["value"] = 100
+                        status_lbl.config(
+                            text=f"Status: Complete! Extracted {tot} frames in {sec}s ({fps_r} FPS).",
+                            fg=self.accent_green
+                        )
+                        extract_btn.config(state=tk.NORMAL, text="▶ Start Frame Extraction")
+                        close_btn.config(state=tk.NORMAL)
+                        use_ds_btn.config(state=tk.NORMAL)
+                        open_folder_btn.config(state=tk.NORMAL)
+                        self._log(f"\n[VIDEO EXTRACTOR] Successfully extracted {tot} frames to {out_d} in {sec}s ({fps_r} FPS).\n")
+
+                    dialog.after(0, on_done)
+                except Exception as ex:
+                    def on_err():
+                        status_lbl.config(text=f"Status: Failed - {ex}", fg=self.accent_red)
+                        extract_btn.config(state=tk.NORMAL, text="▶ Start Frame Extraction")
+                        close_btn.config(state=tk.NORMAL)
+                        messagebox.showerror("Extraction Error", f"Failed to extract video frames:\n{ex}")
+                    dialog.after(0, on_err)
+
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+
+        extract_btn.config(command=run_extraction_worker)
+
+    def _open_panoramic_splitter_dialog(self):
+        """
+        Launches the dedicated 360° Multi-Camera Rig Projector & Panoramic Splitter dialog.
+        Converts 360° equirectangular panoramas into undistorted virtual camera rigs:
+        - 6-Face Cubemap (90° FOV)
+        - Horizontal Ring Rig (e.g. 8 cameras @ 50% overlap for pinhole photogrammetry)
+        - Spherical Dome Rig (14 cameras with uniform sphere coverage)
+        Exports pinhole images + transforms.json ready for COLMAP, Nerfstudio, and LichtFeld.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("🌐 360° Multi-Camera Rig Projector & Splitter - Abu Align")
+        dialog.geometry("760x650")
+        dialog.minsize(700, 580)
+        dialog.configure(bg=self.bg_dark)
+        dialog.transient(self.root)
+
+        # Header
+        hdr = tk.Frame(dialog, bg=self.panel_bg, padx=14, pady=10)
+        hdr.pack(fill=tk.X, padx=12, pady=(12, 8))
+        tk.Label(
+            hdr,
+            text="🌐 360° MULTI-CAMERA RIG PROJECTOR & SPLITTER",
+            font=("Segoe UI", 12, "bold"),
+            fg="#a855f7",
+            bg=self.panel_bg
+        ).pack(anchor="w")
+        tk.Label(
+            hdr,
+            text="Project 360° spherical panoramas into distortion-free virtual pinhole camera arrays with configurable overlap and transforms.json export.",
+            font=("Segoe UI", 9),
+            fg=self.text_secondary,
+            bg=self.panel_bg
+        ).pack(anchor="w", pady=(2, 0))
+
+        content = tk.Frame(dialog, bg=self.bg_dark, padx=12)
+        content.pack(fill=tk.BOTH, expand=True)
+
+        # 1. Paths Card
+        paths_card = tk.LabelFrame(
+            content,
+            text=" Input Panoramas & Output Rig Folder ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        paths_card.pack(fill=tk.X, pady=(0, 8))
+
+        in_var = tk.StringVar(value=self.dataset_var.get().strip())
+        out_var = tk.StringVar()
+        if in_var.get():
+            out_var.set(os.path.join(in_var.get(), "pinhole_rig"))
+
+        r1 = tk.Frame(paths_card, bg=self.panel_bg)
+        r1.pack(fill=tk.X, pady=3)
+        tk.Label(r1, text="Input Panos:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        in_entry = tk.Entry(r1, textvariable=in_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        in_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+
+        def browse_in():
+            f = filedialog.askdirectory(initialdir=in_var.get(), title="Select Directory of 360° Panoramas")
+            if f:
+                in_var.set(f)
+                out_var.set(os.path.join(f, "pinhole_rig"))
+
+        tk.Button(r1, text="Browse Folder...", font=("Segoe UI", 8), bg=self.accent_blue, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_in).pack(side=tk.RIGHT)
+
+        r2 = tk.Frame(paths_card, bg=self.panel_bg)
+        r2.pack(fill=tk.X, pady=3)
+        tk.Label(r2, text="Output Rig:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        out_entry = tk.Entry(r2, textvariable=out_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=2)
+
+        def browse_out():
+            f = filedialog.askdirectory(initialdir=out_var.get() or in_var.get(), title="Select Output Rig Folder")
+            if f:
+                out_var.set(f)
+
+        tk.Button(r2, text="Browse Output...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_out).pack(side=tk.RIGHT)
+
+        # 2. Rig Configuration Card
+        rig_card = tk.LabelFrame(
+            content,
+            text=" Virtual Multi-Camera Rig Configuration ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        rig_card.pack(fill=tk.X, pady=(0, 8))
+
+        mode_var = tk.StringVar(value=self.rig_split_mode_var.get())
+        num_cams_var = tk.StringVar(value=self.rig_num_cams_var.get())
+        fov_var = tk.StringVar(value=self.rig_fov_var.get())
+        res_var = tk.StringVar(value=self.rig_res_var.get())
+        fmt_var = tk.StringVar(value="jpg")
+        qual_var = tk.StringVar(value="95")
+        export_tf_var = tk.BooleanVar(value=True)
+
+        g1 = tk.Frame(rig_card, bg=self.panel_bg)
+        g1.pack(fill=tk.X, pady=(2, 4))
+
+        tk.Label(g1, text="Rig Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        mode_cb = ttk.Combobox(g1, textvariable=mode_var, values=["ring", "cubemap", "dome"], state="readonly", width=10)
+        mode_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g1, text="Virtual Cameras (Ring):", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        cams_cb = ttk.Combobox(g1, textvariable=num_cams_var, values=["4", "6", "8", "10", "12", "16"], state="readonly", width=4)
+        cams_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g1, text="Camera FOV (°):", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        fov_entry = tk.Entry(g1, textvariable=fov_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        fov_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+
+        overlap_lbl = tk.Label(g1, text="[Overlap: 50.0%]", font=("Segoe UI", 8, "bold"), fg="#34d399", bg=self.panel_bg)
+        overlap_lbl.pack(side=tk.LEFT)
+
+        def update_overlap_info(*_):
+            try:
+                m = mode_var.get()
+                if m == "ring":
+                    c = int(num_cams_var.get())
+                    fov = float(fov_var.get())
+                    step = 360.0 / c
+                    if fov > step:
+                        ol = ((fov - step) / fov) * 100.0
+                        overlap_lbl.config(text=f"[Overlap: {ol:.1f}%]", fg="#34d399")
+                    else:
+                        overlap_lbl.config(text=f"[Overlap: 0.0% (Gap!)]", fg="#f87171")
+                    cams_cb.config(state="readonly")
+                elif m == "cubemap":
+                    overlap_lbl.config(text="[6 Faces @ 90° FOV]", fg="#60a5fa")
+                    cams_cb.config(state=tk.DISABLED)
+                else:  # dome
+                    overlap_lbl.config(text="[14 Views: Equator + Tiers + Poles]", fg="#c084fc")
+                    cams_cb.config(state=tk.DISABLED)
+            except Exception:
+                pass
+
+        mode_var.trace_add("write", update_overlap_info)
+        num_cams_var.trace_add("write", update_overlap_info)
+        fov_var.trace_add("write", update_overlap_info)
+
+        g2 = tk.Frame(rig_card, bg=self.panel_bg)
+        g2.pack(fill=tk.X, pady=(4, 2))
+
+        tk.Label(g2, text="View Resolution:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        res_cb = ttk.Combobox(g2, textvariable=res_var, values=["512", "1024", "1536", "2048"], state="readonly", width=6)
+        res_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g2, text="Format:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        fmt_cb = ttk.Combobox(g2, textvariable=fmt_var, values=["jpg", "png"], state="readonly", width=6)
+        fmt_cb.pack(side=tk.LEFT, padx=(0, 16))
+
+        tk.Label(g2, text="Quality:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        qual_entry = tk.Entry(g2, textvariable=qual_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        qual_entry.pack(side=tk.LEFT, padx=(0, 16), ipady=1)
+
+        tf_chk = tk.Checkbutton(g2, text="Export transforms.json", variable=export_tf_var, font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        tf_chk.pack(side=tk.LEFT)
+
+        # 3. Status & Progress Card
+        prog_card = tk.LabelFrame(
+            content,
+            text=" Progress & Telemetry ",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            padx=12,
+            pady=8
+        )
+        prog_card.pack(fill=tk.X, pady=(0, 8))
+
+        dlg_pbar = ttk.Progressbar(prog_card, mode="determinate")
+        dlg_pbar.pack(fill=tk.X, pady=(2, 4))
+
+        status_lbl = tk.Label(prog_card, text="Status: Ready to project rig.", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, anchor="w")
+        status_lbl.pack(fill=tk.X)
+
+        # 4. Action Buttons
+        btn_row = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=10)
+        btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+
+        split_btn = tk.Button(
+            btn_row,
+            text="▶ Start Rig Projection",
+            font=("Segoe UI", 10, "bold"),
+            bg="#7c3aed",
+            fg="#ffffff",
+            activebackground="#6d28d9",
+            relief=tk.FLAT,
+            padx=16,
+            pady=6
+        )
+        split_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        use_ds_btn = tk.Button(
+            btn_row,
+            text="✓ Set as Active Dataset in Abu Align",
+            font=("Segoe UI", 9),
+            bg="#29293d",
+            fg=self.text_primary,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            state=tk.DISABLED
+        )
+        use_ds_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        open_folder_btn = tk.Button(
+            btn_row,
+            text="📁 Open Folder",
+            font=("Segoe UI", 9),
+            bg="#29293d",
+            fg=self.text_primary,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            state=tk.DISABLED
+        )
+        open_folder_btn.pack(side=tk.LEFT)
+
+        close_btn = tk.Button(
+            btn_row,
+            text="Close",
+            font=("Segoe UI", 9),
+            bg="#1f1f2e",
+            fg=self.text_secondary,
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            command=dialog.destroy
+        )
+        close_btn.pack(side=tk.RIGHT)
+
+        def set_as_dataset():
+            d = out_var.get().strip()
+            if os.path.isdir(d):
+                self.dataset_var.set(d)
+                messagebox.showinfo("Dataset Set", f"Updated Abu Align dataset path to:\n{d}")
+                dialog.destroy()
+
+        use_ds_btn.config(command=set_as_dataset)
+
+        def open_folder():
+            d = out_var.get().strip()
+            if os.path.isdir(d):
+                os.startfile(d)
+
+        open_folder_btn.config(command=open_folder)
+
+        def run_split_worker():
+            in_p = in_var.get().strip()
+            out_d = out_var.get().strip()
+            if not in_p or not os.path.exists(in_p):
+                messagebox.showerror("Error", "Please select a valid input directory of 360° panoramas.")
+                return
+            if not out_d:
+                out_d = os.path.join(in_p, "pinhole_rig")
+                out_var.set(out_d)
+
+            split_btn.config(state=tk.DISABLED, text="⏳ Projecting...")
+            close_btn.config(state=tk.DISABLED)
+            dlg_pbar["value"] = 0
+            status_lbl.config(text="Status: Initializing rig projection...", fg="#a855f7")
+
+            def on_progress(cur, tot, name):
+                pct = (cur / max(tot, 1)) * 100.0
+                status_txt = f"Status: Splitting panorama {cur}/{tot} ({pct:.1f}%): {name}"
+                dialog.after(0, lambda: [
+                    dlg_pbar.configure(value=pct),
+                    status_lbl.configure(text=status_txt, fg="#a855f7")
+                ])
+
+            def worker():
+                try:
+                    from panoramic_splitter import split_panorama_dataset
+                    m = mode_var.get()
+                    nc = int(num_cams_var.get())
+                    fov_v = float(fov_var.get())
+                    sz = int(res_var.get())
+                    fmt = fmt_var.get()
+                    q = int(qual_var.get())
+                    tf = export_tf_var.get()
+
+                    res = split_panorama_dataset(
+                        input_dir=in_p,
+                        output_dir=out_d,
+                        mode=m,
+                        num_cameras=nc,
+                        fov_deg=fov_v,
+                        crop_size=sz,
+                        image_format=fmt,
+                        quality=q,
+                        export_transforms_json=tf,
+                        progress_callback=on_progress,
+                    )
+                    tot = res.get("total_views", 0)
+                    panos = res.get("total_panoramas", 0)
+                    sec = res.get("elapsed_seconds", 0.0)
+
+                    def on_done():
+                        dlg_pbar["value"] = 100
+                        status_lbl.config(
+                            text=f"Status: Complete! Generated {tot} pinhole views from {panos} panos in {sec}s.",
+                            fg=self.accent_green
+                        )
+                        split_btn.config(state=tk.NORMAL, text="▶ Start Rig Projection")
+                        close_btn.config(state=tk.NORMAL)
+                        use_ds_btn.config(state=tk.NORMAL)
+                        open_folder_btn.config(state=tk.NORMAL)
+                        self._log(f"\n[360 RIG SPLITTER] Successfully projected {panos} panoramas into {tot} views in {out_d} ({sec}s).\n")
+
+                    dialog.after(0, on_done)
+                except Exception as ex:
+                    def on_err():
+                        status_lbl.config(text=f"Status: Failed - {ex}", fg=self.accent_red)
+                        split_btn.config(state=tk.NORMAL, text="▶ Start Rig Projection")
+                        close_btn.config(state=tk.NORMAL)
+                        messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{ex}")
+                    dialog.after(0, on_err)
+
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+
+        split_btn.config(command=run_split_worker)
+        update_overlap_info()
 
     def _log(self, text):
         self.console.insert(tk.END, text)
@@ -1751,7 +2476,13 @@ class AbuAlignApp:
                 "--opensfm_matcher", self.opensfm_matcher_var.get(),
             ])
             if self.opensfm_transcode_var.get():
-                cmd.append("--cubemap_transcode")
+                cmd.extend([
+                    "--split_panorama",
+                    "--split_mode", self.rig_split_mode_var.get(),
+                    "--split_cameras", str(self.rig_num_cams_var.get()),
+                    "--split_fov", str(self.rig_fov_var.get()),
+                    "--split_res", str(self.rig_res_var.get()),
+                ])
         elif align_engine in ["360dvo", "dvo"]:
             cmd.extend([
                 "--dvo_patches", str(self.dvo_patches_var.get()),
@@ -1922,7 +2653,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.2 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.2.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -2233,7 +2964,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.2 - {title}")
+        doc_win.title(f"Abu Align v0.0.2.4 - {title}")
         doc_win.geometry("960x780")
         doc_win.minsize(800, 550)
         doc_win.configure(bg=self.bg_dark)
@@ -2450,7 +3181,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.2\n"
+            "Abu Align & Train - Version 0.0.2.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

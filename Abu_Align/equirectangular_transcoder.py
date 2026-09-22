@@ -194,3 +194,15 @@ def transcode_dataset(
             progress_callback(idx + 1, len(files), fname)
 
     return total_saved, f"Successfully transcoded {len(files)} panoramas into {total_saved} rectilinear pinhole images."
+
+
+# ----------------------------------------------------------------------
+# Re-export Enhanced Multi-Camera Rig Projector & Panoramic Splitter APIs
+# ----------------------------------------------------------------------
+from panoramic_splitter import (
+    PanoramicRigSplitter,
+    split_panorama_dataset,
+    get_cubemap_rig,
+    get_horizontal_ring_rig,
+    get_spherical_dome_rig,
+)

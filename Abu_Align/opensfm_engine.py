@@ -12,6 +12,8 @@ import yaml
 import time
 import shutil
 import subprocess
+import numpy as np
+import cv2
 from typing import List, Dict, Optional, Tuple
 
 class OpenSfMEngine:
@@ -215,6 +217,7 @@ class OpenSfMEngine:
         for ply_file in ply_candidates:
             if os.path.isfile(ply_file):
                 shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points.ply"))
+                shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points3D.ply"))
                 break
 
         # Also preserve OpenSfM reconstruction.json and metadata.json for direct PFGS360 training
@@ -225,7 +228,96 @@ class OpenSfMEngine:
             shutil.copy2(rec_json, os.path.join(osfm_target, "reconstruction.json"))
             ensure_opensfm_metadata(target_3dgs_dir)
 
+            # Condition 2 Bridge: Generate transforms.json with EQUIRECTANGULAR camera model
+            tf_path = os.path.join(target_3dgs_dir, "transforms.json")
+            pts_path = os.path.join(target_3dgs_dir, "points3D.ply")
+            opensfm_to_transforms_json(
+                reconstruction_json_path=rec_json,
+                output_transforms_file=tf_path,
+                ply_source=os.path.join(target_3dgs_dir, "points.ply") if os.path.isfile(os.path.join(target_3dgs_dir, "points.ply")) else None,
+                output_ply_dest=pts_path
+            )
+
         return True
+
+
+def opensfm_to_transforms_json(
+    reconstruction_json_path: str,
+    output_transforms_file: str,
+    ply_source: Optional[str] = None,
+    output_ply_dest: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Converts OpenSfM reconstruction.json into Nerfstudio-compliant transforms.json
+    with "camera_model": "EQUIRECTANGULAR" according to Condition 2 of 360° Data Intake specification.
+    Copies reconstruction.ply to points3D.ply.
+    """
+    if not os.path.isfile(reconstruction_json_path):
+        return False, f"Reconstruction file not found: {reconstruction_json_path}"
+
+    try:
+        with open(reconstruction_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return False, f"Failed to parse reconstruction.json: {e}"
+
+    if not isinstance(data, list) or len(data) == 0:
+        return False, "Invalid reconstruction.json format (expected non-empty list)."
+
+    rec = data[0]
+    shots = rec.get("shots", {})
+    if not shots:
+        return False, "No shots found in reconstruction.json."
+
+    # Determine resolution from cameras
+    cameras = rec.get("cameras", {})
+    width, height = 1024, 512
+    for cam_id, cam in cameras.items():
+        width = cam.get("width", width)
+        height = cam.get("height", height)
+        break
+
+    frames = []
+    for shot_id, shot_data in sorted(shots.items()):
+        r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
+        t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
+
+        # OpenSfM convention: rotation is Rodrigues axis-angle vector, translation is in camera coords
+        R_w2c, _ = cv2.Rodrigues(r_vec)
+        R_c2w = R_w2c.T
+        t_c2w = -R_w2c.T @ t_vec
+
+        # Convert OpenCV camera frame (+X right, +Y down, +Z forward)
+        # to OpenGL/Nerfstudio camera frame (+X right, +Y up, +Z back)
+        R_c2w_ns = R_c2w @ np.diag([1.0, -1.0, -1.0])
+
+        c2w = np.eye(4, dtype=np.float64)
+        c2w[:3, :3] = R_c2w_ns
+        c2w[:3, 3] = t_c2w
+
+        frames.append({
+            "file_path": f"images/{shot_id}",
+            "transform_matrix": c2w.tolist()
+        })
+
+    transforms_payload = {
+        "camera_model": "EQUIRECTANGULAR",
+        "w": int(width),
+        "h": int(height),
+        "frames": frames
+    }
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_transforms_file)), exist_ok=True)
+    with open(output_transforms_file, "w", encoding="utf-8") as tf:
+        json.dump(transforms_payload, tf, indent=2)
+
+    if ply_source and os.path.isfile(ply_source) and output_ply_dest:
+        try:
+            shutil.copy2(ply_source, output_ply_dest)
+        except Exception:
+            pass
+
+    return True, f"Generated transforms.json (EQUIRECTANGULAR, {len(frames)} frames) at {output_transforms_file}"
 
 
 def ensure_opensfm_metadata(dataset_dir: str) -> bool:

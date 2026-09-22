@@ -1,6 +1,6 @@
 """
-Abu Align & Train - 3D Gaussian Splatting Training Engine
-==========================================================
+Abu Align & Train v0.0.2.4 - 3D Gaussian Splatting Training Engine
+==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
 2. Nerfstudio Splatfacto (State-of-the-Art PyTorch 3DGS + PLY exporter)
@@ -522,6 +522,274 @@ def train_3dgrut(
 
 
 # ----------------------------------------------------------------------
+# Helper Functions: Video Ingestion & Pose-Free Manifest Bridge
+# ----------------------------------------------------------------------
+def ensure_dataset_has_images(dataset_dir: str, fps: float = 2.0, log_func=None) -> str:
+    """
+    Ensures that dataset_dir has an images/ directory with frames.
+    If dataset_dir only contains video files (.mp4, .mov, .insv, etc.),
+    automatically extracts 360° equirectangular frames using video_extractor.
+    """
+    images_dir = os.path.join(dataset_dir, "images")
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+    # Check if images_dir exists and has images
+    if os.path.isdir(images_dir):
+        existing = [f for f in os.listdir(images_dir) if Path(f).suffix.lower() in valid_exts]
+        if len(existing) > 0:
+            # Check resolution: if existing images exceed 2K (e.g. 4K/8K), automatically downscale to 2K (1920x960)
+            # This protects GPU VRAM from ViT-L quadratic self-attention exhaustion and prevents system freeze.
+            try:
+                from PIL import Image
+                def nat_sort(s):
+                    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
+                existing.sort(key=nat_sort)
+                first_img = os.path.join(images_dir, existing[0])
+                with Image.open(first_img) as im:
+                    ew, eh = im.size
+                if ew > 2048 or eh > 1024:
+                    if log_func:
+                        log_func(f"      * [VRAM Shield] Existing frames are {ew}x{eh} (>2K). Resizing to 2K (1920x960) for optimal VRAM hygiene & speed...")
+                    for fn in existing:
+                        fpath = os.path.join(images_dir, fn)
+                        try:
+                            with Image.open(fpath) as im:
+                                if im.size[0] > 2048 or im.size[1] > 1024:
+                                    im_resized = im.resize((1920, 960), Image.Resampling.LANCZOS)
+                                    im_resized.save(fpath, quality=95)
+                        except Exception:
+                            pass
+                    if log_func:
+                        log_func(f"      * [VRAM Shield] Successfully downscaled {len(existing)} frames to 2K (1920x960).")
+            except Exception as ex:
+                if log_func:
+                    log_func(f"      * [VRAM Shield Warning] Frame downscaling check: {ex}")
+            return images_dir
+
+    # Check if dataset_dir itself contains images directly
+    direct_imgs = [f for f in os.listdir(dataset_dir) if Path(f).suffix.lower() in valid_exts]
+    if len(direct_imgs) > 0:
+        os.makedirs(images_dir, exist_ok=True)
+        for f in direct_imgs:
+            src = os.path.join(dataset_dir, f)
+            dst = os.path.join(images_dir, f)
+            if not os.path.exists(dst):
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
+        return images_dir
+
+    # Search for video files in dataset_dir
+    video_exts = {".mp4", ".mov", ".insv", ".avi", ".mkv", ".webm"}
+    video_files = [
+        os.path.join(dataset_dir, f)
+        for f in os.listdir(dataset_dir)
+        if Path(f).suffix.lower() in video_exts and os.path.isfile(os.path.join(dataset_dir, f))
+    ]
+
+    if not video_files:
+        return images_dir
+
+    target_video = video_files[0]
+    vid_name = os.path.basename(target_video)
+    if log_func:
+        log_func(f"      * [Auto-Extractor] No images found, but detected video: {vid_name}")
+        log_func(f"      * [Auto-Extractor] Extracting 2K (1920x960) 360° ERP frames @ {fps} FPS to images/ ...")
+
+    try:
+        from video_extractor import extract_video_frames, get_video_info
+        info = get_video_info(target_video)
+        # For 360 pose-free training, 2K (1920x960) is the optimal standard for monocular depth ViT models
+        # (UniK3D) and omnidirectional Gaussian Splatting, ensuring ultra-fast training and <=6GB VRAM footprint.
+        target_res = "2k"
+
+        os.makedirs(images_dir, exist_ok=True)
+        res = extract_video_frames(
+            video_path=target_video,
+            output_dir=images_dir,
+            mode="fps",
+            fps=fps,
+            image_format="jpg",
+            quality=95,
+            resolution=target_res,
+            progress_callback=lambda p: log_func(f"        [Extractor] Frame {p.get('current_frame')}/{p.get('total_frames')} ({p.get('percent', 0):.1f}%)") if log_func and p.get("current_frame", 0) % 20 == 0 else None
+        )
+        if log_func:
+            log_func(f"      * [Auto-Extractor] Extracted {res.get('total_frames', 0)} frames successfully in {res.get('elapsed_seconds', 0)}s!")
+    except Exception as ex:
+        if log_func:
+            log_func(f"      * [Auto-Extractor Warning] Video extraction failed: {ex}")
+
+    return images_dir
+
+
+def ensure_transforms_json_for_posefree(dataset_dir: str, log_func=None) -> Optional[str]:
+    """
+    Creates a standard transforms.json with EQUIRECTANGULAR camera model and identity poses
+    for an unposed sequence in dataset_dir/images.
+    """
+    tf_path = os.path.join(dataset_dir, "transforms.json")
+    images_dir = os.path.join(dataset_dir, "images")
+    if not os.path.isdir(images_dir):
+        images_dir = dataset_dir
+
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    imgs = [f for f in os.listdir(images_dir) if Path(f).suffix.lower() in valid_exts]
+    def nat_key(s):
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
+    imgs.sort(key=nat_key)
+
+    if os.path.isfile(tf_path):
+        if imgs:
+            try:
+                from PIL import Image
+                first_img = os.path.join(images_dir, imgs[0])
+                with Image.open(first_img) as im:
+                    cur_w, cur_h = im.size
+                with open(tf_path, "r", encoding="utf-8") as f:
+                    tf_data = json.load(f)
+                if tf_data.get("w") != cur_w or tf_data.get("h") != cur_h:
+                    tf_data["w"] = int(cur_w)
+                    tf_data["h"] = int(cur_h)
+                    tf_data["fl_x"] = float(cur_h)
+                    tf_data["fl_y"] = float(cur_h)
+                    tf_data["cx"] = float(cur_w) / 2.0
+                    tf_data["cy"] = float(cur_h) / 2.0
+                    with open(tf_path, "w", encoding="utf-8") as f:
+                        json.dump(tf_data, f, indent=2)
+                    if log_func:
+                        log_func(f"      * [Pose-Free Manifest] Synchronized transforms.json dimensions to {cur_w}x{cur_h}")
+            except Exception:
+                pass
+        return tf_path
+
+    if not imgs:
+        return None
+
+    try:
+        from PIL import Image
+        first_img = os.path.join(images_dir, imgs[0])
+        with Image.open(first_img) as im:
+            w, h = im.size
+    except Exception:
+        w, h = 1920, 960
+
+    ident = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ]
+    frames = []
+    for fn in imgs:
+        rel_path = f"images/{fn}" if os.path.isdir(os.path.join(dataset_dir, "images")) else fn
+        frames.append({
+            "file_path": rel_path,
+            "transform_matrix": ident
+        })
+
+    tf_data = {
+        "camera_model": "EQUIRECTANGULAR",
+        "w": int(w),
+        "h": int(h),
+        "fl_x": float(h),
+        "fl_y": float(h),
+        "cx": float(w) / 2.0,
+        "cy": float(h) / 2.0,
+        "frames": frames
+    }
+
+    try:
+        with open(tf_path, "w", encoding="utf-8") as f:
+            json.dump(tf_data, f, indent=2)
+        if log_func:
+            log_func(f"      * [Pose-Free Manifest] Generated transforms.json with {len(frames)} frames (EQUIRECTANGULAR {w}x{h})")
+        return tf_path
+    except Exception as ex:
+        if log_func:
+            log_func(f"      * [Warning] Could not generate transforms.json: {ex}")
+        return None
+
+
+def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str) -> str:
+    """
+    Directly extracts 3D Gaussian Splatting parameters from a PFGS360 PyTorch checkpoint
+    and writes a standard binary PLY point cloud file compatible with all 3DGS viewers.
+    """
+    import torch
+    import numpy as np
+    from collections import OrderedDict
+
+    data = torch.load(ckpt_path, map_location="cpu")
+    pipe = data.get("pipeline", {})
+    if "_model.gauss_params.means" not in pipe:
+        prefix = ""
+        for k in pipe.keys():
+            if "gauss_params.means" in k:
+                prefix = k.split("gauss_params.means")[0]
+                break
+    else:
+        prefix = "_model."
+
+    means = pipe[f"{prefix}gauss_params.means"].float().numpy()
+    opacities = pipe[f"{prefix}gauss_params.opacities"].float().numpy()
+    scales = pipe[f"{prefix}gauss_params.scales"].float().numpy()
+    quats = pipe[f"{prefix}gauss_params.quats"].float().numpy()
+    f_dc = pipe[f"{prefix}gauss_params.features_dc"].float().numpy()
+    f_rest = pipe[f"{prefix}gauss_params.features_rest"].float().numpy()
+
+    N = means.shape[0]
+    map_to_tensors = OrderedDict()
+    map_to_tensors["x"] = means[:, 0]
+    map_to_tensors["y"] = means[:, 1]
+    map_to_tensors["z"] = means[:, 2]
+    map_to_tensors["nx"] = np.zeros(N, dtype=np.float32)
+    map_to_tensors["ny"] = np.zeros(N, dtype=np.float32)
+    map_to_tensors["nz"] = np.zeros(N, dtype=np.float32)
+
+    for i in range(3):
+        map_to_tensors[f"f_dc_{i}"] = f_dc[:, i, None]
+
+    if len(f_rest.shape) == 3 and f_rest.shape[1] > 0:
+        shs_rest = np.transpose(f_rest, (0, 2, 1)).reshape(N, -1)
+        for i in range(shs_rest.shape[-1]):
+            map_to_tensors[f"f_rest_{i}"] = shs_rest[:, i, None]
+
+    map_to_tensors["opacity"] = opacities
+    for i in range(3):
+        map_to_tensors[f"scale_{i}"] = scales[:, i, None]
+    for i in range(4):
+        map_to_tensors[f"rot_{i}"] = quats[:, i, None]
+
+    valid = np.ones(N, dtype=bool)
+    for k, v in map_to_tensors.items():
+        valid = np.logical_and(valid, np.isfinite(v).all(axis=-1))
+
+    # Opacity threshold logit(1/255) approx -5.5373
+    valid = np.logical_and(valid, (opacities.squeeze(-1) >= -5.5373))
+    count = int(np.sum(valid))
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_ply)), exist_ok=True)
+    type_list = [(k, "f4") for k in map_to_tensors.keys()]
+    rec_arr = np.empty(count, dtype=type_list)
+    for k in map_to_tensors.keys():
+        rec_arr[k] = map_to_tensors[k][valid].squeeze()
+
+    with open(out_ply, "wb") as f:
+        f.write(b"ply\n")
+        f.write(b"format binary_little_endian 1.0\n")
+        f.write(b"comment Vertical Axis: z\n")
+        f.write(f"element vertex {count}\n".encode())
+        for k in map_to_tensors.keys():
+            f.write(f"property float {k}\n".encode())
+        f.write(b"end_header\n")
+        rec_arr.tofile(f)
+
+    return out_ply
+
+
+# ----------------------------------------------------------------------
 # 4. PFGS360 Trainer (CVPR 2026 Pose-Free 360° Omnidirectional 3DGS)
 # ----------------------------------------------------------------------
 def train_pfgs360(
@@ -567,28 +835,58 @@ def train_pfgs360(
     os.makedirs(output_dir, exist_ok=True)
     dataset_abs = os.path.abspath(dataset_dir)
 
-    # Determine optimal dataparser:
-    # 1. If opensfm/reconstruction.json exists (from OpenSfM or 360DVO), use opensfm-dataparser
-    # 2. Otherwise use ob3d-dataparser for pose-free egocentric frames
+    # 1. Ensure images exist (auto-extract from video if video file was provided)
+    ensure_dataset_has_images(dataset_abs, fps=2.0, log_func=log)
+
+    # 2. In Pose-Free mode, ensure transforms.json is generated as bridge file
+    if dataparser_mode in ["auto", "posefree", "pose-free", "direct"]:
+        ensure_transforms_json_for_posefree(dataset_abs, log_func=log)
+
+    # Determine optimal dataparser according to 360° Data Intake & Alignment Pipeline specification:
+    # 1. Condition 1 & 2 / Paradigm B: If transforms.json exists with real camera poses (from 360DVO or OpenSfM), route to nerfstudio-data
+    # 2. OpenSfM native handoff: If opensfm/reconstruction.json exists, route to opensfm-dataparser
+    # 3. Condition 3 / Paradigm A: Pose-Free mode (unposed ERP frames in images/)
+    tf_json = os.path.join(dataset_abs, "transforms.json")
     rec_json = os.path.join(dataset_abs, "opensfm", "reconstruction.json")
     if not os.path.isfile(rec_json):
         rec_json = os.path.join(dataset_abs, "reconstruction.json")
 
     if dataparser_mode == "auto":
+        is_posed_tf = False
+        if os.path.isfile(tf_json):
+            try:
+                with open(tf_json, "r", encoding="utf-8") as f:
+                    tf_meta = json.load(f)
+                frames = tf_meta.get("frames", [])
+                if len(frames) > 1 and "transform_matrix" in frames[0] and "transform_matrix" in frames[1]:
+                    if frames[0]["transform_matrix"] != frames[1]["transform_matrix"]:
+                        is_posed_tf = True
+            except Exception:
+                pass
+
         if os.path.isfile(rec_json):
             active_dp = "opensfm-dataparser"
             dp_mode_label = "OpenSfM / 360DVO Handoff (opensfm-dataparser)"
+        elif is_posed_tf:
+            active_dp = "nerfstudio-data"
+            dp_mode_label = "Transforms.json Handoff (nerfstudio-data - Paradigm B)"
         else:
-            active_dp = "ob3d-dataparser"
-            dp_mode_label = "Pose-Free Direct (ob3d-dataparser - Egocentric)"
-    elif dataparser_mode in ["ob3d", "posefree", "pose-free"]:
-        active_dp = "ob3d-dataparser"
-        dp_mode_label = "Pose-Free Direct (ob3d-dataparser)"
+            active_dp = "posefree-dataparser"
+            dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3)"
+    elif dataparser_mode in ["nerfstudio", "nerfstudio-data", "transforms"]:
+        active_dp = "nerfstudio-data"
+        dp_mode_label = "Transforms.json Handoff (nerfstudio-data)"
     elif dataparser_mode in ["opensfm", "handoff"]:
         active_dp = "opensfm-dataparser"
-        dp_mode_label = "SfM Handoff (opensfm-dataparser)"
+        dp_mode_label = "OpenSfM Handoff (opensfm-dataparser)"
+    elif dataparser_mode in ["ob3d", "egocentric"]:
+        active_dp = "ob3d-dataparser"
+        dp_mode_label = "OB3D Egocentric Dataparser"
+    elif dataparser_mode in ["posefree", "pose-free", "direct"]:
+        active_dp = "posefree-dataparser"
+        dp_mode_label = "Pose-Free Direct (Paradigm A / Condition 3)"
     else:
-        active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") else dataparser_mode
+        active_dp = f"{dataparser_mode}-dataparser" if not dataparser_mode.endswith("-dataparser") and dataparser_mode != "nerfstudio-data" else dataparser_mode
         dp_mode_label = active_dp
 
     # Ensure metadata.json exists if opensfm-dataparser is active
@@ -619,11 +917,11 @@ def train_pfgs360(
     cmd = [
         ns_train_exe,
         "pfgs360",
-        "--data", dataset_abs,
         "--max-num-iterations", str(iterations),
         "--output-dir", output_dir,
         "--pipeline.model.sh-degree", str(sh_degree),
         "--pipeline.model.depth-type", depth_type,
+        "--vis", "tensorboard",
     ]
     if not spherical_aware:
         cmd.extend(["--pipeline.model.spherical-aware", "False"])
@@ -636,12 +934,20 @@ def train_pfgs360(
     if densify_views > 0:
         cmd.extend(["--pipeline.model.densify-views", str(densify_views)])
 
-    # Append dataparser and its specific options
-    cmd.append(active_dp)
-    if active_dp == "opensfm-dataparser":
-        cmd.extend(["--eval-mode", "all"])
+    # Append dataparser subcommand and options in correct Tyro order
+    if active_dp == "nerfstudio-data":
+        cmd.extend(["nerfstudio-data", "--data", dataset_abs, "--auto-scale-poses", "False", "--downscale-factor", "1"])
+    elif active_dp == "opensfm-dataparser":
+        cmd.extend(["opensfm-dataparser", "--data", dataset_abs, "--eval-mode", "all"])
     elif active_dp == "ob3d-dataparser":
-        cmd.extend(["--trajectory-type", "Egocentric"])
+        cmd.extend(["ob3d-dataparser", "--data", dataset_abs, "--trajectory-type", "Egocentric"])
+    elif active_dp in ["posefree-dataparser", "posefree"]:
+        cmd.extend(["posefree-dataparser", "--data", dataset_abs])
+    elif active_dp:
+        cmd.extend([active_dp, "--data", dataset_abs])
+    else:
+        # Paradigm A: Pose-Free Direct command
+        cmd.extend(["--data", dataset_abs])
 
     log(f"      * Launching command: {' '.join(cmd)}")
     start_time = time.time()
@@ -696,22 +1002,35 @@ def train_pfgs360(
             )
         raise RuntimeError(f"PFGS360 training failed (exit code {proc.returncode}):\n{err_block}")
 
-    # Export Gaussian Splatting .ply if ns-export is available
-    config_files = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
-    if config_files and ns_export_exe:
-        best_config = max(config_files, key=os.path.getmtime)
-        export_ply_path = os.path.join(output_dir, "pfgs360_splat.ply")
+    # Export Gaussian Splatting .ply directly from checkpoint or via ns-export fallback
+    ckpt_files = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)
+    export_ply_path = os.path.join(output_dir, "pfgs360_splat.ply")
+    exported = False
+    if ckpt_files:
+        best_ckpt = max(ckpt_files, key=os.path.getmtime)
         log(f"      * Exporting PFGS360 Gaussian Splat to PLY: {export_ply_path}")
-        export_cmd = [
-            ns_export_exe,
-            "gaussian-splat",
-            "--load-config", best_config,
-            "--output-dir", output_dir
-        ]
         try:
-            subprocess.run(export_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            export_pfgs360_checkpoint_to_ply(best_ckpt, export_ply_path)
+            log(f"      * [PFGS360] PLY exported successfully ({os.path.getsize(export_ply_path):,} bytes)!")
+            exported = True
         except Exception as ex:
-            log(f"      * [Warning] ns-export failed: {ex}")
+            log(f"      * [Warning] Direct PLY export failed: {ex}")
+
+    if not exported:
+        config_files = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
+        if config_files and ns_export_exe:
+            best_config = max(config_files, key=os.path.getmtime)
+            log(f"      * Exporting PFGS360 Gaussian Splat via ns-export: {export_ply_path}")
+            export_cmd = [
+                ns_export_exe,
+                "gaussian-splat",
+                "--load-config", best_config,
+                "--output-dir", output_dir
+            ]
+            try:
+                subprocess.run(export_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            except Exception as ex:
+                log(f"      * [Warning] ns-export failed: {ex}")
 
     ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
                      glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
@@ -779,17 +1098,28 @@ def run_3dgs_training(
         if "pfgs" in engine_clean:
             progress_callback(f" Depth Model: {pfgs_depth.upper()}")
             rec_check = os.path.isfile(os.path.join(dataset_dir, "opensfm", "reconstruction.json")) or os.path.isfile(os.path.join(dataset_dir, "reconstruction.json"))
+            tf_check = os.path.isfile(os.path.join(dataset_dir, "transforms.json"))
             if pfgs_dataparser.lower() == "auto":
-                dp_disp = "AUTO (Auto-Routed: OpenSfM / 360DVO Handoff)" if rec_check else "AUTO (Auto-Routed: Pose-Free Direct [ob3d])"
-            elif pfgs_dataparser.lower() in ["ob3d", "posefree", "pose-free"]:
-                dp_disp = "POSE-FREE DIRECT (ob3d-dataparser)"
+                if rec_check:
+                    dp_disp = "AUTO (Auto-Routed: OpenSfM Handoff)"
+                elif tf_check:
+                    dp_disp = "AUTO (Auto-Routed: Transforms.json Handoff)"
+                else:
+                    dp_disp = "AUTO (Auto-Routed: Pose-Free Direct [posefree-dataparser])"
+            elif pfgs_dataparser.lower() in ["posefree", "pose-free", "direct"]:
+                dp_disp = "POSE-FREE DIRECT (posefree-dataparser - Paradigm A)"
             elif pfgs_dataparser.lower() in ["opensfm", "handoff"]:
                 dp_disp = "SFM HANDOFF (opensfm-dataparser)"
+            elif pfgs_dataparser.lower() in ["ob3d", "egocentric"]:
+                dp_disp = "OB3D BENCHMARK (ob3d-dataparser)"
             else:
                 dp_disp = pfgs_dataparser.upper()
             progress_callback(f" Dataparser:  {dp_disp}")
             progress_callback(f" Filter Sky:  {'Enabled' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
+
+    # Ensure dataset has images extracted if raw video was supplied
+    ensure_dataset_has_images(dataset_dir, fps=2.0, log_func=progress_callback)
 
     if engine_clean in ["lichtfeld", "lichtfeld_studio", "lfs"]:
         is_headless = (mode == "headless")
