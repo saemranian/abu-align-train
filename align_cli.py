@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.2.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.3.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1003,6 +1003,10 @@ def main():
     parser.add_argument("--projection", type=str, choices=["auto", "equirectangular", "spherical", "perspective", "fisheye"], default="equirectangular", help="Camera projection model for OpenSfM (default: equirectangular for 360 panos)")
     parser.add_argument("--opensfm_feature", type=str, choices=["sift", "hahog", "orb", "akaze"], default="sift", help="Feature extractor for OpenSfM (default: sift)")
     parser.add_argument("--opensfm_matcher", type=str, choices=["words", "flann", "exhaustive"], default="words", help="Feature matcher for OpenSfM (default: words)")
+    parser.add_argument("--opensfm_min_features", type=int, default=3000, help="Feature budget per frame for OpenSfM (default: 3000)")
+    parser.add_argument("--opensfm_neighbors", type=int, default=5, help="Sequential matching window for OpenSfM (default: 5)")
+    parser.add_argument("--opensfm_bundle_interval", type=int, default=1, help="Bundle adjustment frequency for OpenSfM (default: 1)")
+    parser.add_argument("--opensfm_optimize_camera", action="store_true", default=False, help="Optimize spherical camera parameters during OpenSfM bundle adjustment")
     parser.add_argument("--cubemap_transcode", action="store_true", help="Automatically slice 360 equirectangular images into 6 rectilinear pinhole cubemaps")
     parser.add_argument("--cubemap_res", type=int, default=1024, help="Resolution per cubemap face (default: 1024)")
     # Phase 3: 360° Multi-Camera Rig Projector & Panoramic Splitter
@@ -1377,8 +1381,10 @@ def main():
     elif engine in ["opensfm"]:
         print("[3/5] Starting Mapillary OpenSfM Spherical & Street-Scale Engine...")
         print(f"      * Projection Type:   {args.projection.upper()}")
-        print(f"      * Feature Extractor: {args.opensfm_feature.upper()}")
-        print(f"      * Matcher:           {args.opensfm_matcher.upper()}")
+        print(f"      * Feature Extractor: {args.opensfm_feature.upper()} (Budget: {args.opensfm_min_features})")
+        print(f"      * Matcher:           {args.opensfm_matcher.upper()} (Window: {args.opensfm_neighbors})")
+        print(f"      * Bundle Interval:   Every {args.opensfm_bundle_interval} view(s)")
+        print(f"      * Optimize Camera:   {'Enabled' if args.opensfm_optimize_camera else 'Fixed Ideal S²'}")
         inf_start = time.time()
 
         from opensfm_engine import OpenSfMEngine
@@ -1387,7 +1393,11 @@ def main():
             output_dir=os.path.join(output_dir, "opensfm_workspace"),
             projection_type=args.projection,
             feature_type=args.opensfm_feature,
-            matcher_type=args.opensfm_matcher
+            matcher_type=args.opensfm_matcher,
+            feature_min_frames=args.opensfm_min_features,
+            matching_order_neighbors=args.opensfm_neighbors,
+            bundle_interval=args.opensfm_bundle_interval,
+            optimize_camera_parameters=args.opensfm_optimize_camera
         )
 
         if opensfm.opensfm_bin is not None:
@@ -1673,6 +1683,10 @@ def main():
             f"   * Camera Projection:       {args.projection.upper()}",
             f"   * Feature Detector:        {args.opensfm_feature.upper()}",
             f"   * Feature Matcher:         {args.opensfm_matcher.upper()}",
+            f"   * Feature Budget / Frame:  {getattr(args, 'opensfm_min_features', 3000)}",
+            f"   * Matching Neighbor Window:{getattr(args, 'opensfm_neighbors', 5)} views",
+            f"   * Bundle Interval:         Every {getattr(args, 'opensfm_bundle_interval', 1)} view(s)",
+            f"   * Optimize Camera Params:  {'Enabled' if getattr(args, 'opensfm_optimize_camera', False) else 'Fixed Ideal S²'}",
             f"   * 360 Cubemap Transcode:   {'Active (' + str(args.cubemap_res) + 'px)' if getattr(args, 'cubemap_transcode', False) else 'Native Spherical S²'}",
         ])
     elif engine in ["360dvo", "dvo"]:

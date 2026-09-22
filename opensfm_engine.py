@@ -167,8 +167,8 @@ def solve_spherical_essential_matrix(
 def triangulate_multiview_rays(
     bearing_rays_world: List[np.ndarray],
     camera_centers: List[np.ndarray],
-    min_parallax_deg: float = 1.0,
-    max_chordal_err: float = 0.05
+    min_parallax_deg: float = 0.5,
+    max_chordal_err: float = 0.08
 ) -> Optional[np.ndarray]:
     """
     Computes optimal closed-form 3D point from M >= 2 bearing rays in world coordinates.
@@ -252,8 +252,11 @@ class OpenSfMEngine:
         projection_type: str = "equirectangular",
         feature_type: str = "SIFT",
         matcher_type: str = "WORDS",
+        feature_min_frames: int = 3000,
+        matching_order_neighbors: int = 5,
+        feature_process_size: int = 2048,
         bundle_interval: int = 1,
-        optimize_camera_parameters: bool = True,
+        optimize_camera_parameters: bool = False,
         use_gpu: bool = True
     ):
         self.dataset_path = os.path.abspath(dataset_path)
@@ -261,6 +264,9 @@ class OpenSfMEngine:
         self.projection_type = projection_type.lower()
         self.feature_type = feature_type.upper()
         self.matcher_type = matcher_type.upper()
+        self.feature_min_frames = feature_min_frames
+        self.matching_order_neighbors = matching_order_neighbors
+        self.feature_process_size = feature_process_size
         self.bundle_interval = bundle_interval
         self.optimize_camera_parameters = optimize_camera_parameters
         self.use_gpu = use_gpu
@@ -310,8 +316,9 @@ class OpenSfMEngine:
         config_data = {
             "use_exif_size": True,
             "feature_type": self.feature_type,
-            "feature_min_frames": 3000,
-            "feature_process_size": 2048,
+            "feature_min_frames": self.feature_min_frames,
+            "feature_process_size": self.feature_process_size,
+            "matching_order_neighbors": self.matching_order_neighbors,
             "matching_gps_distance": 150,
             "matching_gps_neighbors": 8,
             "matcher_type": self.matcher_type,
@@ -408,6 +415,10 @@ class OpenSfMEngine:
             output_dir=dest_dir,
             feature_type=self.feature_type,
             matcher_type=self.matcher_type,
+            feature_min_frames=self.feature_min_frames,
+            matching_order_neighbors=self.matching_order_neighbors,
+            bundle_interval=self.bundle_interval,
+            optimize_camera_parameters=self.optimize_camera_parameters,
             stride=stride,
             log_callback=log_callback
         )
@@ -476,18 +487,22 @@ def run_opensfm_spherical_sfm(
     output_dir: str,
     feature_type: str = "SIFT",
     matcher_type: str = "FLANN",
+    feature_min_frames: int = 3000,
+    matching_order_neighbors: int = 5,
+    bundle_interval: int = 1,
+    optimize_camera_parameters: bool = False,
     stride: int = 1,
     log_callback: Optional[Callable[[str], None]] = None
 ) -> Tuple[Optional[object], np.ndarray, np.ndarray]:
     """
     Stand-alone Native Python Spherical Structure-from-Motion (Spherical SfM) Pipeline.
     Implements true Spherical SfM on S^2 manifold:
-    1. Spherical SIFT feature detection & projection to S^2 unit bearing vectors.
+    1. Spherical SIFT/ORB/AKAZE feature detection & projection to S^2 unit bearing vectors.
     2. Pairwise sequential and loop-closure feature matching with Lowe's ratio test (0.75).
     3. Multi-view feature track generation via Disjoint Set Union.
     4. Spherical Essential Matrix estimation with Kronecker (b2 (x) b1) & positive cheirality.
     5. Optimal closed-form multi-view ray intersection for 3D tie points.
-    6. Incremental view registration and spherical Bundle Adjustment.
+    6. Incremental view registration and Ceres/SciPy spherical Bundle Adjustment.
     7. Standard exports: reconstruction.json, metadata.json, transforms.json, sparse/0/, points3D.ply.
     """
     def log(msg: str):
@@ -498,11 +513,13 @@ def run_opensfm_spherical_sfm(
 
     log("=" * 72)
     log("   Mapillary OpenSfM - Native Spherical Structure-from-Motion Engine")
-    log("   * Camera Model: Spherical S² Manifold (Equirectangular 360°)")
-    log(f"   * Extractor:    {feature_type.upper()}")
-    log(f"   * Matcher:      {matcher_type.upper()} (Ratio Test 0.75 + Reciprocal)")
-    log(f"   * Input Views:  {len(image_paths)} frames (stride={stride})")
-    log(f"   * Workspace:    {output_dir}")
+    log("   * Camera Model:    Spherical S² Manifold (Equirectangular 360°)")
+    log(f"   * Extractor:       {feature_type.upper()} (Budget: {feature_min_frames}/frame)")
+    log(f"   * Matcher:         {matcher_type.upper()} (Neighbor Window: {matching_order_neighbors})")
+    log(f"   * Bundle Interval: Every {bundle_interval} view(s)")
+    log(f"   * Optimize Cam:    {'Enabled' if optimize_camera_parameters else 'Fixed Ideal S²'}")
+    log(f"   * Input Views:     {len(image_paths)} frames (stride={stride})")
+    log(f"   * Workspace:       {output_dir}")
     log("=" * 72)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -521,11 +538,18 @@ def run_opensfm_spherical_sfm(
     # -------------------------------------------------------------------------
     # Stage 1: Spherical Feature Extraction
     # -------------------------------------------------------------------------
-    log("\n[OpenSfM Stage 1/5] Extracting Spherical Keypoints on S² Manifold...")
+    log(f"\n[OpenSfM Stage 1/5] Extracting Spherical Keypoints on S² Manifold (Target: {feature_min_frames})...")
     if feature_type.upper() == "ORB":
-        detector = cv2.ORB_create(nfeatures=2500)
+        detector = cv2.ORB_create(nfeatures=feature_min_frames)
+    elif feature_type.upper() == "AKAZE":
+        detector = cv2.AKAZE_create()
+    elif feature_type.upper() == "HAHOG":
+        try:
+            detector = cv2.SIFT_create(nfeatures=feature_min_frames, contrastThreshold=0.02, edgeThreshold=12)
+        except Exception:
+            detector = cv2.SIFT_create(nfeatures=feature_min_frames)
     else:
-        detector = cv2.SIFT_create(nfeatures=2500, contrastThreshold=0.03, edgeThreshold=10)
+        detector = cv2.SIFT_create(nfeatures=feature_min_frames, contrastThreshold=0.02, edgeThreshold=10)
 
     features = []
     t_start_feat = time.time()
@@ -570,18 +594,19 @@ def run_opensfm_spherical_sfm(
     # -------------------------------------------------------------------------
     # Stage 2: Pairwise Keypoint Matching with Epipolar Verification
     # -------------------------------------------------------------------------
-    log("\n[OpenSfM Stage 2/5] Pairwise Feature Matching & S² Epipolar Verification...")
-    if feature_type.upper() == "ORB":
-        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    log(f"\n[OpenSfM Stage 2/5] Pairwise Feature Matching & S² Epipolar Verification (Window: {matching_order_neighbors})...")
+    if feature_type.upper() in ["ORB", "AKAZE"] or matcher_type.upper() in ["BRUTEFORCE", "BF", "EXHAUSTIVE"]:
+        norm_type = cv2.NORM_HAMMING if feature_type.upper() in ["ORB", "AKAZE"] else cv2.NORM_L2
+        matcher = cv2.BFMatcher(norm_type, crossCheck=False)
     else:
         index_params = dict(algorithm=1, trees=5)
         search_params = dict(checks=50)
         matcher = cv2.FlannBasedMatcher(index_params, search_params)
 
-    # Construct pair list: sequential window (1..4 frames) + loop closure candidates
+    # Construct pair list: sequential window (1..matching_order_neighbors frames) + loop closure candidates
     pair_indices = set()
     N_views = len(features)
-    window = min(4, N_views - 1)
+    window = min(max(1, matching_order_neighbors), N_views - 1)
 
     for i in range(N_views):
         for delta in range(1, window + 1):
@@ -877,6 +902,50 @@ def run_opensfm_spherical_sfm(
         if len(registered) % max(1, N_views // 4) == 0 or len(registered) == N_views:
             log(f"      * Registered {len(registered)}/{N_views} cameras ({len(triangulated_points)} 3D points)")
 
+        # Intermediate incremental BA triggered every bundle_interval frames
+        if bundle_interval > 0 and len(registered) % bundle_interval == 0 and len(registered) >= 4 and len(registered) < N_views:
+            try:
+                active_cams = [v for v in sorted(list(registered)) if v != i0]
+                if active_cams and len(triangulated_points) > 15:
+                    p_inc = []
+                    for v_act in active_cams:
+                        R_act, C_act = cameras_pose[v_act]
+                        rv_act, _ = cv2.Rodrigues(R_act)
+                        p_inc.extend(rv_act.flatten().tolist())
+                        p_inc.extend(C_act.flatten().tolist())
+                    p_inc = np.array(p_inc, dtype=np.float64)
+
+                    inc_pts = list(triangulated_points.values())
+                    if len(inc_pts) > 400:
+                        inc_pts = inc_pts[::len(inc_pts)//400]
+
+                    def inc_loss(p):
+                        r_list = []
+                        c_map = {i0: cameras_pose[i0]}
+                        for idx_a, v_a in enumerate(active_cams):
+                            rv = p[idx_a*6 : idx_a*6+3]
+                            cv = p[idx_a*6+3 : idx_a*6+6]
+                            R_m, _ = cv2.Rodrigues(rv)
+                            c_map[v_a] = (R_m, cv)
+                        for it in inc_pts:
+                            for (v_o, kp_o) in it["views"]:
+                                if v_o in c_map:
+                                    R_c2w, C_w = c_map[v_o]
+                                    ray = R_c2w.T @ (it["xyz"] - C_w)
+                                    nr = np.linalg.norm(ray)
+                                    if nr > 1e-4:
+                                        r_list.extend((ray / nr - features[v_o]["bearings"][kp_o]).tolist())
+                        return np.array(r_list, dtype=np.float64)
+
+                    res_inc = scipy.optimize.least_squares(inc_loss, p_inc, loss='cauchy', f_scale=0.03, max_nfev=15)
+                    for idx_a, v_a in enumerate(active_cams):
+                        rv = res_inc.x[idx_a*6 : idx_a*6+3]
+                        cv = res_inc.x[idx_a*6+3 : idx_a*6+6]
+                        R_m, _ = cv2.Rodrigues(rv)
+                        cameras_pose[v_a] = (R_m, cv)
+            except Exception:
+                pass
+
     # -------------------------------------------------------------------------
     # Stage 5: Spherical Bundle Adjustment
     # -------------------------------------------------------------------------
@@ -892,6 +961,10 @@ def run_opensfm_spherical_sfm(
         rvec, _ = cv2.Rodrigues(R_c2w)
         p_cam_init.extend(rvec.flatten().tolist())
         p_cam_init.extend(C_w.flatten().tolist())
+
+    if optimize_camera_parameters:
+        p_cam_init.append(1.0)  # Camera scale_y calibration parameter
+
     p_cam_init = np.array(p_cam_init, dtype=np.float64)
 
     # Subsample confident 3D points for fast, robust BA
@@ -910,6 +983,8 @@ def run_opensfm_spherical_sfm(
             R_mat, _ = cv2.Rodrigues(rv)
             cams[v] = (R_mat, cv)
 
+        scale_y = p[-1] if optimize_camera_parameters else 1.0
+
         for p_item in ba_points:
             X = p_item["xyz"]
             for (v, kp) in p_item["views"]:
@@ -917,6 +992,8 @@ def run_opensfm_spherical_sfm(
                     R_c2w, C_w = cams[v]
                     R_w2c = R_c2w.T
                     ray_cam = R_w2c @ (X - C_w)
+                    if optimize_camera_parameters:
+                        ray_cam[1] *= scale_y
                     norm_r = np.linalg.norm(ray_cam)
                     if norm_r > 1e-4:
                         pred_b = ray_cam / norm_r
@@ -932,7 +1009,7 @@ def run_opensfm_spherical_sfm(
                 p_cam_init,
                 loss='cauchy',
                 f_scale=0.03,
-                max_nfev=30
+                max_nfev=35
             )
             # Update optimized camera poses
             p_opt = res_ba.x
@@ -941,6 +1018,9 @@ def run_opensfm_spherical_sfm(
                 cv = p_opt[idx*6+3 : idx*6+6]
                 R_mat, _ = cv2.Rodrigues(rv)
                 cameras_pose[v] = (R_mat, cv)
+            if optimize_camera_parameters:
+                opt_scale = float(p_opt[-1])
+                log(f"      * Refined spherical camera calibration: scale_y={opt_scale:.5f}")
             log(f"      * Spherical BA converged with final cost {res_ba.cost:.4f} in {time.time()-t_start_ba:.2f}s")
         except Exception as e:
             log(f"      * Spherical BA skipped: {e}")

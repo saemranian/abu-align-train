@@ -1,89 +1,95 @@
-# Walkthrough: Abu Align & Train v0.0.2.8
+# Walkthrough: Abu Align & Train v0.0.3.0
 
 ## Overview
 
-**Abu Align & Train v0.0.2.8** introduces an interactive **3D Virtual Camera Rig Visualizer & Orbit Viewport** directly inside the **360° Multi-Camera Rig Projector & Splitter** dialog (`media_1790086520218.png`).
+**Abu Align & Train v0.0.3.0** successfully implements **Phase 1** of our repository alignment plan: **Mapillary OpenSfM Engine & UI Alignment** (aligned with `https://github.com/mapillary/OpenSfM`).
 
-Users can now examine, rotate, zoom, and inspect their synthesized virtual camera rigs in full 3D space in real-time as they tune rig parameters (camera count, FOV, overlap %, aspect ratio, and pitch tiers).
+This release provides comprehensive exposure of Mapillary OpenSfM's official configuration parameters directly inside the Abu Align GUI and CLI, backed by rich mouse-hover tooltips (`ToolTip`), robust dual-execution fallback (OpenSfM binary/Docker CLI $\leftrightarrow$ Native Python Spherical Structure-from-Motion on $S^2$ manifold), and seamless multi-format exports for 3D Gaussian Splatting (`3dgs_dataset/`, `reconstruction.json`, `metadata.json`, `transforms.json`, `sparse/0/`, `points3D.ply`).
 
 ---
 
-## Key Features & Changes
+## Key Changes & Implementations
 
-### 1. Interactive 3D Camera Rig Orbit Viewport (`abu_align_gui.py`)
-- **Three Unified View Modes**:
-  1. `🌐 3D Orbit Rig` (default): True 3D perspective viewport with orbit rotation, pan, zoom, wireframe reference sphere, optical axis rays, and depth-sorted frustums.
-  2. `🧭 Polar Radar`: Top-down circular compass showing angular distribution and FOV wedges on the equatorial plane.
-  3. `🗺️ 2D Footprint`: Equirectangular $(360^\circ \times 180^\circ)$ panoramic unroll displaying rectilinear projection rectangles.
-- **Controls & Interaction**:
-  - **Left-Click Drag**: Orbit rotates the camera around the rig ($\text{Yaw} \in [0^\circ, 360^\circ]$, $\text{Elevation/Pitch} \in [-88^\circ, +88^\circ]$).
-  - **Shift + Left-Click Drag / Right-Click Drag**: Screen-space camera pan ($\Delta X, \Delta Y$).
-  - **Mouse Wheel / Scroll**: Smooth continuous zoom ($\text{distance multiplier} \in [1.2, 9.0]$).
-  - **Double-Click**: Instantly resets 3D camera to default azimuth ($35^\circ$), elevation ($22^\circ$), and zoom ($3.4\times$).
-  - **`🔄 Reset 3D` Button**: One-click reset in the top header bar.
-  - **`⚡ Auto-Spin` Button**: Automated turntable spin animation ($30\text{ FPS}$) with start/stop toggle and clean thread cancellation on dialog exit.
-  - **Active Cursor**: Switches dynamically to `"fleur"` when hovering over the canvas in 3D mode.
+### 1. Mapillary OpenSfM Engine Alignment (`opensfm_engine.py`)
+- **Official OpenSfM Parameters Exposed**:
+  - `feature_type`: Support for `SIFT` (recommended sub-pixel accuracy), `HAHOG` (Hessian-Affine + Histogram of Gradients), `ORB` (rapid binary features), and `AKAZE` (anisotropic diffusion).
+  - `feature_min_frames`: Feature budget per equirectangular frame ($1,500$ to $5,000$, default $3,000$).
+  - `matching_order_neighbors`: Sequential matching window ($3$ to $12$ frames, default $5$).
+  - `matcher_type`: `WORDS` (Bag-of-Words vocabulary tree), `FLANN` (Fast Approximate Nearest Neighbors with reciprocal verification), and `EXHAUSTIVE` (Brute-Force pairwise matching).
+  - `bundle_interval`: Bundle adjustment frequency (incremental BA runs every $1, 2, 5, 10$ frames).
+  - `optimize_camera_parameters`: Refines spherical camera parameters (vertical aspect scale $s_y$) during bundle adjustment to compensate for non-ideal equirectangular stitches.
+- **Improved Manifold Triangulation**:
+  - Refined parallax threshold ($\alpha_{\min} = 0.5^\circ$) and chordal error threshold ($\varepsilon_{\max} = 0.08$) in `triangulate_multiview_rays`.
+  - Ensures confident multi-view 3D tie points are preserved even across small baselines.
+- **Dual-Execution Fallback**:
+  - Automatically searches for external OpenSfM binary CLI in system PATH / Conda environments.
+  - If external binary is not detected, automatically engages Native Python Spherical SfM on the $S^2$ manifold using Kronecker product epipolar estimation $(\mathbf{b}_2 \otimes \mathbf{b}_1) \text{vec}(E) = 0$, positive cheirality checking, closed-form multi-view ray intersection, and Ceres/SciPy Levenberg-Marquardt spherical bundle adjustment.
 
-### 2. 3D Perspective Rendering & Frustum Geometry
-- **$S^2$ Unit Sphere Reference Wireframe**:
-  - Equator circle in vivid indigo (`#4f46e5`, width=1.5).
-  - Latitude parallels at $\pm 30^\circ$ and $\pm 60^\circ$ (dashed `#252538`).
-  - Meridian circles at $0^\circ/180^\circ$ and $90^\circ/270^\circ$ (dashed `#232338`).
-  - Polar axis with directional arrow from Nadir ($-Y$) to Zenith ($+Y$, `#a855f7`).
-  - Cardinal ticks and labels at the Equator: North ($0^\circ$), East ($+90^\circ$), South ($180^\circ$), West ($-90^\circ$) in sky blue (`#38bdf8`).
-- **Depth-Sorted Frustums (Painter's Algorithm)**:
-  - Each camera's 3D forward vector $\mathbf{fwd}$, right vector $\mathbf{right}$, and up vector $\mathbf{up}$ are derived from $(\text{yaw}, \text{pitch}, \text{roll})$.
-  - Frustum plane calculated at distance $D=1.12$ with aspect-ratio-corrected dimensions:
-    $$w = D \cdot \tan(\alpha_h), \quad h = \frac{w}{\text{aspect}}$$
-  - Computes 4 sensor plane corners ($TL, TR, BR, BL$), pyramid edges from origin $(0,0,0)$, and center optical axis ray with arrow tip.
-  - **Translucent Sensor Face**: Shaded with Tkinter `stipple="gray25"` and color-coded by rig overlap:
-    - **Optimal ($40\% \le \text{overlap} \le 65\%$)**: Emerald green (`#10b981`).
-    - **High ($>65\%$)**: Sky blue (`#38bdf8`).
-    - **Medium ($20\% \le \text{overlap} < 40\%$)**: Amber (`#f59e0b`).
-    - **Low ($<20\%$)**: Crimson red (`#ef4444`).
-  - Sorted back-to-front by camera view depth ($Z_{\text{depth}}$) prior to drawing, ensuring foreground frustums occlude background elements without Z-fighting.
-  - Billboard labels (`C0`, `C1`, etc.) floating just outside sensor planes.
-- **Corner Orientation Triad (Orthographic XYZ Gizmo)**:
-  - Mini 3D axes widget in the bottom-right corner showing $+X$ (Red), $+Y$ (Green), $+Z$ (Blue) dynamically rotating with the orbit camera.
-- **Onscreen HUD Diagnostics**:
-  - Live readout of camera count $N$, FOV, overlap %, orbit azimuth, elevation, zoom level, and mouse navigation hints.
+---
 
-### 3. Version Control & Launcher Synchronization
-- Strict base-10 odometer increment from `v0.0.2.7` $\to$ `v0.0.2.8`.
-- C# launchers recompiled with Microsoft .NET `csc.exe`:
-  - `Abu_Align/Abu_Align_and_Train.exe`
-  - `Abu_Align/Abu_Align_and_Train_v0.0.2.8.exe`
+### 2. Command-Line Interface (`align_cli.py`)
+- **New CLI Arguments Added**:
+  - `--opensfm_min_features`: Feature budget per frame (default: 3000).
+  - `--opensfm_neighbors`: Sequential matching window in frames (default: 5).
+  - `--opensfm_bundle_interval`: Bundle adjustment interval (default: 1).
+  - `--opensfm_optimize_camera`: Optimizes spherical camera calibration during BA.
+- **Diagnostic Telemetry & Reconstruction Report**:
+  - All OpenSfM parameters are prominently displayed in the CLI startup banner and logged in `reconstruction_report.txt`.
+
+---
+
+### 3. GUI Layout & Informative Mouse-Hover Tooltips (`abu_align_gui.py`)
+- **Modern 3-Column OpenSfM Subpanel**:
+  - **Column 1 (Camera & Projection Model)**:
+    - Radiobuttons: `Equirectangular 360° (Spherical S²)`, `Perspective Pinhole (Rectilinear)`, `Fisheye (Ultra-Wide 180°+)`.
+    - Checkbox: `Optimize Spherical Camera`.
+  - **Column 2 (Features & Matcher Strategy)**:
+    - Feature Extractor: `sift`, `hahog`, `orb`, `akaze`.
+    - Feature Budget per View: `1500`, `2500`, `3000`, `4000`, `5000`.
+    - Matcher Strategy: `words`, `flann`, `exhaustive`.
+    - Matching Window (Neighbors): `3`, `4`, `5`, `8`, `12`.
+    - BA Interval: `1`, `2`, `5`, `10` view(s).
+  - **Column 3 (360° Multi-Camera Rig Projector & 3DGS Bridge)**:
+    - `⚡ Auto-Project Multi-Camera Rig` checkbox.
+    - Rig type (`ring`, `cubemap`, `dome`) and resolution selector.
+    - `🌐 Open Rig Projector Dialog...` button for the interactive 3D virtual rig visualizer.
+- **Comprehensive Tooltip Guidance on Mouse Hover**:
+  - Every single control features a detailed `ToolTip` explaining what the parameter does, its role in the SfM pipeline, and best-practice recommended values.
+
+---
+
+### 4. Version Management & Parity Protocol (`v0.0.3.0`)
+- Cascaded base-10 odometer increment from `v0.0.2.9` $\to$ `v0.0.3.0` via `version_manager.py`.
+- Recompiled C# launcher executables using Microsoft .NET `csc.exe`:
   - `Abu_Align_and_Train.exe`
-  - `Abu_Align_and_Train_v0.0.2.8.exe`
-- 100% parity verified between workspace root and `Abu_Align/`.
-- Full version snapshot preserved in `Abu_Align/versions/v0.0.2.8/`.
+  - `Abu_Align_and_Train_v0.0.3.0.exe`
+  - `Abu_Align/Abu_Align_and_Train.exe`
+  - `Abu_Align/Abu_Align_and_Train_v0.0.3.0.exe`
+- 100% file parity verified between workspace root and `Abu_Align/`.
+- Full version snapshot stored at `Abu_Align/versions/v0.0.3.0/`.
 
 ---
 
 ## Verification & Test Results
 
-### 1. Interactive 3D Visualizer Test Suite
-Executed comprehensive automated headless GUI tests:
-- **Button Existence**: Verified `🌐 3D Orbit Rig`, `🧭 Polar Radar`, `🗺️ 2D Footprint`, `🔄 Reset 3D`, and `⚡ Auto-Spin` buttons are properly configured.
-- **Mouse Drag Orbit**: Simulated left-drag from $(200, 200) \to (240, 180)$, confirming continuous angle updates and redraws without error.
-- **Mouse Wheel Zoom**: Simulated zoom in ($\Delta = +120$) and zoom out ($\Delta = -120$), verifying smooth distance scaling.
-- **Mouse Pan**: Simulated Shift-drag and Right-drag, verifying screen-space offset translation.
-- **Reset 3D**: Invoked reset button, confirming return to $(35^\circ, 22^\circ, 3.4\times)$.
-- **Auto-Spin Turntable**: Toggled auto-spin on and off, verifying state changes and clean timer loop cancellation.
+### 1. OpenSfM Engine Unit Test
+- Ran `run_opensfm_spherical_sfm` on equirectangular test sequence with custom parameters (`budget=3000, window=5, bundle_interval=2, optimize_camera=True`).
+- **Telemetry Output**:
+  - `* Feature Extractor: SIFT (Budget: 3000/frame)`
+  - `* Matcher: FLANN (Neighbor Window: 5)`
+  - `* Bundle Interval: Every 2 view(s)`
+  - `* Optimize Cam: Enabled`
+  - `* Spherical BA converged with final cost 0.0018 in 0.45s`
+  - `* Refined spherical camera calibration: scale_y=1.00436`
+  - `* Formats Exported: reconstruction.json, metadata.json, transforms.json, COLMAP sparse/0/, points3D.ply`
 - **Result: PASSED (100%)**.
 
-### 2. View Mode & Rig Architecture Coverage
-- Tested switching between all 3 canvas view modes (`3d`, `polar`, `equirect`) on live canvas.
-- Tested all 4 virtual rig architectures in 3D orbit mode:
-  - `ring`: Horizontal equatorial ring with $N$ cameras.
-  - `cubemap`: 6-face cubemap ($90^\circ$ FOV, Zenith + Nadir + 4 horizontal faces).
-  - `dome`: Multi-tier spherical dome with zenith/nadir and customizable pitch tiers.
-  - `fibonacci`: Golden spiral spherical distribution on $S^2$.
-- All 4 architectures rendered completely with zero gimbal-lock errors, zero mathematical singularity issues, and full depth-sorted canvas elements.
+### 2. End-to-End CLI Pipeline Test
+- Executed `align_cli.py -i scratch/test_frames -o scratch/test_cli_opensfm_phase1 -e opensfm --projection equirectangular --opensfm_feature sift --opensfm_matcher flann --opensfm_min_features 3000 --opensfm_neighbors 5 --opensfm_bundle_interval 2 --opensfm_optimize_camera`.
+- **Result**: Registered 10/10 views in 2.90s, produced all universal dataset packages in `3dgs_dataset/`, `COLMAP_Lichtfield/`, and `Postshot_RealityCapture/`, and logged the diagnostic summary to `reconstruction_report.txt`.
 - **Result: PASSED (100%)**.
 
-### 3. Parity & Build Verification
-- Verified version numbers across `VERSION.txt`, `abu_align_gui.py`, `align_cli.py`, `train_engine.py`, `Abu_Align.bat`, and `Abu_Align_and_Train.bat`.
-- Verified binary presence and execution of `Abu_Align_and_Train_v0.0.2.8.exe`.
-- Created clean version snapshot in `Abu_Align/versions/v0.0.2.8/`.
+### 3. File Parity & Snapshot Verification
+- Verified 100% byte-for-byte parity across `opensfm_engine.py`, `align_cli.py`, `abu_align_gui.py`, `train_engine.py`, `360dvo_engine.py`, `dvo360_engine.py`, `version_manager.py`, `VERSION.txt`, `Abu_Align_and_Train.bat`, `Abu_Align.bat`, and `launcher.cs`.
+- Snapshot confirmed in `Abu_Align/versions/v0.0.3.0/`.
 - **Result: PASSED (100%)**.

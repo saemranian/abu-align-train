@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.2.9
+Abu Align & Train Version 0.0.3.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -200,7 +200,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.2.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.0 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -281,6 +281,10 @@ class AbuAlignApp:
         self.opensfm_feat_var = tk.StringVar(value="sift")
         self.opensfm_transcode_var = tk.BooleanVar(value=False)
         self.opensfm_matcher_var = tk.StringVar(value="words")
+        self.opensfm_budget_var = tk.StringVar(value="3000")
+        self.opensfm_neighbors_var = tk.StringVar(value="5")
+        self.opensfm_bundle_var = tk.StringVar(value="1")
+        self.opensfm_opt_cam_var = tk.BooleanVar(value=False)
         self.rig_split_mode_var = tk.StringVar(value="ring")
         self.rig_num_cams_var = tk.StringVar(value="8")
         self.rig_fov_var = tk.StringVar(value="90")
@@ -397,7 +401,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.2.9",
+            text="v0.0.3.0",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -1098,7 +1102,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.2.9 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.3.0 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1272,23 +1276,55 @@ class AbuAlignApp:
         ToolTip(rb_op_p2, "Perspective Pinhole:\nStandard rectilinear pinhole model for DSLR, drone, and smartphone cameras.")
         ToolTip(rb_op_p3, "Fisheye Model:\nRadial equidistant lens projection handling field-of-view up to 220°.")
 
+        chk_opt_cam = tk.Checkbutton(
+            osfm_col1,
+            text="Optimize Spherical Camera",
+            variable=self.opensfm_opt_cam_var,
+            font=("Segoe UI", 8),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        chk_opt_cam.pack(anchor="w", pady=(3, 0))
+        ToolTip(chk_opt_cam, "Optimize Camera Calibration (optimize_camera_parameters):\nRefines spherical camera parameters (aspect ratio, sensor alignment, and field of view) in Ceres bundle adjustment.\n• Unchecked (Recommended): Strict S² spherical manifold.\n• Checked: Calibrates and refines non-ideal equirectangular stitches.")
+
         # Col B: Features & Matcher Strategy
         osfm_col2 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
         osfm_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(osfm_col2, text="Features & Matcher Strategy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        f_row = tk.Frame(osfm_col2, bg=self.panel_bg)
-        f_row.pack(anchor="w", pady=(2, 2))
-        tk.Label(f_row, text="Feature:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        osfm_feat_cb = ttk.Combobox(f_row, textvariable=self.opensfm_feat_var, values=["sift", "hahog", "orb"], state="readonly", width=8)
-        osfm_feat_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(osfm_feat_cb, "Feature Extractor:\n• SIFT: High-precision scale invariant features.\n• HAHOG: Fast Hessian-Affine + Histogram of Gradients (Mapillary street standard).\n• ORB: Fast binary feature extractor.")
 
-        m_row = tk.Frame(osfm_col2, bg=self.panel_bg)
-        m_row.pack(anchor="w", pady=(2, 2))
-        tk.Label(m_row, text="Matcher:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        osfm_match_cb = ttk.Combobox(m_row, textvariable=self.opensfm_matcher_var, values=["words", "flann", "exhaustive"], state="readonly", width=10)
-        osfm_match_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(osfm_match_cb, "Matcher Strategy:\n• words: Visual Bag-of-Words vocabulary tree indexing.\n• flann: Fast approximate nearest neighbors.\n• exhaustive: Full pairwise matching.")
+        row_b1 = tk.Frame(osfm_col2, bg=self.panel_bg)
+        row_b1.pack(anchor="w", pady=(1, 1))
+        tk.Label(row_b1, text="Feature:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_feat_cb = ttk.Combobox(row_b1, textvariable=self.opensfm_feat_var, values=["sift", "hahog", "orb", "akaze"], state="readonly", width=7)
+        osfm_feat_cb.pack(side=tk.LEFT, padx=(2, 6))
+        ToolTip(osfm_feat_cb, "Feature Extractor (feature_type):\n• SIFT (Recommended): High-precision scale invariant features with sub-pixel localization.\n• HAHOG: Hessian-Affine + Histogram of Gradients (Mapillary street standard).\n• ORB: Fast binary feature extractor for rapid drafts.\n• AKAZE: Accelerated anisotropic diffusion features.")
+
+        tk.Label(row_b1, text="Budget:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_budget_cb = ttk.Combobox(row_b1, textvariable=self.opensfm_budget_var, values=["1500", "2500", "3000", "4000", "5000"], state="readonly", width=5)
+        osfm_budget_cb.pack(side=tk.LEFT, padx=2)
+        ToolTip(osfm_budget_cb, "Feature Budget per Frame (feature_min_frames):\nTarget number of features detected and tracked per view.\n• 1500: Fast tracking for clean high-contrast video.\n• 3000 (Default): Standard balanced photogrammetric budget.\n• 4000-5000: Ultra-dense tie points for complex urban/street scenes.")
+
+        row_b2 = tk.Frame(osfm_col2, bg=self.panel_bg)
+        row_b2.pack(anchor="w", pady=(1, 1))
+        tk.Label(row_b2, text="Matcher:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_match_cb = ttk.Combobox(row_b2, textvariable=self.opensfm_matcher_var, values=["words", "flann", "exhaustive"], state="readonly", width=8)
+        osfm_match_cb.pack(side=tk.LEFT, padx=(2, 6))
+        ToolTip(osfm_match_cb, "Matcher Strategy (matcher_type):\n• words (Default): Visual Bag-of-Words vocabulary tree indexing.\n• flann: Fast approximate nearest neighbors with reciprocal ratio test.\n• exhaustive: Full brute-force pairwise matching across candidate windows.")
+
+        tk.Label(row_b2, text="Window:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_neighbors_cb = ttk.Combobox(row_b2, textvariable=self.opensfm_neighbors_var, values=["3", "4", "5", "8", "12"], state="readonly", width=3)
+        osfm_neighbors_cb.pack(side=tk.LEFT, padx=2)
+        ToolTip(osfm_neighbors_cb, "Sequential Matching Window (matching_order_neighbors):\nNumber of adjacent consecutive frames matched in temporal order.\n• 3-4: Fast linear tracks for high frame-rate video.\n• 5 (Default): Recommended window for smooth camera movement.\n• 8-12: Robust loop-closure and track recovery for rapid turns.")
+
+        row_b3 = tk.Frame(osfm_col2, bg=self.panel_bg)
+        row_b3.pack(anchor="w", pady=(1, 1))
+        tk.Label(row_b3, text="BA Interval:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        osfm_bundle_cb = ttk.Combobox(row_b3, textvariable=self.opensfm_bundle_var, values=["1", "2", "5", "10"], state="readonly", width=3)
+        osfm_bundle_cb.pack(side=tk.LEFT, padx=(2, 4))
+        tk.Label(row_b3, text="view(s)", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        ToolTip(osfm_bundle_cb, "Bundle Adjustment Frequency (bundle_interval):\nHow often Ceres bundle adjustment is triggered during incremental reconstruction.\n• 1 (Default): Full BA after every registered frame (highest accuracy).\n• 2-5: Periodic BA to accelerate alignment on large image sequences.")
 
         # Col C: 360° Multi-Camera Rig Projector & 3DGS Bridge
         osfm_col3 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
@@ -3856,7 +3892,12 @@ class AbuAlignApp:
                 "--projection", self.opensfm_proj_var.get(),
                 "--opensfm_feature", self.opensfm_feat_var.get(),
                 "--opensfm_matcher", self.opensfm_matcher_var.get(),
+                "--opensfm_min_features", str(self.opensfm_budget_var.get()),
+                "--opensfm_neighbors", str(self.opensfm_neighbors_var.get()),
+                "--opensfm_bundle_interval", str(self.opensfm_bundle_var.get()),
             ])
+            if self.opensfm_opt_cam_var.get():
+                cmd.append("--opensfm_optimize_camera")
             if self.opensfm_transcode_var.get():
                 cmd.extend([
                     "--split_panorama",
@@ -4065,7 +4106,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.2.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4376,7 +4417,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.2.9 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4650,7 +4691,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.2.9\n"
+            "Abu Align & Train - Version 0.0.3.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
