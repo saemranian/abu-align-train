@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.0
+Abu Align & Train Version 0.0.3.1
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -200,7 +200,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.0 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.1 (Neural Photogrammetry & 3DGS Training Suite)")
         self.root.geometry("1100x870")
         self.root.minsize(920, 700)
 
@@ -292,6 +292,9 @@ class AbuAlignApp:
 
         # 360DVO Deep Visual Odometry Specific Options
         self.dvo_patches_var = tk.StringVar(value="96")
+        self.dvo_polar_mask_var = tk.StringVar(value="8%")
+        self.dvo_ba_window_var = tk.StringVar(value="8")
+        self.dvo_scale_var = tk.StringVar(value="3.2")
         self.dvo_viz_var = tk.BooleanVar(value=True)
         self.dvo_weights_var = tk.StringVar(value="")
 
@@ -401,7 +404,7 @@ class AbuAlignApp:
 
         version_badge = tk.Label(
             header,
-            text="v0.0.3.0",
+            text="v0.0.3.1",
             font=("Segoe UI", 9, "bold"),
             fg="#ffffff",
             bg=self.accent_purple,
@@ -1102,7 +1105,7 @@ class AbuAlignApp:
             wrap=tk.WORD
         )
         self.console.pack(fill=tk.BOTH, expand=True)
-        self._log("Abu Align & Train Version 0.0.3.0 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
+        self._log("Abu Align & Train Version 0.0.3.1 Ready.\nPenta Alignment Engines: VGGT-Omega, ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry).\nQuad 3DGS Training Engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS).\nOne-Click Align & Train: Fully Automated Handoff Active.\nSelect a photoscan directory and click 'ONE-CLICK ALIGN & TRAIN' or 'ALIGNMENT ONLY'.\n\n")
 
     def _build_align_panels(self):
         """Creates the 3 engine-specific alignment panels inside self.align_dynamic_container."""
@@ -1384,28 +1387,55 @@ class AbuAlignApp:
         rb_dvo_p2.pack(anchor="w")
         rb_dvo_p3 = tk.Radiobutton(dvo_col1, text="Dense High-Precision (128 Patches)", variable=self.dvo_patches_var, value="128", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_dvo_p3.pack(anchor="w")
+        rb_dvo_p4 = tk.Radiobutton(dvo_col1, text="Ultra Dense (256 Patches)", variable=self.dvo_patches_var, value="256", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_dvo_p4.pack(anchor="w")
         ToolTip(rb_dvo_p1, "64 Patches: Fastest visual odometry loop (~30 FPS). Ideal for real-time tracking.")
         ToolTip(rb_dvo_p2, "96 Patches [Recommended]: Balanced trajectory accuracy and factor-graph optimization.")
         ToolTip(rb_dvo_p3, "128 Patches: Maximum tracking density for complex scenes with rapid rotations.")
+        ToolTip(rb_dvo_p4, "256 Patches: Ultra-dense spherical patch graph for textureless environments or long loop trajectories.")
 
-        # Col B: Weights & Inference Settings
+        # Col B: Factor Graph & ODBA Optimization
         dvo_col2 = tk.Frame(self.panel_align_360dvo, bg=self.panel_bg)
         dvo_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(dvo_col2, text="Weights & Visualization:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        dvo_w_lbl = tk.Label(dvo_col2, text="Weights: checkpoints/360dvo.pth", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg)
-        dvo_w_lbl.pack(anchor="w", pady=(2, 4))
-        ToolTip(dvo_w_lbl, "Pretrained weights trained on Stanford2D3D and Matterport3D 360° datasets.")
+        tk.Label(dvo_col2, text="Factor Graph & ODBA:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
 
-        dvo_viz_chk = tk.Checkbutton(dvo_col2, text="Enable 3D Trajectory Visualizer", variable=self.dvo_viz_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        dvo_viz_chk.pack(anchor="w", pady=(2, 2))
-        ToolTip(dvo_viz_chk, "Launch real-time 3D camera trajectory visualizer during odometry estimation.")
+        dvo_mask_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
+        dvo_mask_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_mask = tk.Label(dvo_mask_frame, text="Polar Mask:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_mask.pack(side=tk.LEFT)
+        cb_mask = ttk.Combobox(dvo_mask_frame, textvariable=self.dvo_polar_mask_var, values=["0%", "5%", "8%", "12%", "15%"], state="readonly", width=8, font=("Segoe UI", 8))
+        cb_mask.pack(side=tk.LEFT)
+        ToolTip(lbl_mask, "Excludes top zenith and bottom nadir poles from patch sampling to eliminate tripod shadows and spherical distortion artifacts.")
+        ToolTip(cb_mask, "Excludes top zenith and bottom nadir poles from patch sampling to eliminate tripod shadows and spherical distortion artifacts (8% recommended).")
 
-        # Col C: TUM-to-COLMAP & 3DGS Bridge
+        dvo_ba_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
+        dvo_ba_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_ba = tk.Label(dvo_ba_frame, text="ODBA Window:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_ba.pack(side=tk.LEFT)
+        cb_ba = ttk.Combobox(dvo_ba_frame, textvariable=self.dvo_ba_window_var, values=["4", "8", "12", "16"], state="readonly", width=8, font=("Segoe UI", 8))
+        cb_ba.pack(side=tk.LEFT)
+        ToolTip(lbl_ba, "Omnidirectional Direct Bundle Adjustment (ODBA) keyframe window. Jointly refines recent camera poses on S² manifold.")
+        ToolTip(cb_ba, "Omnidirectional Direct Bundle Adjustment (ODBA) keyframe window. Jointly refines recent camera poses on S² manifold.")
+
+        dvo_scale_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
+        dvo_scale_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_scale = tk.Label(dvo_scale_frame, text="Metric Scale (m):", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_scale.pack(side=tk.LEFT)
+        cb_scale = ttk.Combobox(dvo_scale_frame, textvariable=self.dvo_scale_var, values=["1.0", "2.0", "3.2", "5.0"], state="readonly", width=8, font=("Segoe UI", 8))
+        cb_scale.pack(side=tk.LEFT)
+        ToolTip(lbl_scale, "Metric translation multiplier in meters. Calibrates monocular visual odometry bearing disparities to real-world scale.")
+        ToolTip(cb_scale, "Metric translation multiplier in meters. Calibrates monocular visual odometry bearing disparities to real-world scale.")
+
+        dvo_viz_chk = tk.Checkbutton(dvo_col2, text="Real-Time 3D Visualizer", variable=self.dvo_viz_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        dvo_viz_chk.pack(anchor="w", pady=(2, 0))
+        ToolTip(dvo_viz_chk, "Launch real-time 3D camera trajectory visualizer (Viser / browser) during odometry estimation.")
+
+        # Col C: Universal 3DGS Bridge
         dvo_col3 = tk.Frame(self.panel_align_360dvo, bg=self.panel_bg)
         dvo_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(dvo_col3, text="TUM-to-COLMAP 3DGS Bridge:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        tk.Label(dvo_col3, text="⚡ Auto-Export COLMAP sparse/0", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(2, 2))
-        tk.Label(dvo_col3, text="• Converts TUM poses (tx,ty,tz,qx,qy,qz,qw)\n• Generates cameras.txt, images.txt, points3D.txt\n• Pairs with Cubemap Transcoder for 3DGS", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
+        tk.Label(dvo_col3, text="Universal 3DGS Bridge:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        tk.Label(dvo_col3, text="⚡ Auto-Exports All 3DGS Formats", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 1))
+        tk.Label(dvo_col3, text="• TUM Odometry (tx, ty, tz, qx, qy, qz, qw)\n• COLMAP cameras.txt, images.txt, points3D.txt\n• Universal transforms.json (EQUIRECTANGULAR)\n• OpenSfM reconstruction.json + metadata.json\n• 100% GPU training in PFGS360 & LichtFeld", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
 
     def _update_align_panel(self):
         engine = self.engine_var.get()
@@ -3910,6 +3940,24 @@ class AbuAlignApp:
             cmd.extend([
                 "--dvo_patches", str(self.dvo_patches_var.get()),
             ])
+            try:
+                mask_val = float(str(self.dvo_polar_mask_var.get()).replace("%", "").strip()) / 100.0
+            except Exception:
+                mask_val = 0.08
+            cmd.extend(["--dvo_polar_mask", str(mask_val)])
+
+            try:
+                ba_val = int(str(self.dvo_ba_window_var.get()).strip())
+            except Exception:
+                ba_val = 8
+            cmd.extend(["--dvo_ba_window", str(ba_val)])
+
+            try:
+                scale_val = float(str(self.dvo_scale_var.get()).strip())
+            except Exception:
+                scale_val = 3.2
+            cmd.extend(["--dvo_scale", str(scale_val)])
+
             if self.dvo_viz_var.get():
                 cmd.append("--dvo_viz")
             else:
@@ -4106,7 +4154,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.0 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.1 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4417,7 +4465,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.0 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.1 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4691,7 +4739,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.0\n"
+            "Abu Align & Train - Version 0.0.3.1\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

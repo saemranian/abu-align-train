@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.3.0 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.3.1 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -997,6 +997,9 @@ def main():
     # 360DVO Deep Visual Odometry Options
     parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
     parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
+    parser.add_argument("--dvo_polar_mask", type=float, default=0.08, help="Polar zenith/nadir cutoff fraction (0.0 to 0.20, default: 0.08) in 360DVO")
+    parser.add_argument("--dvo_ba_window", type=int, default=8, help="Local ODBA sliding-window bundle adjustment size (default: 8) in 360DVO")
+    parser.add_argument("--dvo_scale", type=float, default=3.2, help="Metric scene depth scale multiplier (default: 3.2m) in 360DVO")
     parser.add_argument("--dvo_viz", dest="dvo_viz", action="store_true", default=True, help="Launch live real-time Viser browser visualizer during 360DVO tracking")
     parser.add_argument("--no_dvo_viz", dest="dvo_viz", action="store_false", help="Disable real-time visualizer during 360DVO tracking")
     # OpenSfM 360 & Spherical Photogrammetry Options
@@ -1441,6 +1444,9 @@ def main():
             weights_path=args.dvo_weights,
             patches_per_frame=args.dvo_patches,
             stride=args.stride,
+            polar_mask_pct=getattr(args, "dvo_polar_mask", 0.08),
+            local_ba_window=getattr(args, "dvo_ba_window", 8),
+            metric_scale=getattr(args, "dvo_scale", 3.2),
             enable_viz=args.dvo_viz
         )
         inf_elapsed = time.time() - inf_start
@@ -1693,7 +1699,10 @@ def main():
         report_lines.extend([
             f"   * Active Patch Density:    {args.dvo_patches} patches/frame",
             f"   * Video / Frame Stride:    {args.stride}",
-            f"   * Trajectory Format:       Robotics TUM (timestamp, SE3 pose)",
+            f"   * Polar Zenith/Nadir Mask: {getattr(args, 'dvo_polar_mask', 0.08)*100:.1f}% cutoff",
+            f"   * ODBA Sliding BA Window:  {getattr(args, 'dvo_ba_window', 8)} keyframes",
+            f"   * Metric Scene Scale:      {getattr(args, 'dvo_scale', 3.2):.1f}m multiplier",
+            f"   * Trajectory Format:       Robotics TUM (timestamp, SE3 pose) + Universal COLMAP/OpenSfM/Transforms",
             f"   * Real-Time Viser View:    {'Enabled' if args.dvo_viz else 'Headless'}",
         ])
     else:

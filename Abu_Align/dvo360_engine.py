@@ -15,6 +15,7 @@ import subprocess
 import numpy as np
 import cv2
 import json
+import scipy.optimize
 from typing import List, Tuple, Dict, Optional
 
 def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
@@ -455,11 +456,17 @@ class ThreeSixtyDVOEngine:
         weights_path: Optional[str] = None,
         patches_per_frame: int = 96,
         stride: int = 1,
+        polar_mask_pct: float = 0.08,
+        local_ba_window: int = 8,
+        metric_scale: float = 3.2,
         enable_viz: bool = False,
         port: int = 8080
     ):
         self.patches_per_frame = patches_per_frame
         self.stride = stride
+        self.polar_mask_pct = polar_mask_pct
+        self.local_ba_window = local_ba_window
+        self.metric_scale = metric_scale
         self.enable_viz = enable_viz
         self.port = port
 
@@ -514,6 +521,9 @@ def run_360dvo_reconstruction(
     weights_path: Optional[str] = None,
     patches_per_frame: int = 96,
     stride: int = 1,
+    polar_mask_pct: float = 0.08,
+    local_ba_window: int = 8,
+    metric_scale: float = 3.2,
     enable_viz: bool = False,
     port: int = 8080,
     log_callback = None
@@ -533,6 +543,9 @@ def run_360dvo_reconstruction(
     log(f"   * Input Frames:     {len(image_paths)}")
     log(f"   * Active Patches:   {patches_per_frame} per frame")
     log(f"   * Temporal Stride:  {stride}")
+    log(f"   * Polar Mask Cutoff:{polar_mask_pct*100:.1f}% (Zenith & Nadir)")
+    log(f"   * ODBA BA Window:   {local_ba_window} keyframes")
+    log(f"   * Metric Scale:     {metric_scale:.2f}m")
     log(f"   * Output Workspace: {output_dir}")
     log("=" * 70)
 
@@ -541,6 +554,9 @@ def run_360dvo_reconstruction(
         weights_path=weights_path,
         patches_per_frame=patches_per_frame,
         stride=stride,
+        polar_mask_pct=polar_mask_pct,
+        local_ba_window=local_ba_window,
+        metric_scale=metric_scale,
         enable_viz=enable_viz,
         port=port
     )
@@ -587,19 +603,28 @@ def run_360dvo_reconstruction(
         n_features = max(600, int(patches_per_frame * 35))
         min_dist = max(6, int(w / max(patches_per_frame * 1.5, 1.0)))
 
-        # Mask polar regions (top 8% zenith and bottom 8% nadir) to eliminate tripod shadows and sky artifacts
+        # Mask polar regions (zenith top and nadir bottom) to eliminate tripod shadows and sky artifacts
         mask = np.zeros((h, w), dtype=np.uint8)
-        mask[int(h * 0.08):int(h * 0.92), :] = 255
+        y_start = int(h * polar_mask_pct)
+        y_end = int(h * (1.0 - polar_mask_pct))
+        if y_end > y_start:
+            mask[y_start:y_end, :] = 255
+        else:
+            mask[:, :] = 255
 
         prev_gray = None
         prev_kps = None
         prev_im_bgr = None
         prev_R = None
         prev_C = None
+        window_cams = []
 
         log("[*] Streaming continuous frames through Spherical Bearing Tracker...")
         log(f"    * Feature Budget:   {n_features} corners/frame (proportional to {patches_per_frame} patches)")
         log(f"    * Feature Spacing:  {min_dist}px on 2:1 Equirectangular Canvas")
+        log(f"    * Polar Mask:       {polar_mask_pct*100:.1f}% Zenith & Nadir cutoff")
+        log(f"    * Metric Scale:     {metric_scale:.2f}m")
+        log(f"    * ODBA Window:      {local_ba_window} keyframes")
 
         for i, p in enumerate(image_paths):
             if i % max(1, total_n // 10) == 0 or i == total_n - 1:
@@ -642,7 +667,7 @@ def run_360dvo_reconstruction(
                     if med_disp < 0.002:
                         step_len = 0.0
                     else:
-                        step_len = float(np.clip(med_disp * 3.2, 0.005, 0.30)) * max(1, stride)
+                        step_len = float(np.clip(med_disp * metric_scale, 0.005, 0.35)) * max(1, stride)
 
                     t_norm = np.linalg.norm(t_rel)
                     t_dir = (t_rel / t_norm) if t_norm > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
@@ -707,6 +732,63 @@ def run_360dvo_reconstruction(
             prev_R = cur_R.copy()
             prev_C = cur_t.copy()
 
+            # Record camera state in ODBA sliding-window buffer
+            window_cams.append({
+                "idx": i,
+                "R": cur_R.copy(),
+                "C": cur_t.copy()
+            })
+            if len(window_cams) > max(4, local_ba_window):
+                window_cams.pop(0)
+
+            # Periodic ODBA sliding-window local bundle adjustment
+            if local_ba_window >= 4 and len(window_cams) >= 4 and len(pts_list) >= 15 and (i % 4 == 0 or i == total_n - 1):
+                try:
+                    n_win = len(window_cams)
+                    R_anchor, C_anchor = window_cams[0]["R"], window_cams[0]["C"]
+                    p_win = []
+                    for w_idx in range(1, n_win):
+                        rv, _ = cv2.Rodrigues(window_cams[w_idx]["R"])
+                        p_win.extend(rv.flatten().tolist())
+                        p_win.extend(window_cams[w_idx]["C"].flatten().tolist())
+                    p_win = np.array(p_win, dtype=np.float64)
+
+                    sub_pts = pts_list[-min(len(pts_list), 100):]
+
+                    def odba_residuals(p):
+                        res = []
+                        c_map = {0: (R_anchor, C_anchor)}
+                        for w_idx in range(1, n_win):
+                            rv = p[(w_idx - 1)*6 : (w_idx - 1)*6+3]
+                            cv_val = p[(w_idx - 1)*6+3 : (w_idx - 1)*6+6]
+                            R_mat, _ = cv2.Rodrigues(rv)
+                            c_map[w_idx] = (R_mat, cv_val)
+
+                        for pt in sub_pts:
+                            r0 = R_anchor.T @ (pt - C_anchor)
+                            nr0 = np.linalg.norm(r0)
+                            r_last = c_map[n_win - 1][0].T @ (pt - c_map[n_win - 1][1])
+                            nr_last = np.linalg.norm(r_last)
+                            if nr0 > 1e-4 and nr_last > 1e-4:
+                                b0 = r0 / nr0
+                                b_last = r_last / nr_last
+                                res.append(float(np.dot(b0, b_last) - 1.0))
+                        return np.array(res, dtype=np.float64)
+
+                    if len(sub_pts) >= 8:
+                        res_ba = scipy.optimize.least_squares(odba_residuals, p_win, loss='cauchy', f_scale=0.04, max_nfev=15)
+                        p_opt = res_ba.x
+                        for w_idx in range(1, n_win):
+                            rv = p_opt[(w_idx - 1)*6 : (w_idx - 1)*6+3]
+                            cv_val = p_opt[(w_idx - 1)*6+3 : (w_idx - 1)*6+6]
+                            R_mat, _ = cv2.Rodrigues(rv)
+                            window_cams[w_idx]["R"] = R_mat
+                            window_cams[w_idx]["C"] = cv_val
+                        cur_R = window_cams[-1]["R"].copy()
+                        cur_t = window_cams[-1]["C"].copy()
+                except Exception:
+                    pass
+
             # Record TUM trajectory pose (timestamp tx ty tz qx qy qz qw)
             q = rotation_matrix_to_quaternion(cur_R)
             poses.append(f"{cur_time:.4f} {cur_t[0]:.6f} {cur_t[1]:.6f} {cur_t[2]:.6f} {q[0]:.6f} {q[1]:.6f} {q[2]:.6f} {q[3]:.6f}\n")
@@ -756,6 +838,40 @@ def run_360dvo_reconstruction(
         output_ply_dest=points3d_dest
     )
     log(f"[*] {msg_tf}")
+
+    # OpenSfM Bridge: reconstruction.json and metadata.json for direct PFGS360 training
+    opensfm_dir = os.path.join(output_dir, "opensfm")
+    s_osfm, msg_osfm = tum_trajectory_to_opensfm(
+        trajectory_file=trajectory_txt,
+        image_names=image_names,
+        output_opensfm_dir=opensfm_dir,
+        width=w,
+        height=h,
+        points_ply=ply_out if os.path.isfile(ply_out) else None
+    )
+    log(f"[*] {msg_osfm}")
+
+    # Universal 3dgs_dataset/ directory staging
+    dataset_3dgs = os.path.join(output_dir, "3dgs_dataset")
+    os.makedirs(dataset_3dgs, exist_ok=True)
+    d3_sparse = os.path.join(dataset_3dgs, "sparse", "0")
+    os.makedirs(d3_sparse, exist_ok=True)
+    for fn in os.listdir(sparse_dir):
+        shutil.copy2(os.path.join(sparse_dir, fn), os.path.join(d3_sparse, fn))
+    d3_osfm = os.path.join(dataset_3dgs, "opensfm")
+    os.makedirs(d3_osfm, exist_ok=True)
+    rec_src = os.path.join(opensfm_dir, "reconstruction.json")
+    if os.path.isfile(rec_src):
+        shutil.copy2(rec_src, os.path.join(d3_osfm, "reconstruction.json"))
+        shutil.copy2(rec_src, os.path.join(dataset_3dgs, "reconstruction.json"))
+    meta_src = os.path.join(output_dir, "metadata.json")
+    if os.path.isfile(meta_src):
+        shutil.copy2(meta_src, os.path.join(dataset_3dgs, "metadata.json"))
+    if os.path.isfile(transforms_json_out):
+        shutil.copy2(transforms_json_out, os.path.join(dataset_3dgs, "transforms.json"))
+    if os.path.isfile(ply_out):
+        shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points.ply"))
+        shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points3D.ply"))
 
     # Load into pycolmap.Reconstruction
     try:
