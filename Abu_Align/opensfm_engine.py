@@ -15,6 +15,7 @@ import time
 import math
 import shutil
 import subprocess
+import collections
 import numpy as np
 import cv2
 import scipy.optimize
@@ -700,20 +701,20 @@ def run_opensfm_spherical_sfm(
         if root_u != root_v:
             parent[root_u] = root_v
 
+    t_s3 = time.time()
     for (i, j), m_data in pairwise_matches.items():
         for k1, k2 in zip(m_data["idx1"], m_data["idx2"]):
             union((i, int(k1)), (j, int(k2)))
 
-    # Collect tracks
-    tracks = {}  # root -> list of (view_idx, kp_idx)
-    for i in range(N_views):
-        for k in range(len(features[i]["pts"])):
-            node = (i, k)
-            if node in parent or any(find(node) == find(other) for other in parent if other == node):
-                r = find(node)
-                if r not in tracks:
-                    tracks[r] = []
-                tracks[r].append(node)
+    # Collect tracks efficiently: only matched nodes can form tracks (O(M) instead of O(N*M))
+    all_matched_nodes = set(parent.keys())
+    for v in list(parent.values()):
+        all_matched_nodes.add(v)
+
+    tracks = collections.defaultdict(list)
+    for node in all_matched_nodes:
+        r = find(node)
+        tracks[r].append(node)
 
     # Deduplicate within same image and filter tracks with length >= 2
     clean_tracks = []
@@ -725,7 +726,13 @@ def run_opensfm_spherical_sfm(
         if len(unique_views) >= 2:
             clean_tracks.append(list(unique_views.items()))
 
-    log(f"      * Created {len(clean_tracks)} multi-view feature tracks.")
+    log(f"      * Created {len(clean_tracks):,} multi-view feature tracks in {time.time()-t_s3:.2f}s.")
+
+    # Inverted track index: view_idx -> list of (track_idx, kp_idx) for O(1) observation lookups
+    view_to_tracks = collections.defaultdict(list)
+    for t_idx, track in enumerate(clean_tracks):
+        for (v_idx, kp_idx) in track:
+            view_to_tracks[v_idx].append((t_idx, kp_idx))
 
     # -------------------------------------------------------------------------
     # Stage 4: Incremental Spherical Reconstruction & Ray Intersection
@@ -776,11 +783,13 @@ def run_opensfm_spherical_sfm(
     registered = {i0, j0}
     triangulated_points = {}  # track_idx -> dict(xyz, rgb, views)
 
-    def triangulate_all_available_tracks():
+    def triangulate_tracks(candidate_indices=None):
         new_tri = 0
-        for t_idx, track in enumerate(clean_tracks):
+        target_indices = candidate_indices if candidate_indices is not None else range(len(clean_tracks))
+        for t_idx in target_indices:
             if t_idx in triangulated_points:
                 continue
+            track = clean_tracks[t_idx]
             reg_obs = [(v, kp) for (v, kp) in track if v in registered]
             if len(reg_obs) >= 2:
                 world_rays = []
@@ -803,11 +812,12 @@ def run_opensfm_spherical_sfm(
                     new_tri += 1
         return new_tri
 
-    triangulate_all_available_tracks()
+    # Initial triangulation across all tracks for seed pair
+    triangulate_tracks()
 
     # Incremental view registration loop
     while len(registered) < N_views:
-        # Find best unregistered view with most matches to triangulated points
+        # Find best unregistered view with most observations to already-triangulated points
         best_candidate = None
         best_cand_score = -1
         candidate_p3d_obs = {}
@@ -815,16 +825,13 @@ def run_opensfm_spherical_sfm(
         for v in range(N_views):
             if v in registered:
                 continue
-            # Count observations in triangulated points
+            # Fast O(1) observation check via inverted track index
             common_pts = []
             common_bearings = []
-            for t_idx, p_data in triangulated_points.items():
-                track = clean_tracks[t_idx]
-                for (t_v, kp) in track:
-                    if t_v == v:
-                        common_pts.append(p_data["xyz"])
-                        common_bearings.append(features[v]["bearings"][kp])
-                        break
+            for (t_idx, kp) in view_to_tracks[v]:
+                if t_idx in triangulated_points:
+                    common_pts.append(triangulated_points[t_idx]["xyz"])
+                    common_bearings.append(features[v]["bearings"][kp])
 
             score = len(common_pts)
             if score > best_cand_score:
@@ -859,11 +866,20 @@ def run_opensfm_spherical_sfm(
             C_cand = C_pred + R_pred @ (t_dir * step_scale)
             cameras_pose[next_v] = (R_cand, C_cand)
             registered.add(next_v)
-            triangulate_all_available_tracks()
+            # Triangulate only tracks that have an observation in next_v
+            triangulate_tracks([t_idx for (t_idx, _) in view_to_tracks[next_v]])
             continue
 
         # Solve resection / spherical PnP for best_candidate
         cand_pts, cand_bearings = candidate_p3d_obs[best_candidate]
+        if len(cand_pts) > 120:
+            step_c = len(cand_pts) // 120
+            cand_pts_res = cand_pts[::step_c][:120]
+            cand_bearings_res = cand_bearings[::step_c][:120]
+        else:
+            cand_pts_res = cand_pts
+            cand_bearings_res = cand_bearings
+
         # Initial guess from nearest registered neighbor
         nearest_reg = min(registered, key=lambda r: abs(r - best_candidate))
         R_init, C_init = cameras_pose[nearest_reg]
@@ -873,12 +889,11 @@ def run_opensfm_spherical_sfm(
             r = p[:3]
             c = p[3:6]
             R_mat, _ = cv2.Rodrigues(r)
-            # R_mat is R_c2w. world-to-cam is R_w2c = R_mat.T
             R_w2c = R_mat.T
-            rays_cam = (R_w2c @ (cand_pts - c).T).T
+            rays_cam = (R_w2c @ (cand_pts_res - c).T).T
             norms = np.linalg.norm(rays_cam, axis=1, keepdims=True)
             pred_b = rays_cam / np.maximum(norms, 1e-9)
-            res = (pred_b - cand_bearings).flatten()
+            res = (pred_b - cand_bearings_res).flatten()
             return res
 
         p0 = np.concatenate([rvec_init.flatten(), C_init.flatten()])
@@ -897,37 +912,45 @@ def run_opensfm_spherical_sfm(
 
         cameras_pose[best_candidate] = (R_opt, C_opt)
         registered.add(best_candidate)
-        triangulate_all_available_tracks()
+        # Triangulate newly eligible tracks observing best_candidate
+        triangulate_tracks([t_idx for (t_idx, _) in view_to_tracks[best_candidate]])
 
         if len(registered) % max(1, N_views // 4) == 0 or len(registered) == N_views:
-            log(f"      * Registered {len(registered)}/{N_views} cameras ({len(triangulated_points)} 3D points)")
+            log(f"      * Registered {len(registered)}/{N_views} cameras ({len(triangulated_points):,} 3D points)")
 
-        # Intermediate incremental BA triggered every bundle_interval frames
-        if bundle_interval > 0 and len(registered) % bundle_interval == 0 and len(registered) >= 4 and len(registered) < N_views:
+        # Fast local window BA triggered periodically (every max(10, bundle_interval*5) frames)
+        ba_freq = max(10, bundle_interval * 5) if bundle_interval > 0 else 0
+        if ba_freq > 0 and len(registered) % ba_freq == 0 and len(registered) >= 6 and len(registered) < N_views:
             try:
-                active_cams = [v for v in sorted(list(registered)) if v != i0]
-                if active_cams and len(triangulated_points) > 15:
+                # Optimize local window of last 8 registered cameras
+                local_cams = [v for v in sorted(list(registered))[-8:] if v != i0]
+                if local_cams and len(triangulated_points) > 15:
                     p_inc = []
-                    for v_act in active_cams:
+                    for v_act in local_cams:
                         R_act, C_act = cameras_pose[v_act]
                         rv_act, _ = cv2.Rodrigues(R_act)
                         p_inc.extend(rv_act.flatten().tolist())
                         p_inc.extend(C_act.flatten().tolist())
                     p_inc = np.array(p_inc, dtype=np.float64)
 
-                    inc_pts = list(triangulated_points.values())
-                    if len(inc_pts) > 400:
-                        inc_pts = inc_pts[::len(inc_pts)//400]
+                    # Gather points observed by local cams
+                    local_pts = []
+                    for v_act in local_cams:
+                        for (t_idx, _) in view_to_tracks[v_act]:
+                            if t_idx in triangulated_points:
+                                local_pts.append(triangulated_points[t_idx])
+                    if len(local_pts) > 200:
+                        local_pts = local_pts[::len(local_pts)//200][:200]
 
                     def inc_loss(p):
                         r_list = []
-                        c_map = {i0: cameras_pose[i0]}
-                        for idx_a, v_a in enumerate(active_cams):
+                        c_map = {}
+                        for idx_a, v_a in enumerate(local_cams):
                             rv = p[idx_a*6 : idx_a*6+3]
                             cv = p[idx_a*6+3 : idx_a*6+6]
                             R_m, _ = cv2.Rodrigues(rv)
                             c_map[v_a] = (R_m, cv)
-                        for it in inc_pts:
+                        for it in local_pts:
                             for (v_o, kp_o) in it["views"]:
                                 if v_o in c_map:
                                     R_c2w, C_w = c_map[v_o]
@@ -938,7 +961,7 @@ def run_opensfm_spherical_sfm(
                         return np.array(r_list, dtype=np.float64)
 
                     res_inc = scipy.optimize.least_squares(inc_loss, p_inc, loss='cauchy', f_scale=0.03, max_nfev=15)
-                    for idx_a, v_a in enumerate(active_cams):
+                    for idx_a, v_a in enumerate(local_cams):
                         rv = res_inc.x[idx_a*6 : idx_a*6+3]
                         cv = res_inc.x[idx_a*6+3 : idx_a*6+6]
                         R_m, _ = cv2.Rodrigues(rv)
@@ -952,82 +975,142 @@ def run_opensfm_spherical_sfm(
     log("\n[OpenSfM Stage 5/5] Ceres Spherical Bundle Adjustment (S² Manifold)...")
     t_start_ba = time.time()
 
-    # Motion-only BA over all registered cameras to refine trajectory smoothly
-    # Camera 0 is fixed at origin to gauge-fix translation and rotation
     cam_indices_to_opt = [v for v in sorted(list(cameras_pose.keys())) if v != i0]
-    p_cam_init = []
-    for v in cam_indices_to_opt:
-        R_c2w, C_w = cameras_pose[v]
-        rvec, _ = cv2.Rodrigues(R_c2w)
-        p_cam_init.extend(rvec.flatten().tolist())
-        p_cam_init.extend(C_w.flatten().tolist())
 
-    if optimize_camera_parameters:
-        p_cam_init.append(1.0)  # Camera scale_y calibration parameter
+    # Global or Windowed BA
+    if len(cam_indices_to_opt) <= 25:
+        # Direct global BA for small-to-medium camera sets
+        p_cam_init = []
+        for v in cam_indices_to_opt:
+            R_c2w, C_w = cameras_pose[v]
+            rvec, _ = cv2.Rodrigues(R_c2w)
+            p_cam_init.extend(rvec.flatten().tolist())
+            p_cam_init.extend(C_w.flatten().tolist())
 
-    p_cam_init = np.array(p_cam_init, dtype=np.float64)
+        if optimize_camera_parameters:
+            p_cam_init.append(1.0)
 
-    # Subsample confident 3D points for fast, robust BA
-    ba_points = list(triangulated_points.values())
-    if len(ba_points) > 1500:
-        step = len(ba_points) // 1500
-        ba_points = ba_points[::step]
+        p_cam_init = np.array(p_cam_init, dtype=np.float64)
 
-    def spherical_ba_residuals(p):
-        residuals = []
-        cams = {}
-        cams[i0] = cameras_pose[i0]
-        for idx, v in enumerate(cam_indices_to_opt):
-            rv = p[idx*6 : idx*6+3]
-            cv = p[idx*6+3 : idx*6+6]
-            R_mat, _ = cv2.Rodrigues(rv)
-            cams[v] = (R_mat, cv)
+        ba_points = list(triangulated_points.values())
+        if len(ba_points) > 1000:
+            step = len(ba_points) // 1000
+            ba_points = ba_points[::step][:1000]
 
-        scale_y = p[-1] if optimize_camera_parameters else 1.0
-
-        for p_item in ba_points:
-            X = p_item["xyz"]
-            for (v, kp) in p_item["views"]:
-                if v in cams:
-                    R_c2w, C_w = cams[v]
-                    R_w2c = R_c2w.T
-                    ray_cam = R_w2c @ (X - C_w)
-                    if optimize_camera_parameters:
-                        ray_cam[1] *= scale_y
-                    norm_r = np.linalg.norm(ray_cam)
-                    if norm_r > 1e-4:
-                        pred_b = ray_cam / norm_r
-                        obs_b = features[v]["bearings"][kp]
-                        # Residual is chordal distance on S^2 sphere
-                        residuals.extend((pred_b - obs_b).tolist())
-        return np.array(residuals, dtype=np.float64)
-
-    if len(p_cam_init) > 0 and len(ba_points) > 20:
-        try:
-            res_ba = scipy.optimize.least_squares(
-                spherical_ba_residuals,
-                p_cam_init,
-                loss='cauchy',
-                f_scale=0.03,
-                max_nfev=35
-            )
-            # Update optimized camera poses
-            p_opt = res_ba.x
+        def spherical_ba_residuals(p):
+            residuals = []
+            cams = {i0: cameras_pose[i0]}
             for idx, v in enumerate(cam_indices_to_opt):
-                rv = p_opt[idx*6 : idx*6+3]
-                cv = p_opt[idx*6+3 : idx*6+6]
+                rv = p[idx*6 : idx*6+3]
+                cv = p[idx*6+3 : idx*6+6]
                 R_mat, _ = cv2.Rodrigues(rv)
-                cameras_pose[v] = (R_mat, cv)
-            if optimize_camera_parameters:
-                opt_scale = float(p_opt[-1])
-                log(f"      * Refined spherical camera calibration: scale_y={opt_scale:.5f}")
-            log(f"      * Spherical BA converged with final cost {res_ba.cost:.4f} in {time.time()-t_start_ba:.2f}s")
-        except Exception as e:
-            log(f"      * Spherical BA skipped: {e}")
+                cams[v] = (R_mat, cv)
+
+            scale_y = p[-1] if optimize_camera_parameters else 1.0
+
+            for p_item in ba_points:
+                X = p_item["xyz"]
+                for (v, kp) in p_item["views"]:
+                    if v in cams:
+                        R_c2w, C_w = cams[v]
+                        R_w2c = R_c2w.T
+                        ray_cam = R_w2c @ (X - C_w)
+                        if optimize_camera_parameters:
+                            ray_cam[1] *= scale_y
+                        norm_r = np.linalg.norm(ray_cam)
+                        if norm_r > 1e-4:
+                            pred_b = ray_cam / norm_r
+                            obs_b = features[v]["bearings"][kp]
+                            residuals.extend((pred_b - obs_b).tolist())
+            return np.array(residuals, dtype=np.float64)
+
+        if len(p_cam_init) > 0 and len(ba_points) > 20:
+            try:
+                res_ba = scipy.optimize.least_squares(
+                    spherical_ba_residuals,
+                    p_cam_init,
+                    loss='cauchy',
+                    f_scale=0.03,
+                    max_nfev=30
+                )
+                p_opt = res_ba.x
+                for idx, v in enumerate(cam_indices_to_opt):
+                    rv = p_opt[idx*6 : idx*6+3]
+                    cv = p_opt[idx*6+3 : idx*6+6]
+                    R_mat, _ = cv2.Rodrigues(rv)
+                    cameras_pose[v] = (R_mat, cv)
+                if optimize_camera_parameters:
+                    opt_scale = float(p_opt[-1])
+                    log(f"      * Refined spherical camera calibration: scale_y={opt_scale:.5f}")
+                log(f"      * Spherical BA converged with final cost {res_ba.cost:.4f} in {time.time()-t_start_ba:.2f}s")
+            except Exception as e:
+                log(f"      * Spherical BA skipped: {e}")
+    else:
+        # Windowed sliding-block BA for large sets (e.g. 100+ frames)
+        window_size = 16
+        overlap = 6
+        stride = window_size - overlap
+        start_idx = 0
+
+        while start_idx < len(cam_indices_to_opt):
+            end_idx = min(start_idx + window_size, len(cam_indices_to_opt))
+            win_cams = cam_indices_to_opt[start_idx:end_idx]
+
+            # Collect points observed by this window
+            win_points = []
+            for v in win_cams:
+                for (t_idx, _) in view_to_tracks[v]:
+                    if t_idx in triangulated_points:
+                        win_points.append(triangulated_points[t_idx])
+            if len(win_points) > 400:
+                win_points = win_points[::len(win_points)//400][:400]
+
+            if len(win_points) >= 15:
+                p_win = []
+                for v in win_cams:
+                    R_c, C_c = cameras_pose[v]
+                    rv, _ = cv2.Rodrigues(R_c)
+                    p_win.extend(rv.flatten().tolist())
+                    p_win.extend(C_c.flatten().tolist())
+                p_win = np.array(p_win, dtype=np.float64)
+
+                def win_loss(p):
+                    res = []
+                    c_map = {}
+                    for idx_w, v_w in enumerate(win_cams):
+                        rv = p[idx_w*6 : idx_w*6+3]
+                        cv = p[idx_w*6+3 : idx_w*6+6]
+                        R_m, _ = cv2.Rodrigues(rv)
+                        c_map[v_w] = (R_m, cv)
+                    for it in win_points:
+                        for (v_o, kp_o) in it["views"]:
+                            if v_o in c_map:
+                                R_c2w, C_w = c_map[v_o]
+                                ray = R_c2w.T @ (it["xyz"] - C_w)
+                                nr = np.linalg.norm(ray)
+                                if nr > 1e-4:
+                                    res.extend((ray / nr - features[v_o]["bearings"][kp_o]).tolist())
+                    return np.array(res, dtype=np.float64)
+
+                try:
+                    res_win = scipy.optimize.least_squares(win_loss, p_win, loss='cauchy', f_scale=0.03, max_nfev=20)
+                    for idx_w, v_w in enumerate(win_cams):
+                        rv = res_win.x[idx_w*6 : idx_w*6+3]
+                        cv = res_win.x[idx_w*6+3 : idx_w*6+6]
+                        R_m, _ = cv2.Rodrigues(rv)
+                        cameras_pose[v_w] = (R_m, cv)
+                except Exception:
+                    pass
+
+            if end_idx >= len(cam_indices_to_opt):
+                break
+            start_idx += stride
+
+        log(f"      * Windowed Spherical BA refined {len(cam_indices_to_opt)} cameras in {time.time()-t_start_ba:.2f}s")
 
     # Re-triangulate all points with final camera poses for maximum geometric accuracy
     triangulated_points.clear()
-    triangulate_all_available_tracks()
+    triangulate_tracks()
     log(f"      * Final Triangulated Tie Points: {len(triangulated_points):,} points")
 
     # -------------------------------------------------------------------------
