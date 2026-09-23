@@ -115,6 +115,19 @@ class RigDesignerTests(unittest.TestCase):
         self.assertTrue(self.ui.display_open.get())
         self.assertEqual(self.errors_seen, [])
 
+    def test_controls_guide_preserves_rig(self):
+        original = self.ui.get_rig()
+        self.ui.dialog.geometry("1120x760")
+        self.ui.toggle_guide()
+        self.root.update()
+        self.assertTrue(self.ui.controls_guide.winfo_ismapped())
+        self.assertGreater(self.ui.canvas.winfo_height(), 100)
+        self.ui.toggle_guide()
+        self.root.update()
+        self.assertFalse(self.ui.controls_guide.winfo_ismapped())
+        self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
 
 if __name__ == "__main__":
     unittest.main()

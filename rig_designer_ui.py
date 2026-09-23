@@ -163,6 +163,24 @@ def enhance_rig_designer(app, ctx):
     display_button = button(view_tools, "Display", toggle_display)
     display_button.configure(pady=4, padx=8)
     display_button.pack(side="left")
+    controls_guide = tk.Frame(right, bg=SURFACE, padx=12, pady=10)
+    guide_text = label(controls_guide,
+        "Orbit: drag or arrow keys · Pan: Shift-drag or right-drag\n"
+        "Zoom: scroll or + / − · Reset: F or double-click\n"
+        "Inspect a camera: click its marker, use Previous / Next, or [ / ]",
+        muted=True, justify="left", anchor="w")
+    guide_text.pack(fill="x")
+    controls_guide.bind("<Configure>", lambda e: guide_text.configure(wraplength=max(180, e.width-24)))
+    def toggle_guide():
+        shown = bool(controls_guide.winfo_manager())
+        if shown:
+            controls_guide.pack_forget()
+        else:
+            controls_guide.pack(fill="x", before=ctx["canvas_card"])
+        guide_button.configure(text="Hide controls" if not shown else "Controls")
+    guide_button = button(view_tools, "Controls", toggle_guide)
+    guide_button.configure(pady=4, padx=8)
+    guide_button.pack(side="left")
     wrap_row(view_tools)
     controls = {}
     for title, attribute, initial in [("All coverage", "show_all", False), ("Labels", "show_labels", True),
@@ -282,5 +300,6 @@ def enhance_rig_designer(app, ctx):
         cameras=ctx["num_cams_var"], fov=ctx["fov_var"], width=ctx["out_w_var"], height=ctx["out_h_var"],
         redraw=redraw, get_rig=ctx["get_current_rig"], close=ctx["on_close_dialog"], controls=controls,
         focus_view=focus_view, focused=focused, select_camera=select_camera, camera_text=camera_text,
-        inspector=inspector, toggle_display=toggle_display, display_open=display_open)
+        inspector=inspector, toggle_display=toggle_display, display_open=display_open,
+        controls_guide=controls_guide, toggle_guide=toggle_guide)
     dialog.after_idle(redraw)

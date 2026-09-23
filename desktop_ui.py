@@ -339,6 +339,66 @@ def enhance_video_dialog(app, ctx):
     dialog.after_idle(ctx["in_entry"].focus_set)
 
 
+class LogSearch:
+    """On-demand, non-destructive inspection of the retained log buffer."""
+    def __init__(self, parent, console, follow):
+        self.console, self.follow = console, follow
+        self.frame = tk.Frame(parent, bg=SURFACE)
+        self.query = tk.StringVar(master=parent)
+        self.entry = tk.Entry(self.frame, textvariable=self.query)
+        style_entry(self.entry)
+        self.entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
+        self.count = label(self.frame, "", muted=True)
+        self.count.pack(side="left", padx=8)
+        for title, command in [("Previous", lambda: self.find(-1)), ("Next", self.find), ("Close", self.hide)]:
+            button(self.frame, title, command).pack(side="left", padx=3)
+        self.current = -1
+        self.query.trace_add("write", self.changed)
+        self.entry.bind("<Return>", lambda e: (self.find(), "break")[-1])
+        self.entry.bind("<Shift-Return>", lambda e: (self.find(-1), "break")[-1])
+        self.entry.bind("<Escape>", lambda e: (self.hide(), "break")[-1])
+        console.tag_configure("log_match", background=ACCENT, foreground=BG)
+
+    def show(self):
+        self.frame.pack(fill="x", pady=(0, 8), before=self.console.frame)
+        self.entry.focus_set()
+        self.entry.selection_range(0, "end")
+
+    def hide(self):
+        self.frame.pack_forget()
+        self.console.tag_remove("log_match", "1.0", "end")
+        self.console.focus_set()
+
+    def changed(self, *_):
+        self.current = -1
+        self.find()
+
+    def find(self, direction=1):
+        query = self.query.get()
+        self.console.tag_remove("log_match", "1.0", "end")
+        if not query:
+            self.count.configure(text="Find in log")
+            return
+        matches, start = [], "1.0"
+        length = int(self.console.tk.call("string", "length", query))
+        while True:
+            match = self.console.search(query, start, stopindex="end", nocase=True)
+            if not match:
+                break
+            matches.append(match)
+            start = f"{match}+{length}c"
+        if not matches:
+            self.count.configure(text="No matches")
+            self.current = -1
+            return
+        self.current = (self.current + direction) % len(matches)
+        match = matches[self.current]
+        self.follow.set(False)
+        self.console.tag_add("log_match", match, f"{match}+{length}c")
+        self.console.see(match)
+        self.count.configure(text=f"{self.current+1} / {len(matches)}")
+
+
 def build_workspace(app, tooltip):
     configure_theme(app)
     root = app.root
@@ -348,7 +408,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.9", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.5.0", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
     prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
         activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,
@@ -421,10 +481,21 @@ def build_workspace(app, tooltip):
     app.path_entry = tk.Entry(row, textvariable=app.dataset_var, font=("Segoe UI", 10))
     app.path_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 10))
     button(row, "Browse folder", app._browse_dataset).pack(side="left")
+    app.profile_panel = tk.Frame(project, bg=SURFACE)
+    def toggle_profiles():
+        shown = bool(app.profile_panel.winfo_manager())
+        if shown:
+            app.profile_panel.pack_forget()
+        else:
+            app.profile_panel.pack(fill="x", pady=(6, 0))
+        app.profiles_button.configure(text="Hide profiles" if not shown else "Profiles ▾")
+    app.toggle_profiles = toggle_profiles
+    app.profiles_button = button(row, "Profiles ▾", toggle_profiles)
+    app.profiles_button.pack(side="left", padx=(8, 0))
     app.dataset_status_lbl = label(project, "Choose a folder of photos or prepared training data.", muted=True, anchor="w")
     app.dataset_status_lbl.pack(fill="x", pady=(6, 8))
     project.bind("<Configure>", lambda e: app.dataset_status_lbl.configure(wraplength=max(200, e.width - 40)))
-    row = tk.Frame(project, bg=SURFACE)
+    row = tk.Frame(app.profile_panel, bg=SURFACE)
     row.pack(fill="x")
     label(row, "Profile", 10, muted=True).pack(side="left", padx=(0, 24))
     app.preset_combo = ttk.Combobox(row, textvariable=app.preset_var, width=23,
@@ -433,6 +504,8 @@ def build_workspace(app, tooltip):
     app.preset_load_btn = button(row, "Load", app._load_preset)
     app.preset_load_btn.pack(side="left", padx=(0, 8))
     button(row, "Save as…", app._save_preset).pack(side="left")
+    label(app.profile_panel, "Save a profile to reuse engine settings. Your dataset stays separate.",
+          muted=True, anchor="w", wraplength=650).pack(fill="x", pady=(8, 0))
     app._refresh_presets()
     app.preset_var.trace_add("write", lambda *_: app.preset_load_btn.configure(
         state="normal" if app.preset_var.get() else "disabled"))
@@ -451,7 +524,7 @@ def build_workspace(app, tooltip):
     app.workspace_tabs.enable_traversal()
 
     align = align_page.body
-    section(align, "Reconstruct your scene", "Choose an alignment engine, then refine its settings below.")
+    section(align, "Alignment settings")
     engines = tk.Frame(align, bg=SURFACE)
     engines.pack(fill="x", pady=(0, 14))
     engine_controls = []
@@ -492,7 +565,7 @@ def build_workspace(app, tooltip):
     app._update_align_panel()
 
     train = train_page.body
-    section(train, "Train a Gaussian scene", "Use aligned camera poses or a supported pose-free workflow.")
+    section(train, "Training settings")
     engines = tk.Frame(train, bg=SURFACE)
     engines.pack(fill="x", pady=(0, 14))
     for i, (name, value) in enumerate([("LichtFeld Studio", "lichtfeld"), ("Splatfacto", "splatfacto"),
@@ -513,6 +586,10 @@ def build_workspace(app, tooltip):
           ["Latest Run (Auto-Detect)"], width=26)
     tooltip(app.train_target_run_cb, "Alignment Output Run Target:\nSelect which alignment run in results/ to use for 3DGS training.\n• Latest Run (Auto-Detect): Automatically detects and uses the newest sparse_* alignment.\n• Specific run: Explicitly targets that alignment run.")
     tk.Checkbutton(general, text="Train after alignment", variable=app.auto_train_var).pack(side="left", padx=14)
+    app.training_summary = general
+    for child in general.winfo_children():
+        child.pack_forget()
+    wrap_choices(general, max(child.winfo_reqwidth() for child in general.winfo_children()) + 40)
     app.train_dynamic_container = tk.Frame(train, bg=SURFACE)
     app.train_dynamic_container.pack(fill="both", expand=True)
     app._build_train_panels()
@@ -558,6 +635,17 @@ def build_workspace(app, tooltip):
                                padx=14, pady=12, height=8, wrap="word", state="disabled")
     app.console.pack(fill="both", expand=True)
     app.console.vbar.configure(bg=BORDER, troughcolor=BG, activebackground=MUTED, relief="flat", bd=0)
+    app.log_search = LogSearch(activity, app.console, app.follow_log_var)
+    button(toolbar, "Find", app.log_search.show).pack(side="left", padx=(6, 0))
+    for child in toolbar.winfo_children():
+        child.pack_forget()
+    wrap_choices(toolbar, max(child.winfo_reqwidth() for child in toolbar.winfo_children()) + 16)
+    tooltip(app.log_search.entry, "Search retained output. Enter: next; Shift+Enter: previous; Escape: close. Enable Follow log to resume live scrolling.")
+    def show_log_search(event=None):
+        app.workspace_tabs.select(app.activity_tab)
+        app.log_search.show()
+        return "break"
+    root.bind("<Control-f>", show_log_search)
     app._log("Ready. Choose a dataset, configure alignment and training, then start a run.\n")
 
     compact = [None]

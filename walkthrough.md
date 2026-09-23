@@ -1,72 +1,47 @@
-# Abu Align & Train v0.0.4.9 — Consistent, minimal workspace and tools
+# Abu Align & Train v0.0.5.0 — Design audit and phased UX corrections
 
-## Design and behavior
-The previous UI mixed dense legacy tool controls with the redesigned workspace.
-This release reduces visual repetition and applies the same graphite/mint treatment
-across the workspace, tool dialogs, monitor, help reader, and browser inspector.
+## Rationale and changes
+The candid audit in docs/DESIGN_CRITIQUE.md identifies excess persistent chrome,
+unsearchable logs, training-field overflow, and hidden viewport interactions.
+docs/DESIGN_IMPLEMENTATION_PLAN.md records the phased scope and verification.
 
-- Main workspace: Prepare input menu replaces two competing profile-row actions;
-  Dataset/Profile use sentence case, spacing is tighter, descriptive engine cards
-  wrap at narrow widths, detailed engine explanations move to accessible tooltips,
-  settings groups have subtle boundaries, and notebook border states are unified.
-- Fields: consistent text sizing, selection, focus, and disabled treatments.
-  Tooltip timers cancel on control destruction and covered controls do not show
-  delayed hover tips. Video input receives keyboard focus when opened.
-- Video frames: a genuine scrolling settings panel with pinned action buttons,
-  stacked label/input pairs, shorter labels, readable sampling choices, and
-  contextual FPS/stride/JPEG/blur fields. Escape and window close honor an active
-  extraction. Deferred errors preserve their message after the exception scope.
-- Rig designer: Display reveals optional overlays; Orbit-specific controls are
-  disabled in Polar/Map and the camera inspector hides there. The toolbar wraps
-  at narrow widths. Settings are true children of their scroll pages.
-- Hardware monitor: six balanced metric cells replace an unstructured text list.
-- Help: unified reading/selection surfaces, first-match reset on query changes,
-  Enter/Shift+Enter navigation, and highlight removal when the query is cleared.
-- Browser scene inspector: shared mint branding, concise labels, reduced branding
-  clutter, and camera frustums hidden initially (available through Display).
-- Dataset feedback: shorter actionable text and transforms-only datasets correctly
-  described as existing reconstruction input.
+Phase 1: profile editing is disclosed on demand with inline guidance. Shorter
+headings make room for settings. Training fields wrap as complete labeled units.
+Phase 2: Activity gains Ctrl+F / Find, case-insensitive next/previous search,
+wraparound, match counts, empty and not-found states, and Escape to close.
+Searching pauses Follow log; the field tooltip explains how to resume it.
+The Activity toolbar wraps to keep its destinations accessible at narrow widths.
+Phase 3: the rig Controls guide reveals pan/orbit/zoom/reset/selection gestures
+without permanently covering the viewport or changing exported camera geometry.
 
-## Root causes and verification
-Final result: all 19 tests passed in 54.026 seconds. All 18 snapshot Python modules
-compiled and matched the active sources byte-for-byte. Whitespace checks passed for active-file changes. The byte-identical snapshot
-retains pre-existing engine whitespace; it is excluded from that style check.
+## Verification and limitations
+Per-phase tests passed: 9 desktop checks for phase 1, 10 for phase 2, 8 rig
+checks for phase 3. Commands: python -m unittest discover -s tests -p
+test_desktop_ui.py -v; python -m unittest discover -s tests -p test_rig_designer.py -v.
+Final isolated release-snapshot verification: 22 tests passed in 41.399s; all
+18 Python modules compiled and matched the staged baseline. The final runner
+removed the working root/versions parent from sys.path after importing the snapshot
+GUI, then asserted all GUI/renderer module origins remained inside the snapshot.
+Active-file whitespace checks passed; historical whitespace is preserved in copies.
+Audit evidence comes from prior desktop screenshots and current source inspection;
+no fresh screenshot or browser-model rendering validation is claimed this pass.
+No alignment/training jobs were started; no VRAM, RSS, or render-speed benchmarks
+were measured. Search operates only on the retained text buffer and adds no timer.
+Execution-mode redesign, job-event contracts, rig pane resizing, and full browser
+model-load validation are explicitly deferred, not represented as completed.
 
-Visual inspection found settings drawn over pinned actions. Tk geometry placement
-alone does not change widget ancestry; the older sibling-hosted controls could
-escape the intended clipping boundary. Both tools now construct controls inside
-their actual scrolling container. The video focus regression checks an off-screen
-field is revealed inside the canvas after receiving focus.
-
-The test cleanup also canceled child-owned timers through the root, causing double
-Tcl callback deletion. It now cancels timer events while each widget retains
-responsibility for deleting its own registered commands.
-
-Commands: `python -m unittest discover -s tests -v`; compile all snapshot Python
-modules with `py_compile`; `git diff --check`; compare snapshot files with active
-release sources. Tests cover all engine pages, three workspace sizes, minimum-size
-rig layout, video field states and keyboard scrolling, view-mode controls, camera
-geometry/selection, focus mode, presets, logs, and mocked pipeline commands.
-Desktop screenshots inspected: workspace, input menu, video dialog, and rig designer.
-Browser inspector changes were source-reviewed and compiled; no browser model-load
-or GPU rendering benchmark was performed.
-
-## Resources and release
-No alignment/training jobs or model loads were launched. Rig preview remains on
-CPU. No VRAM/RSS/render-speed measurements or memory savings are claimed in this
-pass. Existing arrays, model execution, and exported rig geometry are unchanged.
-The snapshot includes fast_viewer.py, which the prior snapshot list omitted.
-Launchers rebuilt with csc.exe through version_manager.py --bump.
-Following the consolidated handover, active files remain at the canonical root;
-backup is versions/v0.0.4.9, without recreating the retired Abu_Align duplicate.
+## Release integrity
+Pre-existing uncommitted engine, GUI, and rig renderer edits are excluded. Their
+working files are preserved. Shared GUI/CLI/training version changes are staged
+from the committed baseline; the snapshot reproduces the intended commit.
+The base-10 odometer advances from v0.0.4.9 to v0.0.5.0. Launchers rebuilt with
+csc.exe via version_manager.py --bump. Consolidated backup: versions/v0.0.5.0.
 
 ## Modified files
-- UI: abu_align_gui.py, desktop_ui.py, rig_designer_ui.py, fast_viewer.py.
-- Release support: version_manager.py, VERSION.txt; version headers only in
-  align_cli.py and train_engine.py.
-- Tests: tests/test_desktop_ui.py, tests/test_gui_presets.py, tests/test_rig_designer.py.
-- Documentation: walkthrough.md, artifacts/walkthrough.md,
-  docs/WALKTHROUGH_v0.0.4.9.md, docs/ABU_ALIGN_USER_GUIDE.md.
-- Launchers: Abu_Align.bat/.exe, Abu_Align_and_Train.bat/.exe, and the two
-  v0.0.4.9 executables in versions/historical_binaries/.
-- Complete release backup: versions/v0.0.4.9/ (scripts, launchers, version, guides).
+- desktop_ui.py; rig_designer_ui.py.
+- tests/test_desktop_ui.py; tests/test_rig_designer.py.
+- docs/DESIGN_CRITIQUE.md; docs/DESIGN_IMPLEMENTATION_PLAN.md.
+- walkthrough.md; artifacts/walkthrough.md; docs/WALKTHROUGH_v0.0.5.0.md.
+- VERSION.txt; version-only updates to abu_align_gui.py, align_cli.py, train_engine.py.
+- Abu_Align.bat/.exe; Abu_Align_and_Train.bat/.exe; historical v0.0.5.0 executables.
+- versions/v0.0.5.0/ scripts, launchers, version, and audit/release documents.

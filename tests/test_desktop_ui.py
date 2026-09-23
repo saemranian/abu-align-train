@@ -41,7 +41,6 @@ class DesktopTests(unittest.TestCase):
             self.root.geometry(size)
             self.root.update()
             self.assertGreaterEqual(self.app.console.winfo_height(), 80, size)
-            self.assertGreaterEqual(self.app.preset_combo.winfo_width(), 100, size)
 
     def test_tool_dialogs_open_without_callback_errors(self):
         errors = []
@@ -94,6 +93,40 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.app.preset_load_btn.cget("state"), "normal")
         self.app.auto_train_var.set(False)
         self.assertEqual(self.app.one_click_btn.cget("text"), "Start alignment")
+
+    def test_profiles_disclosure_and_training_summary_bounds(self):
+        self.root.deiconify()
+        self.root.geometry("960x720")
+        self.root.update()
+        self.assertFalse(self.app.profile_panel.winfo_ismapped())
+        self.app.profiles_button.invoke()
+        self.root.update()
+        self.assertTrue(self.app.profile_panel.winfo_ismapped())
+        self.assertGreaterEqual(self.app.preset_combo.winfo_width(), 100)
+        self.app.workspace_tabs.select(1)
+        self.root.update()
+        for child in self.app.training_summary.winfo_children():
+            self.assertLessEqual(child.winfo_x()+child.winfo_width(), self.app.training_summary.winfo_width())
+
+    def test_log_search_wraps_and_never_changes_output(self):
+        self.app._clear_console()
+        self.app._log("ERROR first\nnormal\nerror second\n")
+        original = self.app.console.get("1.0", "end")
+        search = self.app.log_search
+        search.show()
+        search.query.set("error")
+        self.assertEqual(search.count.cget("text"), "1 / 2")
+        self.assertFalse(self.app.follow_log_var.get())
+        search.find(-1)
+        self.assertEqual(search.count.cget("text"), "2 / 2")
+        search.find()
+        self.assertEqual(search.count.cget("text"), "1 / 2")
+        search.query.set("missing")
+        self.assertEqual(search.count.cget("text"), "No matches")
+        search.query.set("")
+        self.assertFalse(self.app.console.tag_ranges("log_match"))
+        search.hide()
+        self.assertEqual(self.app.console.get("1.0", "end"), original)
 
     def test_video_controls_follow_sampling_and_format(self):
         self.root.deiconify()
