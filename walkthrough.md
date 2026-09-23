@@ -1,47 +1,54 @@
-# Abu Align & Train v0.0.5.0 — Design audit and phased UX corrections
+# Abu Align & Train v0.0.5.1 — Explicit execution and inspection controls
 
-## Rationale and changes
-The candid audit in docs/DESIGN_CRITIQUE.md identifies excess persistent chrome,
-unsearchable logs, training-field overflow, and hidden viewport interactions.
-docs/DESIGN_IMPLEMENTATION_PLAN.md records the phased scope and verification.
+## Audit and implementation
+Second-pass critique: docs/DESIGN_CRITIQUE_PASS_2.md.
+Phase plan and results: docs/DESIGN_PLAN_PASS_2.md. The earlier audit is preserved.
 
-Phase 1: profile editing is disclosed on demand with inline guidance. Shorter
-headings make room for settings. Training fields wrap as complete labeled units.
-Phase 2: Activity gains Ctrl+F / Find, case-insensitive next/previous search,
-wraparound, match counts, empty and not-found states, and Escape to close.
-Searching pauses Follow log; the field tooltip explains how to resume it.
-The Activity toolbar wraps to keep its destinations accessible at narrow widths.
-Phase 3: the rig Controls guide reveals pan/orbit/zoom/reset/selection gestures
-without permanently covering the viewport or changing exported camera geometry.
+Phase 1 replaces three competing visible launch buttons and the separate automatic
+training checkbox with an explicit run-mode selector and one primary action.
+Align & train dispatches alignment with force_auto_train=True; Align only uses
+skip_auto_train=True; Train only calls the existing training entry point.
+The workflow summary reflects the mode. Existing button lifecycle updates drive
+the mode-selector lock without a polling timer. Internal legacy button handles
+remain for compatibility with engine callbacks. Alignment modes synchronize the
+existing auto-training profile field. Train only is a transient explicit mode;
+it does not overwrite that stored field or add a new preset schema field.
 
-## Verification and limitations
-Per-phase tests passed: 9 desktop checks for phase 1, 10 for phase 2, 8 rig
-checks for phase 3. Commands: python -m unittest discover -s tests -p
-test_desktop_ui.py -v; python -m unittest discover -s tests -p test_rig_designer.py -v.
-Final isolated release-snapshot verification: 22 tests passed in 41.399s; all
-18 Python modules compiled and matched the staged baseline. The final runner
-removed the working root/versions parent from sys.path after importing the snapshot
-GUI, then asserted all GUI/renderer module origins remained inside the snapshot.
-Active-file whitespace checks passed; historical whitespace is preserved in copies.
-Audit evidence comes from prior desktop screenshots and current source inspection;
-no fresh screenshot or browser-model rendering validation is claimed this pass.
-No alignment/training jobs were started; no VRAM, RSS, or render-speed benchmarks
-were measured. Search operates only on the retained text buffer and adds no timer.
-Execution-mode redesign, job-event contracts, rig pane resizing, and full browser
-model-load validation are explicitly deferred, not represented as completed.
+Phase 2 adds Resume live to log search. Close/Escape keeps follow paused; Resume
+live closes search, enables following, and scrolls to the end. Query and raw log
+content are preserved. Reopening search restores the current match highlight.
+
+Phase 3 adds a numbered camera selector beside Previous/Next in the Orbit
+inspector. It tracks renderer selection and rebuilds choices on rig changes;
+selection clamps when the rig shrinks. Exported geometry is unchanged.
+
+## Verification
+Per-phase: 11 desktop tests (22.739s), 12 desktop tests (30.369s), 9 rig tests
+(24.196s). Commands: python -m unittest discover -s tests -p test_desktop_ui.py -v;
+python -m unittest discover -s tests -p test_rig_designer.py -v.
+The primary execution area was visually inspected in an isolated desktop preview.
+Final result: 25 isolated-snapshot tests passed in 95.664s; all 18 release modules
+compiled and matched the staged baseline. GUI/renderer module origins were verified
+to exclude working-tree imports. Active-file whitespace checks passed.
+The first final run passed 24/25: its layout test sampled a card corner that could
+be clipped after focus reveal. The test now samples the visible viewport/card
+intersection and uses an on-screen window origin; the complete rerun passed. Engine commands
+were mocked; no training/alignment workload or GPU benchmark was started.
+No VRAM, RSS, or render-speed improvements are claimed. No new polling timer was
+introduced. Full browser model-load and cross-monitor DPI validation remain open.
 
 ## Release integrity
-Pre-existing uncommitted engine, GUI, and rig renderer edits are excluded. Their
-working files are preserved. Shared GUI/CLI/training version changes are staged
-from the committed baseline; the snapshot reproduces the intended commit.
-The base-10 odometer advances from v0.0.4.9 to v0.0.5.0. Launchers rebuilt with
-csc.exe via version_manager.py --bump. Consolidated backup: versions/v0.0.5.0.
+Pre-existing edits in seven engine/GUI/renderer files remain separate. Shared
+version-only changes are staged from HEAD, and the snapshot is copied from the
+intended index rather than capturing unrelated working edits.
+Base-10 bump: v0.0.5.0 to v0.0.5.1; launchers rebuilt with csc.exe.
+The consolidated-root backup is versions/v0.0.5.1 (no retired duplicate tree).
 
 ## Modified files
 - desktop_ui.py; rig_designer_ui.py.
 - tests/test_desktop_ui.py; tests/test_rig_designer.py.
-- docs/DESIGN_CRITIQUE.md; docs/DESIGN_IMPLEMENTATION_PLAN.md.
-- walkthrough.md; artifacts/walkthrough.md; docs/WALKTHROUGH_v0.0.5.0.md.
-- VERSION.txt; version-only updates to abu_align_gui.py, align_cli.py, train_engine.py.
-- Abu_Align.bat/.exe; Abu_Align_and_Train.bat/.exe; historical v0.0.5.0 executables.
-- versions/v0.0.5.0/ scripts, launchers, version, and audit/release documents.
+- docs/DESIGN_CRITIQUE_PASS_2.md; docs/DESIGN_PLAN_PASS_2.md.
+- walkthrough.md; artifacts/walkthrough.md; docs/WALKTHROUGH_v0.0.5.1.md.
+- VERSION.txt; version-only changes in abu_align_gui.py, align_cli.py, train_engine.py.
+- Abu_Align.bat/.exe; Abu_Align_and_Train.bat/.exe; archived v0.0.5.1 launchers.
+- versions/v0.0.5.1/ release scripts, launchers, version, audit, and walkthrough.

@@ -128,6 +128,45 @@ class DesktopTests(unittest.TestCase):
         search.hide()
         self.assertEqual(self.app.console.get("1.0", "end"), original)
 
+    def test_run_mode_dispatch_and_lifecycle_lock(self):
+        with patch.object(self.app, "_start_alignment") as align, patch.object(self.app, "_start_train_only") as train:
+            self.app.run_mode_var.set("Align & train")
+            self.app.one_click_btn.invoke()
+            align.assert_called_once_with(force_auto_train=True)
+            train.assert_not_called()
+            align.reset_mock()
+            self.app.run_mode_var.set("Align only")
+            self.app.one_click_btn.invoke()
+            align.assert_called_once_with(skip_auto_train=True)
+            self.assertFalse(self.app.auto_train_var.get())
+            align.reset_mock()
+            self.app.run_mode_var.set("Train only")
+            self.app.one_click_btn.invoke()
+            train.assert_called_once_with()
+            align.assert_not_called()
+            self.assertIn("Training only", self.app.workflow_summary.cget("text"))
+            self.app.one_click_btn.config(state="disabled")
+            self.assertEqual(str(self.app.run_mode_combo.cget("state")), "disabled")
+            self.app.one_click_btn.configure(state="normal")
+            self.assertEqual(str(self.app.run_mode_combo.cget("state")), "readonly")
+
+    def test_log_resume_is_explicit_and_preserves_query(self):
+        self.app._log("warning here\nlatest line\n")
+        search = self.app.log_search
+        search.query.set("warning")
+        search.hide()
+        self.assertFalse(self.app.follow_log_var.get())
+        search.show()
+        self.assertTrue(self.app.console.tag_ranges("log_match"))
+        original = self.app.console.get("1.0", "end")
+        with patch.object(self.app.console, "see") as see:
+            search.resume_live()
+            see.assert_called_once_with("end")
+        self.assertTrue(self.app.follow_log_var.get())
+        self.assertEqual(search.query.get(), "warning")
+        self.assertFalse(search.frame.winfo_manager())
+        self.assertEqual(self.app.console.get("1.0", "end"), original)
+
     def test_video_controls_follow_sampling_and_format(self):
         self.root.deiconify()
         self.app._open_video_extractor_dialog()

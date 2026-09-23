@@ -207,14 +207,32 @@ def enhance_rig_designer(app, ctx):
         redraw()
     next_button = button(inspector, "Next →", lambda: select_camera(1))
     next_button.pack(side="right")
+    camera_number = tk.StringVar(master=dialog)
+    camera_picker = ttk.Combobox(inspector, textvariable=camera_number, state="readonly", width=4)
+    camera_picker.pack(side="right", padx=6)
+    def choose_camera(event=None):
+        rig = ctx["get_current_rig"]()
+        try:
+            index = int(camera_number.get()) - 1
+        except ValueError:
+            return
+        if rig:
+            renderer.selected = max(0, min(index, len(rig)-1))
+            redraw()
+    camera_picker.bind("<<ComboboxSelected>>", choose_camera)
     previous_button = button(inspector, "← Previous", lambda: select_camera(-1))
     previous_button.pack(side="right", padx=6)
     for control in (next_button, previous_button):
         control.configure(padx=8, pady=4)
     def inspect_camera(event=None):
         rig = ctx["get_current_rig"]()
+        choices = tuple(f"{i+1:02d}" for i in range(len(rig)))
+        if tuple(camera_picker.cget("values")) != choices:
+            camera_picker.configure(values=choices)
+        camera_picker.configure(state="readonly" if rig else "disabled")
         if rig:
             index = min(renderer.selected, len(rig)-1)
+            camera_number.set(choices[index])
             name, yaw, pitch, roll, fov = rig[index]
             camera_text.configure(text=f"CAMERA {index+1:02d} / {len(rig):02d}\nYaw {yaw:g}° · Pitch {pitch:g}° · FOV {fov:g}°")
     ctx["viz_canvas"].bind("<<RigRendered>>", inspect_camera)
@@ -231,7 +249,8 @@ def enhance_rig_designer(app, ctx):
             control.configure(fg=ACCENT if ctx["canvas_view_mode_var"].get() == mode else MUTED)
     ctx["canvas_view_mode_var"].trace_add("write", sync_view)
     sync_view()
-    inspector.bind("<Configure>", lambda e: camera_text.configure(wraplength=max(120, e.width-230)))
+    inspector.bind("<Configure>", lambda e: camera_text.configure(wraplength=max(100,
+        e.width-next_button.winfo_reqwidth()-previous_button.winfo_reqwidth()-camera_picker.winfo_reqwidth()-60)))
     ctx["telemetry_card"].configure(text="Rig summary", fg=MUTED, bd=0)
     ctx["t_c1"].pack_configure(side="top", fill="x", expand=False)
     ctx["t_c2"].pack_configure(side="top", fill="x", expand=False)
@@ -301,5 +320,5 @@ def enhance_rig_designer(app, ctx):
         redraw=redraw, get_rig=ctx["get_current_rig"], close=ctx["on_close_dialog"], controls=controls,
         focus_view=focus_view, focused=focused, select_camera=select_camera, camera_text=camera_text,
         inspector=inspector, toggle_display=toggle_display, display_open=display_open,
-        controls_guide=controls_guide, toggle_guide=toggle_guide)
+        controls_guide=controls_guide, toggle_guide=toggle_guide, camera_picker=camera_picker)
     dialog.after_idle(redraw)

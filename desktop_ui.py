@@ -43,8 +43,20 @@ def label(parent, text, size=10, muted=False, **kwargs):
                     fg=MUTED if muted else TEXT, font=("Segoe UI", size), **kwargs)
 
 
+class StateAwareButton(tk.Button):
+    """Let related presentation controls follow the existing button lifecycle."""
+    def configure(self, cnf=None, **kwargs):
+        result = super().configure(cnf, **kwargs)
+        listener = getattr(self, "state_listener", None)
+        if listener is not None:
+            listener(str(self.cget("state")))
+        return result
+
+    config = configure
+
+
 def button(parent, text, command, primary=False, **kwargs):
-    widget = tk.Button(parent, text=text, command=command,
+    widget = StateAwareButton(parent, text=text, command=command,
                        bg=ACCENT if primary else FIELD,
                        fg=BG if primary else TEXT,
                        activebackground="#93e8d2" if primary else BORDER,
@@ -350,7 +362,8 @@ class LogSearch:
         self.entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
         self.count = label(self.frame, "", muted=True)
         self.count.pack(side="left", padx=8)
-        for title, command in [("Previous", lambda: self.find(-1)), ("Next", self.find), ("Close", self.hide)]:
+        for title, command in [("Previous", lambda: self.find(-1)), ("Next", self.find),
+                               ("Resume live", self.resume_live), ("Close", self.hide)]:
             button(self.frame, title, command).pack(side="left", padx=3)
         self.current = -1
         self.query.trace_add("write", self.changed)
@@ -363,11 +376,18 @@ class LogSearch:
         self.frame.pack(fill="x", pady=(0, 8), before=self.console.frame)
         self.entry.focus_set()
         self.entry.selection_range(0, "end")
+        if self.query.get():
+            self.find(0)
 
     def hide(self):
         self.frame.pack_forget()
         self.console.tag_remove("log_match", "1.0", "end")
         self.console.focus_set()
+
+    def resume_live(self):
+        self.hide()
+        self.follow.set(True)
+        self.console.see("end")
 
     def changed(self, *_):
         self.current = -1
@@ -402,13 +422,14 @@ class LogSearch:
 def build_workspace(app, tooltip):
     configure_theme(app)
     root = app.root
+    app.run_mode_var = tk.StringVar(master=root, value="Align & train" if app.auto_train_var.get() else "Align only")
     # Header: identity on the left, secondary destinations on the right.
     header = tk.Frame(root, bg=BG, padx=24, pady=12)
     header.pack(fill="x")
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.5.0", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.5.1", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
     prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
         activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,
@@ -431,9 +452,11 @@ def build_workspace(app, tooltip):
                      "opensfm": "OpenSfM", "360dvo": "360DVO"}.get(app.engine_var.get(), app.engine_var.get())
         training = {"lichtfeld": "LichtFeld Studio", "splatfacto": "Splatfacto",
                     "3dgrut": "3DGRUT", "pfgs360": "PFGS360"}.get(app.train_engine_var.get(), app.train_engine_var.get())
-        app.workflow_summary.configure(text=(f"WORKFLOW   {alignment}  →  {training}"
-            if app.auto_train_var.get() else f"WORKFLOW   {alignment}  ·  Alignment only"))
-    for variable in (app.engine_var, app.train_engine_var, app.auto_train_var):
+        mode = app.run_mode_var.get()
+        app.workflow_summary.configure(text=(f"WORKFLOW   {training}  ·  Training only" if mode == "Train only"
+            else f"WORKFLOW   {alignment}  →  {training}" if mode == "Align & train"
+            else f"WORKFLOW   {alignment}  ·  Alignment only"))
+    for variable in (app.engine_var, app.train_engine_var, app.run_mode_var):
         variable.trace_add("write", summarize_workflow)
     summarize_workflow()
     status = tk.Frame(footer, bg=BG)
@@ -457,13 +480,44 @@ def build_workspace(app, tooltip):
     app.progress_bar.pack(fill="x", pady=(0, 12))
     actions = tk.Frame(footer, bg=BG)
     actions.pack(fill="x")
-    app.one_click_btn = button(actions, "Align & train", app._start_alignment, primary=True)
-    app.auto_train_var.trace_add("write", lambda *_: app.one_click_btn.configure(
-        text="Align & train" if app.auto_train_var.get() else "Start alignment"))
+    app.run_mode_combo = ttk.Combobox(actions, textvariable=app.run_mode_var,
+        values=("Align & train", "Align only", "Train only"), state="readonly", width=16)
+    app.run_mode_combo.pack(side="left", padx=(0, 8))
+    def start_selected_run():
+        if app.is_running:
+            return
+        mode = app.run_mode_var.get()
+        if mode == "Align & train":
+            app._start_alignment(force_auto_train=True)
+        elif mode == "Align only":
+            app._start_alignment(skip_auto_train=True)
+        elif mode == "Train only":
+            app._start_train_only()
+    app.one_click_btn = button(actions, "Start run", start_selected_run, primary=True)
+    app.one_click_btn.pack(side="left", padx=(0, 8))
+    app.one_click_btn.state_listener = lambda state: app.run_mode_combo.configure(
+        state="disabled" if state == "disabled" else "readonly")
+    syncing_mode = [False]
+    def mode_changed(*_):
+        if syncing_mode[0]:
+            return
+        syncing_mode[0] = True
+        try:
+            mode = app.run_mode_var.get()
+            if mode != "Train only":
+                app.auto_train_var.set(mode == "Align & train")
+            app.one_click_btn.configure(text={"Align only": "Start alignment", "Train only": "Start training"}.get(mode, "Start run"))
+        finally:
+            syncing_mode[0] = False
+    def auto_training_changed(*_):
+        if not syncing_mode[0] and app.run_mode_var.get() != "Train only":
+            app.run_mode_var.set("Align & train" if app.auto_train_var.get() else "Align only")
+    app.run_mode_var.trace_add("write", mode_changed)
+    app.auto_train_var.trace_add("write", auto_training_changed)
+    mode_changed()
+    # Existing engine lifecycle code still enables/disables these internal handles.
     app.start_btn = button(actions, "Align only", lambda: app._start_alignment(skip_auto_train=True))
     app.train_only_btn = button(actions, "Train only", app._start_train_only)
-    for widget in (app.one_click_btn, app.start_btn, app.train_only_btn):
-        widget.pack(side="left", padx=(0, 8))
     app.stop_btn = button(actions, "Stop", app._stop_alignment, state="disabled")
     app.stop_btn.pack(side="right")
     app.save_finish_btn = button(actions, "Save & finish", app._save_and_finish_training, state="disabled")
@@ -585,7 +639,6 @@ def build_workspace(app, tooltip):
     app.train_target_run_cb = field(general, "Alignment run target", app.train_target_run_var,
           ["Latest Run (Auto-Detect)"], width=26)
     tooltip(app.train_target_run_cb, "Alignment Output Run Target:\nSelect which alignment run in results/ to use for 3DGS training.\n• Latest Run (Auto-Detect): Automatically detects and uses the newest sparse_* alignment.\n• Specific run: Explicitly targets that alignment run.")
-    tk.Checkbutton(general, text="Train after alignment", variable=app.auto_train_var).pack(side="left", padx=14)
     app.training_summary = general
     for child in general.winfo_children():
         child.pack_forget()
@@ -687,7 +740,8 @@ def build_workspace(app, tooltip):
             polish_dialog(event.widget)
     root.bind_class("Toplevel", "<Map>", on_map, add="+")
     for widget, text in [
-        (app.one_click_btn, "Run the configured workflow. The Training tab controls automatic training."),
+        (app.one_click_btn, "Start the mode selected beside this button."),
+        (app.run_mode_combo, "Choose alignment plus training, alignment alone, or training alone. Locked while a run is active."),
         (app.start_btn, "Run alignment without training, regardless of the automatic training setting."),
         (app.train_only_btn, "Train from an existing reconstruction or a supported pose-free input."),
         (app.preset_combo, "No saved profiles yet? Choose Save as. Profiles preserve engine settings, not the dataset."),

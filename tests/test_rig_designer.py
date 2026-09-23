@@ -38,7 +38,8 @@ class RigDesignerTests(unittest.TestCase):
         self.root.update()
 
     def test_tabs_and_controls_visible_at_minimum_size(self):
-        self.ui.dialog.geometry("1120x760")
+        self.ui.dialog.geometry("1120x760+40+40")
+        self.ui.dialog.lift()
         for index, page in enumerate(self.ui.pages):
             self.ui.tabs.select(index)
             self.root.update()
@@ -46,8 +47,12 @@ class RigDesignerTests(unittest.TestCase):
             self.assertEqual(len(cards), 1)
             self.assertTrue(cards[0].winfo_ismapped())
             self.assertGreater(cards[0].winfo_height(), 50)
-            # A sibling-hosted card must be above the Notebook, not hidden behind it.
-            x, y = cards[0].winfo_rootx()+5, cards[0].winfo_rooty()+5
+            # Focus reveal may scroll the top of the card out of view. Hit-test
+            # the visible intersection, not a coordinate clipped by the canvas.
+            x = max(cards[0].winfo_rootx(), page.canvas.winfo_rootx()) + 5
+            y = max(cards[0].winfo_rooty(), page.canvas.winfo_rooty()) + 5
+            self.assertLess(y, min(cards[0].winfo_rooty()+cards[0].winfo_height(),
+                                   page.canvas.winfo_rooty()+page.canvas.winfo_height()))
             hit = self.root.winfo_containing(x, y)
             self.assertTrue(str(hit).startswith(str(cards[0])), (index, hit))
         self.assertGreater(self.ui.canvas.winfo_width(), 400)
@@ -126,6 +131,25 @@ class RigDesignerTests(unittest.TestCase):
         self.root.update()
         self.assertFalse(self.ui.controls_guide.winfo_ismapped())
         self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
+    def test_direct_camera_selection_and_rig_shrink(self):
+        self.ui.mode.set("fibonacci")
+        self.ui.cameras.set(32)
+        self.root.update()
+        original = self.ui.get_rig()
+        self.ui.camera_picker.set("32")
+        self.ui.camera_picker.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(self.ui.renderer.selected, 31)
+        self.assertEqual(self.ui.get_rig(), original)
+        self.ui.mode.set("cubemap")
+        self.root.update()
+        self.assertEqual(len(self.ui.camera_picker.cget("values")), len(self.ui.get_rig()))
+        self.assertEqual(int(self.ui.camera_picker.get()), self.ui.renderer.selected+1)
+        self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        self.assertGreater(self.ui.camera_picker.winfo_width(), 30)
         self.assertEqual(self.errors_seen, [])
 
 
