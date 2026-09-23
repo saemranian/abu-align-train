@@ -253,7 +253,7 @@ class OpenSfMEngine:
     """
     def __init__(
         self,
-        dataset_path: str,
+        dataset_path: str = "",
         output_dir: Optional[str] = None,
         projection_type: str = "equirectangular",
         feature_type: str = "SIFT",
@@ -261,11 +261,13 @@ class OpenSfMEngine:
         feature_min_frames: int = 3000,
         matching_order_neighbors: int = 5,
         feature_process_size: int = 2048,
-        bundle_interval: int = 1,
+        bundle_interval: int = 10,
         optimize_camera_parameters: bool = False,
         use_gpu: bool = True
     ):
-        self.dataset_path = os.path.abspath(dataset_path)
+        if not dataset_path and output_dir:
+            dataset_path = output_dir
+        self.dataset_path = os.path.abspath(dataset_path or os.getcwd())
         self.output_dir = os.path.abspath(output_dir or os.path.join(self.dataset_path, "opensfm_workspace"))
         self.projection_type = projection_type.lower()
         self.feature_type = feature_type.upper()
@@ -497,19 +499,33 @@ class OpenSfMEngine:
         # Copy reconstruction point cloud ply if available
         ply_candidates = [
             os.path.join(self.output_dir, "reconstruction.ply"),
+            os.path.join(self.output_dir, "opensfm_workspace", "reconstruction.ply"),
+            os.path.join(os.path.dirname(self.output_dir), "opensfm_workspace", "reconstruction.ply"),
             os.path.join(self.output_dir, "depthmaps", "merged.ply"),
             os.path.join(self.output_dir, "points3D.ply"),
             os.path.join(colmap_source, "points3D.ply")
         ]
+        found_ply = None
         for ply_file in ply_candidates:
-            if os.path.isfile(ply_file):
+            if os.path.isfile(ply_file) and os.path.getsize(ply_file) > 1000:
                 shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points.ply"))
                 shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points3D.ply"))
+                found_ply = ply_file
                 break
 
         # Also preserve OpenSfM reconstruction.json and metadata.json for direct PFGS360 training
-        rec_json = os.path.join(self.output_dir, "reconstruction.json")
-        if os.path.isfile(rec_json):
+        rec_json_candidates = [
+            os.path.join(self.output_dir, "reconstruction.json"),
+            os.path.join(self.output_dir, "opensfm_workspace", "reconstruction.json"),
+            os.path.join(os.path.dirname(self.output_dir), "opensfm_workspace", "reconstruction.json")
+        ]
+        rec_json = None
+        for rj in rec_json_candidates:
+            if os.path.isfile(rj):
+                rec_json = rj
+                break
+
+        if rec_json:
             osfm_target = os.path.join(target_3dgs_dir, "opensfm")
             os.makedirs(osfm_target, exist_ok=True)
             shutil.copy2(rec_json, os.path.join(osfm_target, "reconstruction.json"))
@@ -520,7 +536,7 @@ class OpenSfMEngine:
             opensfm_to_transforms_json(
                 reconstruction_json_path=rec_json,
                 output_transforms_file=tf_path,
-                ply_source=os.path.join(target_3dgs_dir, "points.ply") if os.path.isfile(os.path.join(target_3dgs_dir, "points.ply")) else None,
+                ply_source=found_ply or (os.path.join(target_3dgs_dir, "points.ply") if os.path.isfile(os.path.join(target_3dgs_dir, "points.ply")) else None),
                 output_ply_dest=pts_path
             )
 

@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.2 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.3 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -342,7 +342,8 @@ def train_nerfstudio_splatfacto(
         "--data", dataset_abs,
         "--output-dir", os.path.abspath(output_dir),
         f"--max-num-iterations={iterations}",
-        "--vis", "tensorboard",
+        "--vis", "viewer+tensorboard",
+        "--viewer.quit-on-train-completion", "True",
         "--logging.steps-per-log=50",
     ]
 
@@ -383,6 +384,15 @@ def train_nerfstudio_splatfacto(
                 if p.endswith(".yml") or p.endswith(".yaml"):
                     config_path = p.strip()
                     log(f"        [Nerfstudio] Registered experiment config: {config_path}")
+
+        # Live 3D Stream: Detect Viser web viewer URL and auto-launch
+        if any(token in line_s for token in ["http://localhost:7007", "http://127.0.0.1:7007", "Viewer at:"]):
+            log(f"        [LIVE 3D STREAM] Viser Interactive 3D Viewer Live at: http://localhost:7007")
+            try:
+                import webbrowser
+                webbrowser.open("http://localhost:7007")
+            except Exception:
+                pass
 
         # Stream training steps periodically
         if any(k in line_s for k in ["Step", "step", "loss", "Saving", "Printing"]):

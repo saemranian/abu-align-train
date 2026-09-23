@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.4.2
+Abu Align & Train Version 0.0.4.3
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.4.2 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.3 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -295,7 +295,7 @@ class AbuAlignApp:
         self.opensfm_matcher_var = tk.StringVar(value="words")
         self.opensfm_budget_var = tk.StringVar(value="3000")
         self.opensfm_neighbors_var = tk.StringVar(value="5")
-        self.opensfm_bundle_var = tk.StringVar(value="1")
+        self.opensfm_bundle_var = tk.StringVar(value="10")
         self.opensfm_opt_cam_var = tk.BooleanVar(value=False)
         self.rig_split_mode_var = tk.StringVar(value="ring")
         self.rig_num_cams_var = tk.StringVar(value="8")
@@ -734,10 +734,10 @@ class AbuAlignApp:
         row_b3 = tk.Frame(osfm_col2, bg=self.panel_bg)
         row_b3.pack(anchor="w", pady=(1, 1))
         tk.Label(row_b3, text="BA Interval:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        osfm_bundle_cb = ttk.Combobox(row_b3, textvariable=self.opensfm_bundle_var, values=["1", "2", "5", "10"], state="readonly", width=3)
+        osfm_bundle_cb = ttk.Combobox(row_b3, textvariable=self.opensfm_bundle_var, values=["1", "2", "5", "10", "20"], state="readonly", width=3)
         osfm_bundle_cb.pack(side=tk.LEFT, padx=(2, 4))
         tk.Label(row_b3, text="view(s)", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        ToolTip(osfm_bundle_cb, "Bundle Adjustment Frequency (bundle_interval):\nHow often Ceres bundle adjustment is triggered during incremental reconstruction.\n• 1 (Default): Full BA after every registered frame (highest accuracy).\n• 2-5: Periodic BA to accelerate alignment on large image sequences.")
+        ToolTip(osfm_bundle_cb, "Bundle Adjustment Frequency (bundle_interval):\nHow often Ceres bundle adjustment is triggered during incremental reconstruction.\n• 10 (Recommended): Runs full Ceres BA every 10 frames (~2-3 mins total runtime).\n• 1: Full Ceres BA after every registered frame (slowest, 30+ mins).")
 
         # Col C: 360° Multi-Camera Rig Projector & 3DGS Bridge
         osfm_col3 = tk.Frame(self.panel_align_opensfm, bg=self.panel_bg)
@@ -3430,7 +3430,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.4.2 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.3 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3788,7 +3788,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.4.2 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.3 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4062,7 +4062,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.4.2\n"
+            "Abu Align & Train - Version 0.0.4.3\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

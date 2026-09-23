@@ -237,7 +237,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.2", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.4.3", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
 
     # Pin run controls to the bottom before allocating expandable notebook space.

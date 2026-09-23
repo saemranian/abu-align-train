@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.4.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.4.3 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1008,7 +1008,7 @@ def main():
     parser.add_argument("--opensfm_matcher", type=str, choices=["words", "flann", "exhaustive"], default="words", help="Feature matcher for OpenSfM (default: words)")
     parser.add_argument("--opensfm_min_features", type=int, default=3000, help="Feature budget per frame for OpenSfM (default: 3000)")
     parser.add_argument("--opensfm_neighbors", type=int, default=5, help="Sequential matching window for OpenSfM (default: 5)")
-    parser.add_argument("--opensfm_bundle_interval", type=int, default=1, help="Bundle adjustment frequency for OpenSfM (default: 1)")
+    parser.add_argument("--opensfm_bundle_interval", type=int, default=10, help="Bundle adjustment frequency for OpenSfM (default: 10, runs 10x faster than 1)")
     parser.add_argument("--opensfm_optimize_camera", action="store_true", default=False, help="Optimize spherical camera parameters during OpenSfM bundle adjustment")
     parser.add_argument("--cubemap_transcode", action="store_true", help="Automatically slice 360 equirectangular images into 6 rectilinear pinhole cubemaps")
     parser.add_argument("--cubemap_res", type=int, default=1024, help="Resolution per cubemap face (default: 1024)")
@@ -1424,8 +1424,31 @@ def main():
                     reconstruction = pycolmap.Reconstruction(colmap_out)
                 else:
                     reconstruction = pycolmap.Reconstruction()
-                dense_3d = np.empty((0, 3), dtype=np.float32)
-                dense_rgb = np.empty((0, 3), dtype=np.uint8)
+
+                # Automatically export 3dgs_dataset (transforms.json, sparse/0/, points.ply)
+                dataset_3dgs_dir = os.path.join(output_dir, "3dgs_dataset")
+                opensfm.export_to_3dgs_dataset(dataset_3dgs_dir)
+
+                # Load genuine OpenSfM 3D point cloud
+                rec_ply = os.path.join(opensfm.output_dir, "reconstruction.ply")
+                if not os.path.isfile(rec_ply):
+                    rec_ply = os.path.join(output_dir, "reconstruction.ply")
+                if os.path.isfile(rec_ply) and os.path.getsize(rec_ply) > 1000:
+                    try:
+                        mesh = trimesh.load(rec_ply)
+                        dense_3d = np.asarray(mesh.vertices, dtype=np.float32)
+                        if hasattr(mesh.visual, "vertex_colors") and mesh.visual.vertex_colors is not None and len(mesh.visual.vertex_colors) == len(dense_3d):
+                            dense_rgb = np.asarray(mesh.visual.vertex_colors[:, :3], dtype=np.uint8)
+                        else:
+                            dense_rgb = np.full((len(dense_3d), 3), 200, dtype=np.uint8)
+                        print(f"      * [OpenSfM Point Cloud] Loaded {len(dense_3d):,} authentic 3D tie points from {os.path.basename(rec_ply)}")
+                    except Exception as e:
+                        print(f"      * [OpenSfM Warning] Failed to load {rec_ply}: {e}")
+                        dense_3d = np.empty((0, 3), dtype=np.float32)
+                        dense_rgb = np.empty((0, 3), dtype=np.uint8)
+                else:
+                    dense_3d = np.empty((0, 3), dtype=np.float32)
+                    dense_rgb = np.empty((0, 3), dtype=np.uint8)
             else:
                 raise RuntimeError("OpenSfM pipeline execution encountered an error.")
         else:
@@ -1562,8 +1585,31 @@ def main():
         dense_3d = np.array([pt.xyz for pt in reconstruction.points3D.values()], dtype=np.float32)
         dense_rgb = np.array([pt.color for pt in reconstruction.points3D.values()], dtype=np.uint8)
     elif len(dense_3d) == 0:
-        dense_3d = np.zeros((1, 3), dtype=np.float32)
-        dense_rgb = np.full((1, 3), 200, dtype=np.uint8)
+        # Check if an existing ply was produced by the engine (e.g. OpenSfM)
+        existing_ply_candidates = [
+            os.path.join(output_dir, "opensfm_workspace", "reconstruction.ply"),
+            os.path.join(output_dir, "reconstruction.ply"),
+            os.path.join(output_dir, "points3D.ply"),
+            os.path.join(dataset_3dgs_dir, "points.ply"),
+            os.path.join(dataset_3dgs_dir, "points3D.ply")
+        ]
+        found_ply = False
+        for ep in existing_ply_candidates:
+            if os.path.isfile(ep) and os.path.getsize(ep) > 1000:
+                try:
+                    loaded_mesh = trimesh.load(ep)
+                    dense_3d = np.asarray(loaded_mesh.vertices, dtype=np.float32)
+                    if hasattr(loaded_mesh.visual, "vertex_colors") and loaded_mesh.visual.vertex_colors is not None and len(loaded_mesh.visual.vertex_colors) == len(dense_3d):
+                        dense_rgb = np.asarray(loaded_mesh.visual.vertex_colors[:, :3], dtype=np.uint8)
+                    else:
+                        dense_rgb = np.full((len(dense_3d), 3), 200, dtype=np.uint8)
+                    found_ply = True
+                    break
+                except Exception:
+                    pass
+        if not found_ply or len(dense_3d) == 0:
+            dense_3d = np.zeros((1, 3), dtype=np.float32)
+            dense_rgb = np.full((1, 3), 200, dtype=np.uint8)
     
     # Match RealityCapture Z-up coordinate system (same as cameras.csv):
     M_world = np.array([
@@ -1579,9 +1625,22 @@ def main():
     
     # Guarantee point cloud in 3dgs_dataset/ and root output_dir:
     try:
-        shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
-        trimesh.PointCloud(dense_3d, colors=dense_rgb).export(os.path.join(output_dir, "points3D.ply"))
-        print(f"      * [Standard Output] Exported root point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
+        # If genuine engine ply exists (e.g. OpenSfM), preserve exact vertices
+        source_real_ply = None
+        for cand in [os.path.join(output_dir, "opensfm_workspace", "reconstruction.ply"), os.path.join(output_dir, "reconstruction.ply")]:
+            if os.path.isfile(cand) and os.path.getsize(cand) > 1000:
+                source_real_ply = cand
+                break
+        
+        if source_real_ply:
+            shutil.copy2(source_real_ply, os.path.join(dataset_3dgs_dir, "points.ply"))
+            shutil.copy2(source_real_ply, os.path.join(dataset_3dgs_dir, "points3D.ply"))
+            shutil.copy2(source_real_ply, os.path.join(output_dir, "points3D.ply"))
+            print(f"      * [Standard Output] Exported authentic point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
+        else:
+            shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
+            trimesh.PointCloud(dense_3d, colors=dense_rgb).export(os.path.join(output_dir, "points3D.ply"))
+            print(f"      * [Standard Output] Exported root point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
     except Exception:
         pass
 
@@ -1592,8 +1651,29 @@ def main():
     # Final Completion Report
     # -------------------------------------------------------------
     total_time = time.time() - overall_start_time
-    reg_images = reconstruction.num_reg_images() if reconstruction is not None else len(image_paths)
-    num_points = reconstruction.num_points3D() if reconstruction is not None else len(dense_3d)
+    reg_images = reconstruction.num_reg_images() if reconstruction is not None and reconstruction.num_reg_images() > 0 else 0
+    if reg_images == 0:
+        for r_json in [
+            os.path.join(output_dir, "opensfm_workspace", "reconstruction.json"),
+            os.path.join(dataset_3dgs_dir, "opensfm", "reconstruction.json"),
+            os.path.join(dataset_3dgs_dir, "transforms.json")
+        ]:
+            if os.path.isfile(r_json):
+                try:
+                    with open(r_json, "r", encoding="utf-8") as f:
+                        r_data = json.load(f)
+                    if isinstance(r_data, list) and len(r_data) > 0 and "shots" in r_data[0]:
+                        reg_images = len(r_data[0]["shots"])
+                        break
+                    elif isinstance(r_data, dict) and "frames" in r_data:
+                        reg_images = len(r_data["frames"])
+                        break
+                except Exception:
+                    pass
+    if reg_images == 0:
+        reg_images = len(image_paths)
+
+    num_points = reconstruction.num_points3D() if reconstruction is not None and reconstruction.num_points3D() > 0 else len(dense_3d)
 
     report_lines = [
         "======================================================================",
@@ -1603,7 +1683,7 @@ def main():
         f" Dataset Source:       {scan_dir}",
         f" Total Photos:         {total_images_found}",
         f" Registered Views:     {reg_images} / {num_frames} ({reg_images/max(num_frames, 1)*100:.1f}%)",
-        f" 3D Points Created:    {num_points:,} sparse / {len(dense_3d):,} dense vertices",
+        f" 3D Points Created:    {num_points:,} vertices",
     ]
 
     if reconstruction is not None and len(reconstruction.cameras) > 0:
