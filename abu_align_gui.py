@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.4.5
+Abu Align & Train Version 0.0.4.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.4.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -357,6 +357,7 @@ class AbuAlignApp:
         self.pfgs_filter_sky_var = tk.BooleanVar(value=True)
         self.pfgs_sky_depth_var = tk.StringVar(value="50.0")
         self.pfgs_sh_var = tk.StringVar(value="3")
+        self.pfgs_downscale_var = tk.StringVar(value="1 (Full 100% Quality)")
 
         # Capture configuration only, before legacy aliases and UI state exist.
         self._preset_vars = {
@@ -1100,6 +1101,16 @@ class AbuAlignApp:
         pfgs_sh_cb = ttk.Combobox(pfgs_sh_row, textvariable=self.pfgs_sh_var, values=["0", "1", "2", "3", "4"], state="readonly", width=4)
         pfgs_sh_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(pfgs_sh_cb, "Spherical Harmonics Degree:\nDegree 3 is standard. Degree 4 provides ultra-rich specular highlights.")
+
+        pfgs_res_row = tk.Frame(pfgs_col3, bg=self.panel_bg)
+        pfgs_res_row.pack(anchor="w", pady=(2, 2))
+        lbl_res = tk.Label(pfgs_res_row, text="Train Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg)
+        lbl_res.pack(side=tk.LEFT)
+        pfgs_res_cb = ttk.Combobox(pfgs_res_row, textvariable=self.pfgs_downscale_var, values=["1 (Full 100% Quality)", "2 (Half Res - 2x Speed)", "4 (Quarter Res - Fast)", "Auto (<= 1600px Max)"], state="readonly", width=19, font=("Segoe UI", 8))
+        pfgs_res_cb.pack(side=tk.LEFT, padx=4)
+        ToolTip(lbl_res, "Training dataset image resolution / downscale factor passed to Nerfstudio dataparser.")
+        ToolTip(pfgs_res_cb, "Training Image Resolution:\n• 1 (Full 100% Quality): Loads training equirectangular images at full native resolution.\n• 2 (Half Res): Downscales 2x for faster iterations and lower VRAM.\n• 4 (Quarter Res): Downscales 4x for ultra-fast previews.\n• Auto: Nerfstudio default (automatically downscales if max dimension > 1600px).\n\nNOTE: The 'Resolution: 402x512px' seen in Viser (localhost:7007) is the browser viewport preview resolution (Aspect Ratio × 'Max res: 512' slider), NOT this training dataset resolution.")
+        tk.Label(pfgs_col3, text="💡 Viser 7007: adjust 'Max res' slider in browser", font=("Segoe UI", 8), fg="#94a3b8", bg=self.panel_bg).pack(anchor="w", pady=(1, 0))
 
     def _update_train_panel(self):
         engine = self.train_engine_var.get()
@@ -2947,6 +2958,15 @@ class AbuAlignApp:
             return int(digits[0])
         return 8
 
+    def _parse_pfgs_downscale(self):
+        raw = str(self.pfgs_downscale_var.get()).strip().lower()
+        if "auto" in raw:
+            return "auto"
+        digits = re.findall(r"\d+", raw)
+        if digits:
+            return str(digits[0])
+        return "1"
+
     def _clear_dataset_cache(self):
         dataset_path = self.dataset_var.get().strip()
         if not os.path.isdir(dataset_path):
@@ -3218,6 +3238,7 @@ class AbuAlignApp:
                 "--pfgs_match_views", str(self._parse_pfgs_match_views()),
                 "--pfgs_densify_views", str(self.pfgs_densify_views_var.get()).strip(),
                 "--sh_degree", str(self.pfgs_sh_var.get()),
+                "--pfgs_downscale", self._parse_pfgs_downscale(),
             ])
             if self.pfgs_filter_sky_var.get():
                 cmd.append("--pfgs_filter_sky")
@@ -3398,6 +3419,7 @@ class AbuAlignApp:
                 "--pfgs_match_views", str(self._parse_pfgs_match_views()),
                 "--pfgs_densify_views", str(self.pfgs_densify_views_var.get()).strip(),
                 "--sh_degree", str(self.pfgs_sh_var.get()),
+                "--pfgs_downscale", self._parse_pfgs_downscale(),
             ])
             if self.pfgs_filter_sky_var.get():
                 cmd.append("--pfgs_filter_sky")
@@ -3434,7 +3456,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.4.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3866,7 +3888,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.4.5 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4140,7 +4162,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.4.5\n"
+            "Abu Align & Train - Version 0.0.4.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

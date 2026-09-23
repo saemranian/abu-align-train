@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.4.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.4.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1087,6 +1087,7 @@ def main():
     parser.add_argument("--no_pfgs_inlier", dest="pfgs_inlier", action="store_false", help="Disable DIA-Densify")
     parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
+    parser.add_argument("--pfgs_downscale", choices=["auto", "1", "2", "4"], default="1", help="Image downscale factor for PFGS360 ('1' for full res, '2' for half, 'auto' for auto <=1600px)")
 
     args = parser.parse_args()
 
@@ -1910,6 +1911,7 @@ def main():
                 pfgs_consist=getattr(args, "pfgs_consist", True),
                 pfgs_inlier=getattr(args, "pfgs_inlier", True),
                 pfgs_align_depth=getattr(args, "pfgs_align_depth", True),
+                pfgs_downscale=getattr(args, "pfgs_downscale", "1"),
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:

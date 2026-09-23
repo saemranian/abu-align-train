@@ -69,7 +69,7 @@ def enhance_rig_designer(app, ctx):
         card.configure(text="", bd=0, padx=0, pady=0)
         card.pack(in_=page.body, fill="x")
         card.lift()
-    notebook.select(1)
+    notebook.select(1 if ctx["in_var"].get() else 0)
     notebook.enable_traversal()
     friendly_choices(ctx["mode_cb"], ctx["mode_var"],
                      {"ring": "Ring", "cubemap": "Cubemap", "dome": "Dome", "fibonacci": "Fibonacci sphere"})
@@ -127,6 +127,19 @@ def enhance_rig_designer(app, ctx):
     view_tools.pack(fill="x", before=ctx["canvas_card"])
     renderer = ctx["renderer"]
     orbit, redraw = ctx["orbit_state"], ctx["draw_visualizer"]
+    focused = tk.BooleanVar(value=False)
+    def focus_view(restore=False):
+        focused.set(False if restore else not focused.get())
+        if focused.get():
+            left.pack_forget()
+        else:
+            left.pack(side="left", fill="both", expand=False, padx=(0, 14), before=right)
+        focus_button.configure(text="Show settings" if focused.get() else "Focus view")
+        dialog.after_idle(redraw)
+    focus_button = button(view_tools, "Focus view", focus_view)
+    focus_button.pack(side="right")
+    focus_button.configure(pady=4)
+    dialog.bind("<Escape>", lambda e: focus_view(True) if focused.get() else None, add="+")
     def view(yaw, pitch):
         ctx["canvas_view_mode_var"].set("3d")
         orbit.update(yaw=yaw, pitch=pitch, pan_x=0, pan_y=0, dist=3.4)
@@ -157,6 +170,29 @@ def enhance_rig_designer(app, ctx):
     ctx["viz_canvas"].configure(bg="#11191e", takefocus=True)
     ctx["viz_canvas"].configure(highlightthickness=1, highlightbackground="#11191e", highlightcolor=BORDER)
     ctx["canvas_card"].configure(bg="#11191e", highlightthickness=0)
+    inspector = tk.Frame(right, bg=SURFACE, padx=12, pady=10)
+    inspector.pack(fill="x", after=ctx["canvas_card"])
+    camera_text = label(inspector, "", muted=True, anchor="w", justify="left")
+    camera_text.pack(side="left", fill="x", expand=True)
+    def select_camera(step):
+        rig = ctx["get_current_rig"]()
+        renderer.selected = (renderer.selected + step) % max(1, len(rig))
+        ctx["canvas_view_mode_var"].set("3d")
+        redraw()
+    next_button = button(inspector, "Next →", lambda: select_camera(1))
+    next_button.pack(side="right")
+    previous_button = button(inspector, "← Previous", lambda: select_camera(-1))
+    previous_button.pack(side="right", padx=6)
+    for control in (next_button, previous_button):
+        control.configure(padx=8, pady=4)
+    def inspect_camera(event=None):
+        rig = ctx["get_current_rig"]()
+        if rig:
+            index = min(renderer.selected, len(rig)-1)
+            name, yaw, pitch, roll, fov = rig[index]
+            camera_text.configure(text=f"CAMERA {index+1:02d} / {len(rig):02d}\nYaw {yaw:g}° · Pitch {pitch:g}° · FOV {fov:g}°")
+    ctx["viz_canvas"].bind("<<RigRendered>>", inspect_camera)
+    inspector.bind("<Configure>", lambda e: camera_text.configure(wraplength=max(120, e.width-230)))
     ctx["telemetry_card"].configure(text="Rig summary", fg=MUTED, bd=0)
     ctx["t_c1"].pack_configure(side="top", fill="x", expand=False)
     ctx["t_c2"].pack_configure(side="top", fill="x", expand=False)
@@ -171,6 +207,7 @@ def enhance_rig_designer(app, ctx):
             ctx["telemetry_card"].pack(fill="x")
         else:
             ctx["telemetry_card"].pack_forget()
+        summary_button.configure(text="Hide details" if summary_visible.get() else "Details")
 
     ctx["split_btn"].configure(text="Export views", bg=ACCENT, fg=BG, activebackground="#9ce8d3")
     ctx["use_ds_btn"].configure(text="Use dataset")
@@ -236,5 +273,6 @@ def enhance_rig_designer(app, ctx):
     app.rig_designer = SimpleNamespace(dialog=dialog, tabs=notebook, pages=pages, canvas=canvas,
         renderer=renderer, orbit=orbit, mode=ctx["mode_var"], view=ctx["canvas_view_mode_var"],
         cameras=ctx["num_cams_var"], fov=ctx["fov_var"], width=ctx["out_w_var"], height=ctx["out_h_var"],
-        redraw=redraw, get_rig=ctx["get_current_rig"], close=ctx["on_close_dialog"], controls=controls)
+        redraw=redraw, get_rig=ctx["get_current_rig"], close=ctx["on_close_dialog"], controls=controls,
+        focus_view=focus_view, focused=focused, select_camera=select_camera, camera_text=camera_text)
     dialog.after_idle(redraw)

@@ -107,6 +107,7 @@ class DesktopTests(unittest.TestCase):
             command = thread.call_args.kwargs["args"][0]
             self.assertIn("--engine", command)
             self.assertIn("pfgs360", command)
+            self.assertIn("--pfgs_downscale", command)
             self.assertEqual(self.app.workspace_tabs.select(), str(self.app.activity_tab))
         self.app.is_running = False
 

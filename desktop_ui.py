@@ -30,6 +30,9 @@ def button(parent, text, command, primary=False, **kwargs):
                        font=("Segoe UI", 10, "bold" if primary else "normal"),
                        cursor="hand2", takefocus=True, **kwargs)
     widget.bind("<Return>", lambda e: widget.invoke())
+    widget.bind("<Enter>", lambda e: widget.configure(
+        highlightbackground=ACCENT if str(widget.cget("state")) != "disabled" else parent.cget("bg")))
+    widget.bind("<Leave>", lambda e: widget.configure(highlightbackground=parent.cget("bg")))
     return widget
 
 
@@ -232,19 +235,39 @@ def build_workspace(app, tooltip):
     configure_theme(app)
     root = app.root
     # Header: identity on the left, secondary destinations on the right.
-    header = tk.Frame(root, bg=BG, padx=24, pady=18)
+    header = tk.Frame(root, bg=BG, padx=24, pady=12)
     header.pack(fill="x")
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.5", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.4.6", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
 
     # Pin run controls to the bottom before allocating expandable notebook space.
     footer = tk.Frame(root, bg=BG, padx=24, pady=12)
     footer.pack(side="bottom", fill="x")
+    app.workflow_summary = label(footer, "", muted=True, anchor="w")
+    app.workflow_summary.pack(fill="x", pady=(0, 10))
+    def summarize_workflow(*_):
+        alignment = {"vggt_omega": "VGGT-Omega", "ace0": "ACE0", "pycusfm": "PyCuSFM",
+                     "opensfm": "OpenSfM", "360dvo": "360DVO"}.get(app.engine_var.get(), app.engine_var.get())
+        training = {"lichtfeld": "LichtFeld Studio", "splatfacto": "Splatfacto",
+                    "3dgrut": "3DGRUT", "pfgs360": "PFGS360"}.get(app.train_engine_var.get(), app.train_engine_var.get())
+        app.workflow_summary.configure(text=(f"WORKFLOW   {alignment}  →  {training}"
+            if app.auto_train_var.get() else f"WORKFLOW   {alignment}  ·  Alignment only"))
+    for variable in (app.engine_var, app.train_engine_var, app.auto_train_var):
+        variable.trace_add("write", summarize_workflow)
+    summarize_workflow()
     status = tk.Frame(footer, bg=BG)
     status.pack(fill="x", pady=(0, 8))
+    def compact_footer(event):
+        if event.widget is not root:
+            return
+        if event.height < 820:
+            app.workflow_summary.pack_forget()
+        elif not app.workflow_summary.winfo_manager():
+            app.workflow_summary.pack(fill="x", pady=(0, 10), before=status)
+    root.bind("<Configure>", compact_footer, add="+")
     app.telemetry_lbl = label(status, "Ready to start", muted=True, anchor="w")
     app.telemetry_lbl.pack(side="left", fill="x", expand=True)
     app.eta_lbl = label(status, "", muted=True)
@@ -318,8 +341,10 @@ def build_workspace(app, tooltip):
     engine_controls = []
     for i, (name, value) in enumerate([("VGGT-Omega", "vggt_omega"), ("ACE0", "ace0"),
             ("PyCuSFM", "pycusfm"), ("OpenSfM", "opensfm"), ("360DVO", "360dvo")]):
-        control = tk.Radiobutton(engines, text=name, variable=app.engine_var, value=value,
-                                  indicatoron=False, padx=14, pady=8)
+        detail = {"vggt_omega": "Neural geometry", "ace0": "Pose refinement", "pycusfm": "GPU matching",
+                  "opensfm": "Photos & panoramas", "360dvo": "360° sequences"}[value]
+        control = tk.Radiobutton(engines, text=f"{name}\n{detail}", variable=app.engine_var, value=value,
+                                  indicatoron=False, padx=14, pady=8, justify="left", anchor="w")
         control.grid(row=0, column=i, sticky="ew", padx=(0, 8))
         engines.columnconfigure(i, weight=1)
         engine_controls.append((control, app.engine_var))
@@ -360,8 +385,10 @@ def build_workspace(app, tooltip):
     engines.pack(fill="x", pady=(0, 14))
     for i, (name, value) in enumerate([("LichtFeld Studio", "lichtfeld"), ("Splatfacto", "splatfacto"),
                                       ("3DGRUT", "3dgrut"), ("PFGS360", "pfgs360")]):
-        control = tk.Radiobutton(engines, text=name, variable=app.train_engine_var, value=value,
-                                  indicatoron=False, padx=14, pady=8)
+        detail = {"lichtfeld": "Live Vulkan viewer", "splatfacto": "Nerfstudio workflow",
+                  "3dgrut": "Ray-traced optics", "pfgs360": "Panoramic scenes"}[value]
+        control = tk.Radiobutton(engines, text=f"{name}\n{detail}", variable=app.train_engine_var, value=value,
+                                  indicatoron=False, padx=14, pady=8, justify="left", anchor="w")
         control.grid(row=0, column=i, sticky="ew", padx=(0, 8))
         engines.columnconfigure(i, weight=1)
         engine_controls.append((control, app.train_engine_var))
@@ -419,7 +446,7 @@ def build_workspace(app, tooltip):
 
     compact = [None]
     def activity_layout(event):
-        small = event.height < 480
+        small = event.height < 520
         if small == compact[0]:
             return
         compact[0] = small

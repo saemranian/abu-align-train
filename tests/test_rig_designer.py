@@ -83,6 +83,25 @@ class RigDesignerTests(unittest.TestCase):
         self.assertLess(self.ui.renderer.selected, len(self.ui.get_rig()))
         self.assertEqual(self.errors_seen, [])
 
+    def test_focus_and_camera_navigation_preserve_configuration(self):
+        original = self.ui.get_rig()
+        self.ui.view.set("3d")
+        self.ui.renderer.selected = 0
+        self.ui.select_camera(-1)
+        self.assertEqual(self.ui.renderer.selected, len(original)-1)
+        self.assertIn(f"{len(original):02d} / {len(original):02d}", self.ui.camera_text.cget("text"))
+        width = self.ui.canvas.winfo_width()
+        self.ui.focus_view()
+        self.root.update()
+        self.assertTrue(self.ui.focused.get())
+        self.assertGreater(self.ui.canvas.winfo_width(), width)
+        self.ui.focus_view(True)
+        self.root.update()
+        self.assertFalse(self.ui.focused.get())
+        self.assertTrue(self.ui.tabs.winfo_ismapped())
+        self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
 
 if __name__ == "__main__":
     unittest.main()

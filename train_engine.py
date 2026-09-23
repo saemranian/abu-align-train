@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.5 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.6 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -876,6 +876,8 @@ def train_pfgs360(
     match_views: int = 8,
     densify_views: int = 8,
     sh_degree: int = 3,
+    downscale_factor: Optional[str] = "1",
+    mode: str = "interactive",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1056,6 +1058,8 @@ def train_pfgs360(
     log(f"      * Inlier-Grow:   {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
     log(f"      * Align-Depth:   {'Enabled' if align_depth else 'Disabled'}")
     log(f"      * Filter Sky:    {f'Enabled (>{sky_depth:.0f}m)' if filter_sky else 'Disabled'}")
+    log(f"      * Downscale:     {f'{ds_flag[1]}x' if ds_flag else 'Auto (<=1600px Max)'}")
+    log(f"      * Viewer Mode:   {'Headless (100% Dedicated GPU)' if mode == 'headless' else 'Interactive Viser (http://localhost:7007)'}")
     log(f"      * Dataset:       {dataset_abs}")
     log(f"      * Output Dir:    {output_dir}")
     log(f"      * Max Steps:     {iterations:,}")
@@ -1072,7 +1076,7 @@ def train_pfgs360(
             "--output-dir", f"'{wsl_out}'",
             "--pipeline.model.sh-degree", str(sh_degree),
             "--pipeline.model.depth-type", depth_type,
-            "--vis", "viewer+tensorboard",
+        ] + vis_flag + [
             "--viewer.quit-on-train-completion", "True",
         ]
         if not spherical_aware:
@@ -1097,17 +1101,17 @@ def train_pfgs360(
             wsl_cmd_parts.extend(["--pipeline.model.densify-views", str(densify_views)])
 
         if active_dp == "nerfstudio-data":
-            wsl_cmd_parts.extend(["nerfstudio-data", "--data", f"'{wsl_data}'", "--auto-scale-poses", "False", "--downscale-factor", "1"])
+            wsl_cmd_parts.extend(["nerfstudio-data", "--data", f"'{wsl_data}'", "--auto-scale-poses", "False"] + (ds_flag if ds_flag else ["--downscale-factor", "1"]))
         elif active_dp == "opensfm-dataparser":
-            wsl_cmd_parts.extend(["opensfm-dataparser", "--data", f"'{wsl_data}'", "--eval-mode", "all"])
+            wsl_cmd_parts.extend(["opensfm-dataparser", "--data", f"'{wsl_data}'", "--eval-mode", "all"] + ds_flag)
         elif active_dp == "ob3d-dataparser":
-            wsl_cmd_parts.extend(["ob3d-dataparser", "--data", f"'{wsl_data}'", "--trajectory-type", "Egocentric"])
+            wsl_cmd_parts.extend(["ob3d-dataparser", "--data", f"'{wsl_data}'", "--trajectory-type", "Egocentric"] + ds_flag)
         elif active_dp in ["posefree-dataparser", "posefree"]:
-            wsl_cmd_parts.extend(["posefree-dataparser", "--data", f"'{wsl_data}'"])
+            wsl_cmd_parts.extend(["posefree-dataparser", "--data", f"'{wsl_data}'"] + ds_flag)
         elif active_dp:
-            wsl_cmd_parts.extend([active_dp, "--data", f"'{wsl_data}'"])
+            wsl_cmd_parts.extend([active_dp, "--data", f"'{wsl_data}'"] + ds_flag)
         else:
-            wsl_cmd_parts.extend(["--data", f"'{wsl_data}'"])
+            wsl_cmd_parts.extend(["--data", f"'{wsl_data}'"] + ds_flag)
 
         full_wsl_cmd = " ".join(wsl_cmd_parts)
         log(f"      * Launching WSL command: {full_wsl_cmd}")
@@ -1166,7 +1170,7 @@ def train_pfgs360(
         "--output-dir", output_dir,
         "--pipeline.model.sh-degree", str(sh_degree),
         "--pipeline.model.depth-type", depth_type,
-        "--vis", "viewer+tensorboard",
+    ] + vis_flag + [
         "--viewer.quit-on-train-completion", "True",
     ]
     if not spherical_aware:
@@ -1192,18 +1196,18 @@ def train_pfgs360(
 
     # Append dataparser subcommand and options in correct Tyro order
     if active_dp == "nerfstudio-data":
-        cmd.extend(["nerfstudio-data", "--data", dataset_abs, "--auto-scale-poses", "False", "--downscale-factor", "1"])
+        cmd.extend(["nerfstudio-data", "--data", dataset_abs, "--auto-scale-poses", "False"] + (ds_flag if ds_flag else ["--downscale-factor", "1"]))
     elif active_dp == "opensfm-dataparser":
-        cmd.extend(["opensfm-dataparser", "--data", dataset_abs, "--eval-mode", "all"])
+        cmd.extend(["opensfm-dataparser", "--data", dataset_abs, "--eval-mode", "all"] + ds_flag)
     elif active_dp == "ob3d-dataparser":
-        cmd.extend(["ob3d-dataparser", "--data", dataset_abs, "--trajectory-type", "Egocentric"])
+        cmd.extend(["ob3d-dataparser", "--data", dataset_abs, "--trajectory-type", "Egocentric"] + ds_flag)
     elif active_dp in ["posefree-dataparser", "posefree"]:
-        cmd.extend(["posefree-dataparser", "--data", dataset_abs])
+        cmd.extend(["posefree-dataparser", "--data", dataset_abs] + ds_flag)
     elif active_dp:
-        cmd.extend([active_dp, "--data", dataset_abs])
+        cmd.extend([active_dp, "--data", dataset_abs] + ds_flag)
     else:
         # Paradigm A: Pose-Free Direct command
-        cmd.extend(["--data", dataset_abs])
+        cmd.extend(["--data", dataset_abs] + ds_flag)
 
     log(f"      * Launching command: {' '.join(cmd)}")
     start_time = time.time()
@@ -1340,6 +1344,7 @@ def run_3dgs_training(
     pfgs_consist: bool = True,
     pfgs_inlier: bool = True,
     pfgs_align_depth: bool = True,
+    pfgs_downscale: str = "1",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1486,6 +1491,8 @@ def run_3dgs_training(
             match_views=pfgs_match_views,
             densify_views=pfgs_densify_views,
             sh_degree=sh_degree,
+            downscale_factor=pfgs_downscale,
+            mode=mode,
             progress_callback=progress_callback
         )
     else:
@@ -1516,6 +1523,7 @@ if __name__ == "__main__":
     parser.add_argument("--sh_degree", type=int, default=3, help="Spherical Harmonics degree")
     parser.add_argument("--pfgs_depth", choices=["unik3d", "midas", "zoedepth"], default="unik3d", help="Depth prior for PFGS360")
     parser.add_argument("--pfgs_dataparser", default="auto", help="Dataparser for PFGS360 (auto, opensfm, posefree, ob3d, odgs)")
+    parser.add_argument("--pfgs_downscale", choices=["auto", "1", "2", "4"], default="1", help="Image downscale factor for PFGS360 ('1' for full res, '2' for half, 'auto' for auto <=1600px)")
     parser.add_argument("--pfgs_filter_sky", dest="pfgs_filter_sky", action="store_true", default=True, help="Filter sky in PFGS360")
     parser.add_argument("--no_pfgs_filter_sky", dest="pfgs_filter_sky", action="store_false", help="Disable sky filtering in PFGS360")
     parser.add_argument("--pfgs_sky_depth", type=float, default=50.0, help="Max depth threshold for sky filtering in meters (default: 50.0)")
@@ -1589,6 +1597,7 @@ if __name__ == "__main__":
             pfgs_filter_sky=args.pfgs_filter_sky,
             pfgs_match_views=args.pfgs_match_views,
             pfgs_densify_views=args.pfgs_densify_views,
+            pfgs_downscale=args.pfgs_downscale,
             progress_callback=print
         )
     except Exception as e:

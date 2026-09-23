@@ -129,7 +129,7 @@ class RigSceneRenderer:
             name, yaw, pitch, roll, fov = rig[self.selected]
             canvas.create_text(22, 22, anchor="nw", text=f"Camera {self.selected + 1:02d}  /  {len(rig):02d}",
                                fill="#e7edef", font=("Segoe UI", 12, "bold"))
-            canvas.create_text(22, 49, anchor="nw", text=f"Pinhole preview   ·   FOV {fov:g}°   ·   yaw {yaw:g}° / pitch {pitch:g}°",
+            canvas.create_text(22, 49, anchor="nw", text="Coverage preview · ideal pinhole optics",
                                fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width-44))
         canvas.create_text(22, height - 22, anchor="sw", text="Drag to orbit   ·   Scroll to zoom   ·   Click a camera to inspect",
                            fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width - 105))
@@ -140,3 +140,4 @@ class RigSceneRenderer:
             dy = -sum(a*b for a, b in zip(axis, vu)) * 23
             canvas.create_line(gx, gy, gx+dx, gy+dy, fill=color, width=2)
             canvas.create_text(gx+dx*1.4, gy+dy*1.4, text=name, fill=color, font=("Segoe UI", 8))
+        canvas.event_generate("<<RigRendered>>")
