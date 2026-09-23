@@ -237,7 +237,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.3", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.4.4", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
 
     # Pin run controls to the bottom before allocating expandable notebook space.
@@ -265,8 +265,10 @@ def build_workspace(app, tooltip):
         widget.pack(side="left", padx=(0, 8))
     app.stop_btn = button(actions, "Stop", app._stop_alignment, state="disabled")
     app.stop_btn.pack(side="right")
+    app.save_finish_btn = button(actions, "Save & finish", app._save_and_finish_training, state="disabled")
+    app.save_finish_btn.pack(side="right", padx=8)
     app.pause_btn = button(actions, "Pause", app._toggle_pause, state="disabled")
-    app.pause_btn.pack(side="right", padx=8)
+    app.pause_btn.pack(side="right", padx=(0, 8))
 
     # Dataset and profiles are shared across both workflow stages.
     project = tk.Frame(root, bg=SURFACE, padx=20, pady=14)
@@ -460,6 +462,7 @@ def build_workspace(app, tooltip):
         (app.preset_combo, "No saved profiles yet? Choose Save as. Profiles preserve engine settings, not the dataset."),
         (app.path_entry, "Choose a dataset folder. Shortcut: Ctrl+O."),
         (app.pause_btn, "Pause or resume the current process. Its GPU memory remains allocated."),
-        (app.stop_btn, "Stop the active process."),
+        (app.save_finish_btn, "Stop training anytime and preserve current Gaussians, exporting the final 3DGS .ply model immediately."),
+        (app.stop_btn, "Stop and abort the active process immediately."),
     ]:
         tooltip(widget, text)

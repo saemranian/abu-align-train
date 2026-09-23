@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.3 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.4 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -121,6 +121,45 @@ def get_pfgs360_export_executable() -> Optional[str]:
             return p
     # Fallback to general ns-export
     return get_nerfstudio_export_executable()
+
+
+def check_save_and_finish_sentinel(output_dir: str, dataset_dir: Optional[str] = None) -> bool:
+    """Checks whether the user requested an early Save & Finish in Abu Train."""
+    candidates = [
+        os.path.join(output_dir, ".finish_and_save"),
+        os.path.join(tempfile.gettempdir(), "abu_finish_and_save.flag"),
+    ]
+    if dataset_dir:
+        candidates.append(os.path.join(dataset_dir, ".finish_and_save"))
+    parent_out = os.path.dirname(output_dir)
+    if parent_out:
+        candidates.append(os.path.join(parent_out, ".finish_and_save"))
+    for c in candidates:
+        try:
+            if os.path.exists(c):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def consume_save_and_finish_sentinel(output_dir: str, dataset_dir: Optional[str] = None):
+    """Removes any existing sentinel flags after handling."""
+    candidates = [
+        os.path.join(output_dir, ".finish_and_save"),
+        os.path.join(tempfile.gettempdir(), "abu_finish_and_save.flag"),
+    ]
+    if dataset_dir:
+        candidates.append(os.path.join(dataset_dir, ".finish_and_save"))
+    parent_out = os.path.dirname(output_dir)
+    if parent_out:
+        candidates.append(os.path.join(parent_out, ".finish_and_save"))
+    for c in candidates:
+        try:
+            if os.path.exists(c):
+                os.remove(c)
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------
@@ -402,8 +441,15 @@ def train_nerfstudio_splatfacto(
                 last_report_time = now
 
     proc.wait()
+    is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_abs)
     if proc.returncode != 0:
-        raise RuntimeError(f"Nerfstudio ns-train exited with code {proc.returncode}")
+        yml_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
+        if is_early_finish and yml_candidates:
+            log(f"      * [Nerfstudio] Early 'Save & finish' detected (exit code {proc.returncode}). Proceeding to export 3DGS .ply...")
+        else:
+            raise RuntimeError(f"Nerfstudio ns-train exited with code {proc.returncode}")
+    elif is_early_finish:
+        log("      * [Nerfstudio] Early 'Save & finish' detected. Proceeding to export 3DGS .ply...")
 
     log(f"      * [Nerfstudio] Optimization finished in {time.time()-start_time:.1f}s.")
 
@@ -435,10 +481,12 @@ def train_nerfstudio_splatfacto(
             if exported_plys:
                 best_ply = max(exported_plys, key=os.path.getmtime)
                 log(f"      * [Nerfstudio] Exported standalone 3DGS PLY: {best_ply}")
+                consume_save_and_finish_sentinel(output_dir, dataset_abs)
                 return best_ply
         else:
             log(f"      [Warning] ns-export returned code {res.returncode}: {res.stderr}")
 
+    consume_save_and_finish_sentinel(output_dir, dataset_abs)
     return output_dir
 
 
@@ -1064,8 +1112,15 @@ def train_pfgs360(
         full_wsl_cmd = " ".join(wsl_cmd_parts)
         log(f"      * Launching WSL command: {full_wsl_cmd}")
         ret, out = wsl_bridge.run_command_in_wsl(full_wsl_cmd, log_callback=log)
+        is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_dir)
         if ret != 0:
-            raise RuntimeError(f"WSL2 PFGS360 training failed (exit code {ret})")
+            config_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
+            if is_early_finish and config_candidates:
+                log(f"      * [PFGS360] Early 'Save & finish' detected (exit code {ret}). Proceeding to export 3DGS .ply...")
+            else:
+                raise RuntimeError(f"WSL2 PFGS360 training failed (exit code {ret})")
+        elif is_early_finish:
+            log("      * [PFGS360] Early 'Save & finish' detected. Proceeding to export 3DGS .ply...")
 
         # Automatically export 3DGS .ply point cloud if needed
         config_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
@@ -1075,6 +1130,8 @@ def train_pfgs360(
             wsl_cfg = wsl_bridge.win_to_wsl_path(latest_config)
             export_cmd = f"{wsl_bridge.WSL_NS_EXPORT} gaussian-splat --load-config '{wsl_cfg}' --output-dir '{wsl_out}' --output-filename 'pfgs360_splat.ply'"
             wsl_bridge.run_command_in_wsl(export_cmd, log_callback=log)
+
+        consume_save_and_finish_sentinel(output_dir, dataset_dir)
 
         target_splat = os.path.join(output_dir, "pfgs360_splat.ply")
         if os.path.isfile(target_splat):
@@ -1192,16 +1249,23 @@ def train_pfgs360(
             log(f"        [PFGS360] {clean_line}")
 
     proc.wait()
+    is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_abs)
     if proc.returncode != 0:
-        err_block = "\n".join(captured_lines[-15:]) if captured_lines else f"Exited with code {proc.returncode}"
-        if "spherical_distortion" in err_block or "No module named" in err_block or "invalid choice: 'pfgs360'" in err_block:
-            missing_pkg = "spherical_distortion" if "spherical_distortion" in err_block else "PFGS360 C++ extensions"
-            raise RuntimeError(
-                f"PFGS360 requires '{missing_pkg}'.\n"
-                f"Please run 'setup_pfgs360.bat' (Windows) or 'setup_pfgs360.sh' (Linux/RunPod) to build extensions.\n"
-                f"Details:\n{err_block}"
-            )
-        raise RuntimeError(f"PFGS360 training failed (exit code {proc.returncode}):\n{err_block}")
+        ckpt_files = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)
+        if is_early_finish and ckpt_files:
+            log(f"      * [PFGS360] Early 'Save & finish' detected (exit code {proc.returncode}). Proceeding to export 3DGS .ply...")
+        else:
+            err_block = "\n".join(captured_lines[-15:]) if captured_lines else f"Exited with code {proc.returncode}"
+            if "spherical_distortion" in err_block or "No module named" in err_block or "invalid choice: 'pfgs360'" in err_block:
+                missing_pkg = "spherical_distortion" if "spherical_distortion" in err_block else "PFGS360 C++ extensions"
+                raise RuntimeError(
+                    f"PFGS360 requires '{missing_pkg}'.\n"
+                    f"Please run 'setup_pfgs360.bat' (Windows) or 'setup_pfgs360.sh' (Linux/RunPod) to build extensions.\n"
+                    f"Details:\n{err_block}"
+                )
+            raise RuntimeError(f"PFGS360 training failed (exit code {proc.returncode}):\n{err_block}")
+    elif is_early_finish:
+        log("      * [PFGS360] Early 'Save & finish' detected. Proceeding to export 3DGS .ply...")
 
     # Export Gaussian Splatting .ply directly from checkpoint or via ns-export fallback
     ckpt_files = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)
@@ -1238,9 +1302,11 @@ def train_pfgs360(
     if ply_candidates:
         best_ply = max(ply_candidates, key=os.path.getmtime)
         log(f"      * [PFGS360] Training complete! Model exported: {best_ply} ({time.time()-start_time:.1f}s)")
+        consume_save_and_finish_sentinel(output_dir, dataset_abs)
         return best_ply
 
     log(f"      * [PFGS360] Training complete in {time.time()-start_time:.1f}s.")
+    consume_save_and_finish_sentinel(output_dir, dataset_abs)
     return output_dir
 
 

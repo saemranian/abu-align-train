@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.4.3
+Abu Align & Train Version 0.0.4.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.4.3 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.4 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -3044,6 +3044,8 @@ class AbuAlignApp:
         self.train_only_btn.config(state=tk.DISABLED)
         self.pause_btn.config(state=tk.NORMAL, text="Pause", bg="#242d32")
         self.stop_btn.config(state=tk.NORMAL)
+        if hasattr(self, "save_finish_btn"):
+            self.save_finish_btn.config(state=tk.DISABLED)
         self._clear_console()
 
         self._set_stage(0)
@@ -3332,6 +3334,8 @@ class AbuAlignApp:
         self.train_only_btn.config(state=tk.DISABLED)
         self.pause_btn.config(state=tk.NORMAL, text="Pause", bg="#242d32")
         self.stop_btn.config(state=tk.NORMAL)
+        if hasattr(self, "save_finish_btn"):
+            self.save_finish_btn.config(state=tk.NORMAL)
         self._clear_console()
 
         self._set_stage(5)
@@ -3430,7 +3434,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.4.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3512,6 +3516,8 @@ class AbuAlignApp:
                     self.train_only_btn.config(state=tk.NORMAL)
                     self.pause_btn.config(state=tk.DISABLED, text="Pause", bg="#242d32")
                     self.stop_btn.config(state=tk.DISABLED)
+                    if hasattr(self, "save_finish_btn"):
+                        self.save_finish_btn.config(state=tk.DISABLED)
                     self.is_paused = False
                     if code == 0:
                         self.progress_bar["value"] = 100
@@ -3577,6 +3583,8 @@ class AbuAlignApp:
                             pass
                     elif any(k in msg for k in ["[LichtFeld]", "[Nerfstudio]", "[3DGRUT]", "[PFGS360]", "[PFGS360-ERR]", "Stage 6", "Starting 3DGS", "pfgs360"]):
                         self._set_stage(5)
+                        if hasattr(self, "save_finish_btn") and str(self.save_finish_btn["state"]) != tk.NORMAL and self.is_running:
+                            self.save_finish_btn.config(state=tk.NORMAL)
                         depth_m = re.search(r"(\d+)%\|.*\|\s*(\d+)/(\d+)", msg)
                         step_m = re.search(r"(\d+)\s*\(([\d\.]+)%\)", msg)
                         lf_m = re.search(r"Iteration\s+(\d+)/(\d+)\s*\(([\d\.]+)%\)", msg)
@@ -3721,7 +3729,67 @@ class AbuAlignApp:
             self.train_only_btn.config(state=tk.NORMAL)
             self.pause_btn.config(state=tk.DISABLED, text="Pause", bg="#242d32")
             self.stop_btn.config(state=tk.DISABLED)
+            if hasattr(self, "save_finish_btn"):
+                self.save_finish_btn.config(state=tk.DISABLED)
             self.telemetry_lbl.config(text="Status: Aborted by user", fg=self.accent_red)
+
+    def _save_and_finish_training(self):
+        """
+        Gracefully requests the active training engine (PFGS360 / Splatfacto / Nerfstudio / LichtFeld)
+        to complete training at the current iteration, save the latest checkpoint, and immediately
+        export the final 3DGS .ply model.
+        """
+        if not self.is_running:
+            return
+
+        self._log("\n" + "="*70 + "\n")
+        self._log(" [SAVE & FINISH] Early stop requested by user!\n")
+        self._log(" Preserving current Gaussians, concluding optimization, and exporting 3DGS model...\n")
+        self._log("="*70 + "\n")
+
+        self.telemetry_lbl.config(
+            text="Status: Finalizing Training & Exporting 3DGS Model...",
+            fg=self.accent_cyan
+        )
+        if hasattr(self, "save_finish_btn"):
+            self.save_finish_btn.config(state=tk.DISABLED)
+
+        # If training was paused, resume it so the engine can cleanly process the exit request
+        if self.is_paused:
+            try:
+                self._toggle_pause()
+            except Exception:
+                pass
+
+        # Write sentinels across Windows and WSL locations
+        dataset_path = self.dataset_var.get().strip()
+        sentinels = [
+            os.path.join(tempfile.gettempdir(), "abu_finish_and_save.flag")
+        ]
+        if dataset_path and os.path.isdir(dataset_path):
+            sentinels.append(os.path.join(dataset_path, ".finish_and_save"))
+        if self.latest_output_dir and os.path.isdir(self.latest_output_dir):
+            sentinels.append(os.path.join(self.latest_output_dir, ".finish_and_save"))
+
+        for s_path in sentinels:
+            try:
+                with open(s_path, "w", encoding="utf-8") as f:
+                    f.write(f"finish_and_save={time.time()}\n")
+            except Exception as e:
+                self._log(f" [Warning] Could not create sentinel {s_path}: {e}\n")
+
+        # Also touch flags inside WSL if WSL is available
+        try:
+            from wsl_bridge import run_command_in_wsl, win_to_wsl_path
+            run_command_in_wsl("touch /tmp/abu_finish_and_save.flag", log_callback=lambda _: None)
+            if dataset_path:
+                wsl_ds = win_to_wsl_path(dataset_path)
+                run_command_in_wsl(f"touch '{wsl_ds}/.finish_and_save'", log_callback=lambda _: None)
+            if self.latest_output_dir:
+                wsl_out = win_to_wsl_path(self.latest_output_dir)
+                run_command_in_wsl(f"touch '{wsl_out}/.finish_and_save'", log_callback=lambda _: None)
+        except Exception:
+            pass
 
     def _open_results_folder(self):
         target = self.latest_output_dir
@@ -3788,7 +3856,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.4.3 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.4 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4062,7 +4130,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.4.3\n"
+            "Abu Align & Train - Version 0.0.4.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
