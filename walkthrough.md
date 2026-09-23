@@ -1,71 +1,44 @@
-# Abu Align & Train v0.0.4.0 — Minimal rig designer and 3D preview
+# Abu Align & Train v0.0.4.7 — Workspace clarity and focused rig inspection
 
-## Design changes and rationale
-The old splitter exposed all source, geometry, optics, and sampling controls at
-once. Its viewport drew every large frustum, ray, and label with stippled fills,
-which obscured the rig and made selection impossible.
+## Changes and rationale
+Engine choices now explain their role directly on the selection cards. A live
+workflow summary makes the alignment/training combination visible before launch.
+It collapses below 820px window height so the activity log remains usable.
+Buttons gain a restrained hover outline; the header uses less vertical space.
 
-The new 360° Rig Designer separates Source, Rig, and Export into scrollable tabs.
-It keeps export actions pinned, uses readable layout/solver names, and shares
-the graphite/mint workspace theme. Parameters retain their existing underlying
-variables and solver callbacks. Rig summary details collapse by default.
-Labels and inputs wrap without sharing grid-column widths across unrelated rows.
-Controls remain above the notebook in Tk's stacking order, avoiding hidden cards.
+The rig designer opens Source first when no input exists. Focus view hides the
+settings column and expands the preview; Show settings or Escape restores it.
+Previous/Next cycles camera selection with wraparound and switches to Orbit.
+A compact inspector shows selected camera index, yaw, pitch, and field of view.
+The preview avoids duplicate optics values and keeps coverage interpretation clear.
+Details now explicitly changes to Hide details when expanded. Export geometry,
+solver variables, and engine execution are unchanged by this UI work.
 
-The CPU-only Pillow renderer uses supersampling and smooth translucent coverage.
-Camera markers show viewing directions from a shared origin; they do not imply
-physical camera baselines. One selected camera is emphasized by default. Click a
-marker to select it; independently toggle All coverage, Labels, and Grid. Fit,
-Top, Front, and Rotate provide repeatable views. Orbit/pan/wheel interactions
-remain; arrows, +/-, F, and bracket keys support keyboard navigation. Polar and
-Map overviews remain available. Coverage is an ideal pinhole illustration, not
-a lens-distortion or occlusion simulation. Export geometry is unchanged.
+## Verification
+Final verification against the exact release snapshot: all 17 tests passed in
+29.576 seconds; all 17 release Python modules compiled successfully. Command:
+`python -m unittest discover -s ../../tests -v` from versions/v0.0.4.7.
 
-Preview basis calculations apply roll simultaneously to right/up axes and are
-tested at poles and arbitrary orientations. Selection clamps when camera count
-shrinks. Partial invalid numeric edits show a prompt rather than a Tk traceback.
-Closing is blocked during export; normal close and Use dataset cancel rotation.
-Deferred export failures retain their exception text for the error dialog.
+Earlier diagnostic runs:
+- `python -m unittest discover -s tests -v`: 16 of 17 passed; a window hit-test
+  failed during overlapping preview instances.
+- `python -m unittest discover -s tests -p test_rig_designer.py -v`: all 6 passed
+  in isolation (12.263 seconds), including minimum-size visibility and the new
+  focus/camera-navigation regression. Focus restores controls and preserves rig data.
+- The desktop suite covered 960x720, 1240x900, and 1600x1000 layout, workflow
+  callbacks, read-only logs, presets, and tool dialogs.
+- Live screenshot inspection was unavailable: computer-use app approval timed out.
+- No GPU jobs or model loads were started. Preview remains CPU-only, with one
+  current Pillow image and no polling introduced. VRAM/RSS and render-time
+  benchmarks were not measured in this pass; no memory reduction is claimed.
 
-Implementation: rig_designer_ui.py manages presentation and progressive
-disclosure; rig_viewport.py provides geometry/rendering; abu_align_gui.py retains
-workflow callbacks. version_manager.py now includes both modules in snapshots.
+## Release coordination
+Antigravity committed these UI changes with its v0.0.4.6 engine release in
+42ead79 during verification. This follow-up records the UI release and snapshot.
+Concurrent uncommitted ACE0/CLI work is intentionally excluded from this commit
+and snapshot. Those working files are preserved. Only their version headers are
+staged from the committed baseline.
 
-## Verification and performance
-In the vggt environment:
-
-```powershell
-python -m unittest discover -s tests -v
-python -m unittest discover -s tests -p test_rig_designer.py -v
-python -c "import py_compile; [py_compile.compile(f,doraise=True) for f in ['abu_align_gui.py','desktop_ui.py','rig_designer_ui.py','rig_viewport.py','align_cli.py','train_engine.py','opensfm_engine.py','360dvo_engine.py','version_manager.py']]"
-python version_manager.py --bump
-git diff --check
-```
-
-All 16 tests passed in 54.228 seconds. Tests cover the existing workspace,
-presets, workflow controls, and telemetry, plus all four rig layouts and three
-preview modes, camera picking/clamping, FOV/aspect math, orthonormal rolled
-bases, invalid numeric edits, and visible minimum-size controls. The five rig
-tests were rerun after the final wrapping adjustment. Native NumPy/Pillow tests
-ran outside the sandbox due DLL-loading restrictions. Nine modules compiled.
-Desktop visual inspection caught and corrected a clipped adjustments label.
-No panorama export, reconstruction, or training job was launched for these tests.
-
-At 890x559 viewport pixels, 30 CPU-only renders after warmup measured:
-- Median render: 38.32 ms; maximum: 42.32 ms.
-- Retained process RSS: 81.21 MB before, 81.28 MB after (+0.07 MB).
-These are local smoke measurements, not a universal frame-rate guarantee or a
-peak-memory benchmark. The renderer holds one Tk image; intermediate raster
-buffers are released. No GPU models/tensors are initialized by the renderer.
-GPU VRAM was not separately benchmarked; existing hardware monitoring remains.
-
-## Release and co-development
-Odometer rollover: v0.0.3.9 -> v0.0.4.0. Active and versioned C# launchers rebuilt.
-Snapshot: versions/v0.0.4.0/. Walkthrough copies: root, artifacts/, and docs/.
-The consolidated repository is canonical; no retired Abu_Align mirror is made.
-
-Antigravity completed its engine commits while this UI work was in progress.
-Its v0.0.3.9 commit captured the initial rig UI modules from the shared folder.
-This dedicated UI release finishes and validates that work on top of its commit.
-Existing engine logic is preserved; CLI/training changes in this commit are
-version headers only. The user requested keeping engine work separate.
+The canonical root is the single source of truth; the consolidated handover
+supersedes the retired duplicate Abu_Align directory. Snapshot: versions/v0.0.4.7.
+Launchers are rebuilt using version_manager.py and csc.exe.
