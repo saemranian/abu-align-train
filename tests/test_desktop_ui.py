@@ -95,6 +95,31 @@ class DesktopTests(unittest.TestCase):
         self.app.auto_train_var.set(False)
         self.assertEqual(self.app.one_click_btn.cget("text"), "Start alignment")
 
+    def test_video_controls_follow_sampling_and_format(self):
+        self.root.deiconify()
+        self.app._open_video_extractor_dialog()
+        ui = self.app.video_designer
+        self.root.update()
+        self.assertEqual(ui.fps.cget("state"), "normal")
+        self.assertEqual(ui.stride.cget("state"), "disabled")
+        ui.mode.set("stride")
+        self.assertEqual(ui.fps.cget("state"), "disabled")
+        self.assertEqual(ui.stride.cget("state"), "normal")
+        ui.format.set("png")
+        self.assertEqual(ui.quality.cget("state"), "disabled")
+        ui.blur.set(True)
+        self.assertEqual(ui.threshold.cget("state"), "normal")
+        ui.dialog.geometry("680x560")
+        self.root.update()
+        self.assertGreater(ui.page.canvas.winfo_height(), 150)
+        ui.threshold.event_generate("<FocusIn>")
+        self.root.update()
+        top = ui.page.canvas.winfo_rooty()
+        bottom = top + ui.page.canvas.winfo_height()
+        self.assertGreaterEqual(ui.threshold.winfo_rooty(), top)
+        self.assertLessEqual(ui.threshold.winfo_rooty() + ui.threshold.winfo_height(), bottom)
+        ui.close()
+
 
     def test_train_only_pfgs360_workflow_and_telemetry_parsing(self):
         self.app.dataset_var.set(self.temp.name)

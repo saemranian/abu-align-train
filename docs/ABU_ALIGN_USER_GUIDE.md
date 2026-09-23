@@ -1,7 +1,7 @@
 # Abu Align & Train: Complete User Guide & Technical Manual
 
 **Software:** Abu Align & Train (Unified Neural Photogrammetry & 3D Gaussian Splatting Suite)  
-**Version:** v0.0.4.0
+**Version:** v0.0.4.9
 **Maintainer:** saemranian  
 **Target Environments:** Windows 10/11 (CUDA 12.x+), Linux / RunPod Cloud GPU  
 **Integrated Align Engines:** VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO  
@@ -9,6 +9,23 @@
 **Target Applications:** Postshot, LichtFeld Studio, RealityCapture, MeshLab, Nerfstudio, COLMAP  
 
 ---
+
+## Refined workspace (v0.0.4.9)
+
+- Use **Prepare input** in the header for **360° rig designer** and **Video frames**.
+- **Profile** loads and saves configuration profiles. Dataset selection stays separate.
+- Engine cards wrap with the window width. Hover or focus an alignment card for its description.
+- Settings are grouped into bordered panels; Tab reveals controls further down the page.
+- In **Video frames**, choose a sampling mode. Only applicable FPS, stride, JPEG quality,
+  and blur-threshold fields are enabled. Scroll settings while export actions remain pinned.
+- The rig designer's **Display** button reveals coverage, label, and grid toggles.
+  These apply to **Orbit**; its camera inspector is hidden in Polar and Map views.
+  **Focus view** expands the canvas; Escape restores settings.
+- The browser scene inspector starts with camera frustums hidden to keep the scene clear.
+  Enable **Display → Camera frustums** when inspecting camera placement.
+- In help search, Enter selects the next match and Shift+Enter the previous match.
+  Changing the query starts at its first match; clearing it removes highlights.
+
 
 ## Desktop workspace (v0.0.3.6)
 

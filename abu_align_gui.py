@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.4.8
+Abu Align & Train Version 0.0.4.9
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -59,6 +59,7 @@ class ToolTip:
         self.widget.bind("<FocusIn>", self._on_enter, add="+")
         self.widget.bind("<FocusOut>", self._on_leave, add="+")
         self.widget.bind("<Escape>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", lambda e: self._on_leave() if e.widget is self.widget else None, add="+")
 
     def _on_enter(self, event=None):
         self._schedule()
@@ -80,6 +81,10 @@ class ToolTip:
         if self.tip_window or not self.text:
             return
         try:
+            # A newly opened dialog may cover a control before its hover timer fires.
+            pointer = self.widget.winfo_containing(*self.widget.winfo_pointerxy())
+            if pointer is not self.widget and self.widget.focus_get() is not self.widget:
+                return
             x = self.widget.winfo_rootx() + 20
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
 
@@ -94,7 +99,7 @@ class ToolTip:
 
             frame = tk.Frame(
                 tw,
-                bg="#232338",
+                bg="#242d32",
                 highlightbackground="#70dbc0",
                 highlightcolor="#70dbc0",
                 highlightthickness=1,
@@ -107,7 +112,7 @@ class ToolTip:
                 frame,
                 text=self.text,
                 justify=tk.LEFT,
-                bg="#232338",
+                bg="#242d32",
                 fg="#e7edef",
                 font=("Segoe UI", 9),
                 wraplength=340
@@ -210,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.4.8 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.9 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -1204,7 +1209,7 @@ class AbuAlignApp:
             ext = os.path.splitext(path)[1].lower()
             if ext in [".mp4", ".mov", ".insv", ".avi", ".mkv", ".webm", ".m4v"]:
                 self.dataset_status_lbl.config(
-                    text=f"🎬 Video File: {os.path.basename(path)} | Click 'Video Extractor...' or use 360DVO for direct video odometry.",
+                    text=f"Video · {os.path.basename(path)} · Use Prepare input → Video frames, or choose 360DVO.",
                     fg="#38bdf8"
                 )
             else:
@@ -1226,19 +1231,19 @@ class AbuAlignApp:
         has_transforms = os.path.isfile(os.path.join(path, "transforms.json")) or os.path.isfile(os.path.join(path, "3dgs_dataset", "transforms.json"))
         has_results = os.path.isdir(os.path.join(path, "results"))
 
-        poses_str = "✓ Prior SfM Poses Found" if (has_sparse or has_transforms) else ("✓ Alignment Results Present" if has_results else "No Prior Poses")
+        poses_str = "Camera poses found" if (has_sparse or has_transforms) else ("Alignment results found" if has_results else "No existing camera poses")
         
         if img_count > 0:
-            status_text = f"✓ Ready: {img_count} photos detected  |  {poses_str}  |  Ready for Align & Train"
+            status_text = f"{img_count:,} photos · {poses_str}"
             self.dataset_status_lbl.config(text=status_text, fg=self.accent_green)
         elif vid_count > 0:
-            status_text = f"🎬 {vid_count} video file(s) found. Use 'Video Extractor...' to generate frame sequence for alignment."
+            status_text = f"{vid_count} videos · Use Prepare input → Video frames to extract photos."
             self.dataset_status_lbl.config(text=status_text, fg="#38bdf8")
-        elif has_results or has_sparse:
-            status_text = f"✓ Photogrammetry dataset ({poses_str}). Ready for Train 3DGS Only."
+        elif has_results or has_sparse or has_transforms:
+            status_text = f"{poses_str} · Choose Train only to use this reconstruction."
             self.dataset_status_lbl.config(text=status_text, fg="#a855f7")
         else:
-            status_text = "⚠️ No image or video files detected in this folder. Please select a valid photo folder."
+            status_text = "No photos or videos found. Choose a folder containing your source images."
             self.dataset_status_lbl.config(text=status_text, fg="#f59e0b")
 
         # Discover all available alignment runs in results/
@@ -1287,8 +1292,11 @@ class AbuAlignApp:
             bg=self.panel_bg
         ).pack(anchor="w", pady=(2, 0))
 
-        content = tk.Frame(dialog, bg=self.bg_dark, padx=12)
-        content.pack(fill=tk.BOTH, expand=True)
+        from desktop_ui import ScrollPage
+        video_page = ScrollPage(dialog)
+        video_page.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 10))
+        content = tk.Frame(video_page.body, bg=self.bg_dark)
+        content.pack(fill=tk.X)
 
         # 1. Paths Card
         paths_card = tk.LabelFrame(
@@ -1429,7 +1437,7 @@ class AbuAlignApp:
 
         # 4. Action Buttons
         btn_row = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=10)
-        btn_row.pack(fill=tk.X, side=tk.BOTTOM)
+        btn_row.pack(fill=tk.X, side=tk.BOTTOM, before=video_page)
 
         extract_btn = tk.Button(
             btn_row,
@@ -1558,7 +1566,7 @@ class AbuAlignApp:
                             text=f"Status: Complete! Extracted {tot} frames in {sec}s ({fps_r} FPS).",
                             fg=self.accent_green
                         )
-                        extract_btn.config(state=tk.NORMAL, text="▶ Start Frame Extraction")
+                        extract_btn.config(state=tk.NORMAL, text="Extract frames")
                         close_btn.config(state=tk.NORMAL)
                         use_ds_btn.config(state=tk.NORMAL)
                         open_folder_btn.config(state=tk.NORMAL)
@@ -1566,17 +1574,19 @@ class AbuAlignApp:
 
                     dialog.after(0, on_done)
                 except Exception as ex:
-                    def on_err():
-                        status_lbl.config(text=f"Status: Failed - {ex}", fg=self.accent_red)
-                        extract_btn.config(state=tk.NORMAL, text="▶ Start Frame Extraction")
+                    def on_err(error=str(ex)):
+                        status_lbl.config(text=f"Extraction failed: {error}", fg=self.accent_red)
+                        extract_btn.config(state=tk.NORMAL, text="Extract frames")
                         close_btn.config(state=tk.NORMAL)
-                        messagebox.showerror("Extraction Error", f"Failed to extract video frames:\n{ex}")
+                        messagebox.showerror("Extraction Error", f"Failed to extract video frames:\n{error}")
                     dialog.after(0, on_err)
 
             t = threading.Thread(target=worker, daemon=True)
             t.start()
 
         extract_btn.config(command=run_extraction_worker)
+        from desktop_ui import enhance_video_dialog
+        enhance_video_dialog(self, locals())
 
     def _open_panoramic_splitter_dialog(self):
         """
@@ -1625,6 +1635,12 @@ class AbuAlignApp:
 
         left_col = tk.Frame(body, bg=self.bg_dark)
         left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        from desktop_ui import ScrollPage
+        rig_notebook = ttk.Notebook(left_col)
+        rig_notebook.pack(fill=tk.BOTH, expand=True)
+        rig_pages = [ScrollPage(rig_notebook) for _ in range(3)]
+        for page, title in zip(rig_pages, ("Source", "Rig", "Export")):
+            rig_notebook.add(page, text=title)
 
         right_col = tk.Frame(body, bg=self.bg_dark, width=540)
         right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
@@ -1699,7 +1715,7 @@ class AbuAlignApp:
         # CARD 1: Input & Output (Left Column)
         # -----------------------------------------------------------------
         paths_card = tk.LabelFrame(
-            left_col,
+            rig_pages[0].body,
             text=" 1. Input 360° Source & Output Rig Folder ",
             font=("Segoe UI", 9, "bold"),
             fg=self.text_primary,
@@ -1768,7 +1784,7 @@ class AbuAlignApp:
         # CARD 2: Rig Architecture & Auto-Math Solver (Left Column)
         # -----------------------------------------------------------------
         rig_card = tk.LabelFrame(
-            left_col,
+            rig_pages[1].body,
             text=" 2. Rig Architecture & Auto-Math Solver ",
             font=("Segoe UI", 9, "bold"),
             fg=self.text_primary,
@@ -1892,7 +1908,7 @@ class AbuAlignApp:
         # CARD 3: Optics, Resolution & Video Sampling (Left Column)
         # -----------------------------------------------------------------
         optics_card = tk.LabelFrame(
-            left_col,
+            rig_pages[2].body,
             text=" 3. Camera Optics, Resolution & Video Sampling ",
             font=("Segoe UI", 9, "bold"),
             fg=self.text_primary,
@@ -3494,7 +3510,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.4.8 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.9 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3926,7 +3942,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.4.8 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.9 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -3964,10 +3980,13 @@ class AbuAlignApp:
         match_lbl = tk.Label(tb, text="", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg)
         match_lbl.pack(side=tk.LEFT, padx=4)
 
-        find_state = {"matches": [], "current_idx": -1}
+        find_state = {"matches": [], "current_idx": -1, "query": ""}
 
         def do_search(forward=True):
             query = search_var.get().strip()
+            if query != find_state["query"]:
+                find_state["current_idx"] = -1
+                find_state["query"] = query
             text_widget.tag_remove("search_hl", "1.0", tk.END)
             text_widget.tag_remove("search_current", "1.0", tk.END)
             find_state["matches"] = []
@@ -4030,7 +4049,8 @@ class AbuAlignApp:
         find_prev_btn.pack(side=tk.LEFT, padx=2)
 
         search_entry.bind("<Return>", lambda e: do_search(True))
-        search_entry.bind("<KeyRelease>", lambda e: do_search(True) if search_var.get() else match_lbl.config(text=""))
+        search_entry.bind("<Shift-Return>", lambda e: do_search(False))
+        search_var.trace_add("write", lambda *_: do_search(True))
         doc_win.bind("<Control-f>", lambda e: search_entry.focus_set())
         doc_win.bind("<Escape>", lambda e: doc_win.destroy())
 
@@ -4200,7 +4220,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.4.8\n"
+            "Abu Align & Train - Version 0.0.4.9\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

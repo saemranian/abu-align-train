@@ -102,6 +102,19 @@ class RigDesignerTests(unittest.TestCase):
         self.assertEqual(self.ui.get_rig(), original)
         self.assertEqual(self.errors_seen, [])
 
+    def test_inspector_tracks_view_mode(self):
+        self.ui.view.set("polar")
+        self.root.update()
+        self.assertFalse(self.ui.inspector.winfo_ismapped())
+        self.ui.view.set("3d")
+        self.root.update()
+        self.assertTrue(self.ui.inspector.winfo_ismapped())
+        self.assertFalse(self.ui.display_open.get())
+        self.ui.toggle_display()
+        self.root.update()
+        self.assertTrue(self.ui.display_open.get())
+        self.assertEqual(self.errors_seen, [])
+
 
 if __name__ == "__main__":
     unittest.main()

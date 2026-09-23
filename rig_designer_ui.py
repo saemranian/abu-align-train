@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 from types import SimpleNamespace
-from desktop_ui import BG, SURFACE, FIELD, TEXT, MUTED, ACCENT, BORDER, ScrollPage, button, label
+from desktop_ui import BG, SURFACE, FIELD, TEXT, MUTED, ACCENT, BORDER, button, label, polish_controls
 
 
 def wrap_row(row):
@@ -59,16 +59,13 @@ def enhance_rig_designer(app, ctx):
     label(ctx["hdr_left"], "360° Rig Designer", 20).pack(anchor="w")
     label(ctx["hdr_left"], "Compose your cameras. Inspect coverage. Export ready-to-use views.", muted=True).pack(anchor="w", pady=(5, 0))
 
-    notebook = ttk.Notebook(left)
-    notebook.pack(fill="both", expand=True)
-    pages = [ScrollPage(notebook) for _ in range(3)]
+    notebook = ctx["rig_notebook"]
+    pages = ctx["rig_pages"]
     for page, title, card in zip(pages, ["Source", "Rig", "Export"],
                                  [ctx["paths_card"], ctx["rig_card"], ctx["optics_card"]]):
-        notebook.add(page, text=title)
         card.pack_forget()
         card.configure(text="", bd=0, padx=0, pady=0)
-        card.pack(in_=page.body, fill="x")
-        card.lift()
+        card.pack(fill="x")
     notebook.select(1 if ctx["in_var"].get() else 0)
     notebook.enable_traversal()
     friendly_choices(ctx["mode_cb"], ctx["mode_var"],
@@ -155,7 +152,18 @@ def enhance_rig_designer(app, ctx):
             control.pack(side="left", padx=(0, 6))
     # Use compact controls in a separate row, with no effect on exported camera settings.
     toggles = tk.Frame(right, bg=SURFACE, padx=10, pady=6)
-    toggles.pack(fill="x", before=ctx["canvas_card"])
+    display_open = tk.BooleanVar(value=False)
+    def toggle_display():
+        display_open.set(not display_open.get())
+        if display_open.get():
+            toggles.pack(fill="x", before=ctx["canvas_card"])
+        else:
+            toggles.pack_forget()
+        display_button.configure(text="Hide display" if display_open.get() else "Display")
+    display_button = button(view_tools, "Display", toggle_display)
+    display_button.configure(pady=4, padx=8)
+    display_button.pack(side="left")
+    wrap_row(view_tools)
     controls = {}
     for title, attribute, initial in [("All coverage", "show_all", False), ("Labels", "show_labels", True),
                                       ("Grid", "show_grid", True)]:
@@ -192,6 +200,19 @@ def enhance_rig_designer(app, ctx):
             name, yaw, pitch, roll, fov = rig[index]
             camera_text.configure(text=f"CAMERA {index+1:02d} / {len(rig):02d}\nYaw {yaw:g}° · Pitch {pitch:g}° · FOV {fov:g}°")
     ctx["viz_canvas"].bind("<<RigRendered>>", inspect_camera)
+    def sync_view(*_):
+        is_orbit = ctx["canvas_view_mode_var"].get() == "3d"
+        for control in toggles.winfo_children():
+            control.configure(state="normal" if is_orbit else "disabled")
+        if is_orbit:
+            inspector.pack(fill="x", after=ctx["canvas_card"])
+        else:
+            inspector.pack_forget()
+        for control, mode in [(ctx["orbit3d_btn"], "3d"), (ctx["polar_btn"], "polar"),
+                              (ctx["equirect_btn"], "equirect")]:
+            control.configure(fg=ACCENT if ctx["canvas_view_mode_var"].get() == mode else MUTED)
+    ctx["canvas_view_mode_var"].trace_add("write", sync_view)
+    sync_view()
     inspector.bind("<Configure>", lambda e: camera_text.configure(wraplength=max(120, e.width-230)))
     ctx["telemetry_card"].configure(text="Rig summary", fg=MUTED, bd=0)
     ctx["t_c1"].pack_configure(side="top", fill="x", expand=False)
@@ -234,26 +255,12 @@ def enhance_rig_designer(app, ctx):
             theme(child)
     theme(dialog)
     for page in pages:
+        polish_controls(page.body)
         page.bind_navigation()
-    # Reparented geometry still belongs to left_col in Tk; bind wheel events there too.
-    for card, page in zip([ctx["paths_card"], ctx["rig_card"], ctx["optics_card"]], pages):
-        def bind_card(widget, target=page):
-            widget.bind("<MouseWheel>", lambda e: (target.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"), "break")[-1])
-            def reveal(event):
-                y = event.widget.winfo_rooty() - target.body.winfo_rooty()
-                top = target.canvas.canvasy(0)
-                visible = target.canvas.winfo_height()
-                total = max(1, target.body.winfo_height())
-                if y < top:
-                    target.canvas.yview_moveto(max(0, y-12) / total)
-                elif y + event.widget.winfo_height() > top + visible:
-                    target.canvas.yview_moveto((y + event.widget.winfo_height()-visible+12) / total)
-            widget.bind("<FocusIn>", reveal, add="+")
-            for child in widget.winfo_children():
-                bind_card(child, target)
-        bind_card(card)
     canvas = ctx["viz_canvas"]
     def key_view(event):
+        if ctx["canvas_view_mode_var"].get() != "3d":
+            return
         key = event.keysym
         if key in ("Left", "Right"):
             orbit["yaw"] += -5 if key == "Left" else 5
@@ -274,5 +281,6 @@ def enhance_rig_designer(app, ctx):
         renderer=renderer, orbit=orbit, mode=ctx["mode_var"], view=ctx["canvas_view_mode_var"],
         cameras=ctx["num_cams_var"], fov=ctx["fov_var"], width=ctx["out_w_var"], height=ctx["out_h_var"],
         redraw=redraw, get_rig=ctx["get_current_rig"], close=ctx["on_close_dialog"], controls=controls,
-        focus_view=focus_view, focused=focused, select_camera=select_camera, camera_text=camera_text)
+        focus_view=focus_view, focused=focused, select_camera=select_camera, camera_text=camera_text,
+        inspector=inspector, toggle_display=toggle_display, display_open=display_open)
     dialog.after_idle(redraw)

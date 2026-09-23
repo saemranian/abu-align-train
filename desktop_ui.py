@@ -11,6 +11,31 @@ BORDER = "#344149"
 TEXT = "#e7edef"
 MUTED = "#a0adb5"
 ACCENT = "#70dbc0"
+DISABLED = "#75838b"
+
+
+def style_entry(widget):
+    widget.configure(bg=FIELD, fg=TEXT, insertbackground=TEXT, relief="flat", bd=0,
+                     font=("Segoe UI", 10),
+                     disabledbackground=SURFACE, disabledforeground=DISABLED,
+                     selectbackground=ACCENT, selectforeground=BG,
+                     highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+
+
+def wrap_choices(frame, minimum=170):
+    """Keep selection cards readable at narrow window widths."""
+    children = frame.winfo_children()
+    columns = [None]
+    def arrange(event):
+        count = max(1, min(len(children), event.width // minimum))
+        if columns[0] == count:
+            return
+        columns[0] = count
+        for i in range(len(children)):
+            frame.columnconfigure(i, weight=1 if i < count else 0, uniform="choices" if i < count else "")
+        for i, child in enumerate(children):
+            child.grid(row=i//count, column=i%count, sticky="ew", padx=(0, 8), pady=(0, 8))
+    frame.bind("<Configure>", arrange)
 
 
 def label(parent, text, size=10, muted=False, **kwargs):
@@ -59,7 +84,11 @@ def configure_theme(app):
                     padding=(22, 12), borderwidth=0, bordercolor=BG,
                     lightcolor=BG, darkcolor=BG)
     style.map("TNotebook.Tab", background=[("selected", SURFACE), ("active", FIELD)],
-              foreground=[("selected", ACCENT), ("active", TEXT)])
+              foreground=[("selected", ACCENT), ("active", TEXT)],
+              bordercolor=[("selected", SURFACE), ("!selected", BG)],
+              lightcolor=[("selected", SURFACE), ("!selected", BG)],
+              darkcolor=[("selected", SURFACE), ("!selected", BG)])
+    style.configure("TNotebook.Tab", focuscolor=ACCENT)
     style.configure("Vertical.TScrollbar", background=BORDER, troughcolor=SURFACE,
                     borderwidth=0, arrowsize=12, arrowcolor=MUTED,
                     bordercolor=SURFACE, lightcolor=BORDER, darkcolor=BORDER)
@@ -81,9 +110,7 @@ def polish_controls(parent):
         elif isinstance(widget, ttk.Combobox):
             widget.configure(font=("Segoe UI", 10))
         elif isinstance(widget, tk.Entry) and not isinstance(widget, ttk.Entry):
-            widget.configure(bg=FIELD, fg=TEXT, insertbackground=TEXT,
-                             relief="flat", highlightthickness=1,
-                             highlightbackground=BORDER, highlightcolor=ACCENT)
+            style_entry(widget)
         elif isinstance(widget, tk.Label):
             # Keep semantic warning/status colors, but make small parameter labels readable.
             font = widget.tk.call("font", "actual", widget.cget("font"))
@@ -111,9 +138,13 @@ def polish_dialog(dialog):
             elif isinstance(widget, (tk.Label, tk.Checkbutton, tk.Radiobutton)):
                 widget.configure(bg=SURFACE)
             elif isinstance(widget, tk.Entry) and not isinstance(widget, ttk.Entry):
-                widget.configure(bg=FIELD, fg=TEXT, insertbackground=TEXT,
-                                 relief="flat", highlightthickness=1,
-                                 highlightbackground=BORDER, highlightcolor=ACCENT)
+                style_entry(widget)
+            elif isinstance(widget, tk.Listbox):
+                widget.configure(bg=BG, fg=TEXT, selectbackground=FIELD,
+                                 selectforeground=ACCENT, highlightthickness=0)
+            elif isinstance(widget, tk.Text):
+                widget.configure(bg=BG, fg=TEXT, insertbackground=TEXT,
+                                 selectbackground=FIELD, selectforeground=TEXT)
             walk(widget)
     walk(dialog)
 
@@ -136,7 +167,7 @@ class ScrollPage(tk.Frame):
     def _resize(self, event):
         self.canvas.itemconfigure(self.window, width=event.width)
 
-    def bind_navigation(self):
+    def bind_navigation(self, subtree=None):
         def wheel(event):
             if self.canvas.yview() != (0.0, 1.0):
                 self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
@@ -158,7 +189,7 @@ class ScrollPage(tk.Frame):
             widget.bind("<FocusIn>", reveal, add="+")
             for child in widget.winfo_children():
                 walk(child)
-        walk(self.body)
+        walk(subtree if subtree is not None else self.body)
         self.canvas.bind("<MouseWheel>", wheel)
 
 
@@ -167,6 +198,8 @@ def responsive_groups(panel):
     groups = list(panel.winfo_children())
     for group in groups:
         group.pack_forget()
+        if isinstance(group, tk.Frame):
+            group.configure(padx=12, pady=12, highlightthickness=1, highlightbackground=BORDER)
     last = [None]
 
     def arrange(event):
@@ -178,15 +211,15 @@ def responsive_groups(panel):
         for i in range(len(groups)):
             panel.columnconfigure(i, weight=1 if i < columns else 0, minsize=0)
         for i, group in enumerate(groups):
-            group.grid(row=i // columns, column=i % columns, sticky="nw",
-                       padx=(0, 24), pady=(6, 22))
+            group.grid(row=i // columns, column=i % columns, sticky="new",
+                       padx=(0, 16), pady=(6, 16))
     panel.bind("<Configure>", arrange)
 
 
 def section(parent, title, subtitle=""):
-    label(parent, title, 16).pack(anchor="w", pady=(0, 5))
+    label(parent, title, 15).pack(anchor="w", pady=(0, 5))
     if subtitle:
-        label(parent, subtitle, muted=True).pack(anchor="w", pady=(0, 18))
+        label(parent, subtitle, muted=True).pack(anchor="w", pady=(0, 12))
 
 
 def field(parent, title, variable, values, width=12):
@@ -207,15 +240,22 @@ def open_monitor(app):
     dialog = app.monitor_window = tk.Toplevel(app.root)
     dialog.title("Live hardware monitor")
     dialog.configure(bg=SURFACE)
-    dialog.geometry("560x360")
+    dialog.geometry("600x340")
+    dialog.minsize(500, 300)
+    dialog._custom_theme = True
     dialog.transient(app.root)
     label(dialog, "Live hardware", 18).pack(anchor="w", padx=22, pady=18)
     sources = [app.hw_cpu_lbl, app.hw_ram_lbl, app.hw_gpu_lbl,
                app.hw_temp_lbl, app.hw_vram_lbl, app.hw_page_lbl]
     labels = []
-    for source in sources:
-        item = label(dialog, "", anchor="w")
-        item.pack(fill="x", padx=22, pady=4)
+    grid = tk.Frame(dialog, bg=SURFACE)
+    grid.pack(fill="both", expand=True, padx=22, pady=(0, 18))
+    for index, source in enumerate(sources):
+        item = label(grid, "", anchor="w", padx=14, pady=14)
+        item.configure(bg=FIELD)
+        item.grid(row=index//2, column=index%2, sticky="nsew", padx=4, pady=4)
+        grid.columnconfigure(index%2, weight=1)
+        grid.rowconfigure(index//2, weight=1)
         labels.append(item)
     timer = [None]
     def refresh():
@@ -231,6 +271,74 @@ def open_monitor(app):
     refresh()
 
 
+def enhance_video_dialog(app, ctx):
+    """A scrollable, task-focused presentation over the existing extractor."""
+    from types import SimpleNamespace
+    dialog = ctx["dialog"]
+    dialog._custom_theme = True
+    dialog.title("Video frames · Abu Align")
+    dialog.geometry("820x760")
+    dialog.minsize(680, 560)
+    polish_dialog(dialog)
+    header = ctx["hdr"]
+    for child in header.winfo_children():
+        child.destroy()
+    label(header, "Extract video frames", 20).pack(anchor="w")
+    label(header, "Turn a video into a photo sequence for alignment.", muted=True,
+          wraplength=590, justify="left").pack(anchor="w", pady=(6, 0))
+    page = ctx["video_page"]
+    for name, title in [("paths_card", "Source & destination"), ("ctrl_card", "Sampling & quality"),
+                        ("prog_card", "Progress")]:
+        ctx[name].configure(text=title, font=("Segoe UI", 11, "bold"), padx=12, pady=12)
+        ctx[name].pack_configure(pady=(0, 18))
+    # Pair every label with its input instead of squeezing six controls across a row.
+    for name in ("g1", "g2"):
+        row = ctx[name]
+        children = row.winfo_children()
+        for child in children:
+            child.pack_forget()
+        for index, child in enumerate(children):
+            child.grid(row=index//2, column=index%2, sticky="w", padx=(0, 18), pady=6)
+    ctx["hw_chk"].configure(text="Use NVIDIA hardware acceleration", fg=TEXT)
+    ctx["blur_chk"].configure(text="Skip blurry frames · threshold", fg=TEXT)
+    for child in ctx["g3"].winfo_children():
+        child.pack_forget()
+    ctx["hw_chk"].grid(row=0, column=0, columnspan=2, sticky="w", pady=6)
+    ctx["blur_chk"].grid(row=1, column=0, sticky="w", pady=6)
+    ctx["blur_entry"].grid(row=1, column=1, sticky="w")
+    ctx["extract_btn"].configure(text="Extract frames", bg=ACCENT, fg=BG, activebackground="#93e8d2")
+    ctx["use_ds_btn"].configure(text="Use dataset")
+    ctx["open_folder_btn"].configure(text="Open output")
+    ctx["dlg_pbar"].configure(style="Abu.Horizontal.TProgressbar")
+    ctx["status_lbl"].configure(text="Choose a video to begin.", wraplength=530, justify="left")
+    # Keep internal engine values stable while presenting readable choices.
+    from rig_designer_ui import friendly_choices
+    friendly_choices(ctx["mode_cb"], ctx["mode_var"],
+                     {"fps": "Frames per second", "stride": "Every Nth frame", "keyframes": "Keyframes only", "all": "Every frame"})
+    ctx["mode_cb"].configure(width=22)
+    def sync(*_):
+        for widget, enabled in [(ctx["fps_entry"], ctx["mode_var"].get() == "fps"),
+                                (ctx["stride_entry"], ctx["mode_var"].get() == "stride"),
+                                (ctx["qual_entry"], ctx["fmt_var"].get() == "jpg"),
+                                (ctx["blur_entry"], ctx["blur_filter_var"].get())]:
+            widget.configure(state="normal" if enabled else "disabled")
+    for name in ("mode_var", "fmt_var", "blur_filter_var"):
+        ctx[name].trace_add("write", sync)
+    polish_controls(ctx["content"])
+    sync()
+    page.bind_navigation(ctx["content"])
+    def close():
+        if str(ctx["extract_btn"].cget("state")) != "disabled":
+            dialog.destroy()
+    ctx["close_btn"].configure(command=close)
+    dialog.protocol("WM_DELETE_WINDOW", close)
+    dialog.bind("<Escape>", lambda e: close())
+    app.video_designer = SimpleNamespace(dialog=dialog, page=page, mode=ctx["mode_var"],
+        format=ctx["fmt_var"], blur=ctx["blur_filter_var"], fps=ctx["fps_entry"],
+        stride=ctx["stride_entry"], quality=ctx["qual_entry"], threshold=ctx["blur_entry"], close=close)
+    dialog.after_idle(ctx["in_entry"].focus_set)
+
+
 def build_workspace(app, tooltip):
     configure_theme(app)
     root = app.root
@@ -240,8 +348,18 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.8", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.4.9", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
+    prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
+        activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,
+        font=("Segoe UI", 10), takefocus=True, highlightthickness=1,
+        highlightbackground=BG, highlightcolor=ACCENT)
+    prepare_menu = tk.Menu(prepare, tearoff=False, bg=SURFACE, fg=TEXT,
+                           activebackground=FIELD, activeforeground=ACCENT, relief="flat", bd=0)
+    prepare_menu.add_command(label="360° rig designer", command=app._open_panoramic_splitter_dialog)
+    prepare_menu.add_command(label="Video frames", command=app._open_video_extractor_dialog)
+    prepare.configure(menu=prepare_menu)
+    prepare.pack(side="right", padx=8)
 
     # Pin run controls to the bottom before allocating expandable notebook space.
     footer = tk.Frame(root, bg=BG, padx=24, pady=12)
@@ -261,7 +379,7 @@ def build_workspace(app, tooltip):
     status = tk.Frame(footer, bg=BG)
     status.pack(fill="x", pady=(0, 8))
     def compact_footer(event):
-        if event.widget is not root:
+        if event.widget is not root or not app.workflow_summary.winfo_exists():
             return
         if event.height < 820:
             app.workflow_summary.pack_forget()
@@ -294,29 +412,27 @@ def build_workspace(app, tooltip):
     app.pause_btn.pack(side="right", padx=(0, 8))
 
     # Dataset and profiles are shared across both workflow stages.
-    project = tk.Frame(root, bg=SURFACE, padx=20, pady=14)
+    project = tk.Frame(root, bg=SURFACE, padx=20, pady=10)
     project.pack(fill="x", padx=24, pady=(0, 12))
     row = tk.Frame(project, bg=SURFACE)
     row.pack(fill="x")
-    label(row, "DATASET", 9, muted=True).pack(side="left", padx=(0, 16))
+    label(row, "Dataset", 10, muted=True).pack(side="left", padx=(0, 16))
     app.dataset_var = tk.StringVar(value="")
     app.path_entry = tk.Entry(row, textvariable=app.dataset_var, font=("Segoe UI", 10))
     app.path_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 10))
     button(row, "Browse folder", app._browse_dataset).pack(side="left")
     app.dataset_status_lbl = label(project, "Choose a folder of photos or prepared training data.", muted=True, anchor="w")
-    app.dataset_status_lbl.pack(fill="x", pady=(8, 12))
+    app.dataset_status_lbl.pack(fill="x", pady=(6, 8))
     project.bind("<Configure>", lambda e: app.dataset_status_lbl.configure(wraplength=max(200, e.width - 40)))
     row = tk.Frame(project, bg=SURFACE)
     row.pack(fill="x")
-    label(row, "PRESET", 9, muted=True).pack(side="left", padx=(0, 24))
+    label(row, "Profile", 10, muted=True).pack(side="left", padx=(0, 24))
     app.preset_combo = ttk.Combobox(row, textvariable=app.preset_var, width=23,
                                     state="readonly", postcommand=app._refresh_presets)
     app.preset_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
     app.preset_load_btn = button(row, "Load", app._load_preset)
     app.preset_load_btn.pack(side="left", padx=(0, 8))
     button(row, "Save as…", app._save_preset).pack(side="left")
-    button(row, "360° splitter", app._open_panoramic_splitter_dialog).pack(side="right", padx=(12, 0))
-    button(row, "Video frames", app._open_video_extractor_dialog).pack(side="right", padx=(12, 0))
     app._refresh_presets()
     app.preset_var.trace_add("write", lambda *_: app.preset_load_btn.configure(
         state="normal" if app.preset_var.get() else "disabled"))
@@ -348,18 +464,14 @@ def build_workspace(app, tooltip):
         control.grid(row=0, column=i, sticky="ew", padx=(0, 8))
         engines.columnconfigure(i, weight=1)
         engine_controls.append((control, app.engine_var))
-    alignment_hint = label(align, "", muted=True, anchor="w")
-    alignment_hint.pack(fill="x", pady=(0, 10))
-    alignment_hint.bind("<Configure>", lambda e: alignment_hint.configure(wraplength=e.width))
+    wrap_choices(engines)
     hints = {"vggt_omega": "General photos & drones · neural geometry prediction",
              "ace0": "Scene coordinate regression · camera pose refinement",
              "pycusfm": "Perspective photos · GPU feature matching",
              "opensfm": "360° panoramas & perspective photos · feature-based reconstruction",
              "360dvo": "Sequential 360° frames & video · visual odometry"}
-    def update_hint(*_):
-        alignment_hint.configure(text=hints.get(app.engine_var.get(), ""))
-    app.engine_var.trace_add("write", update_hint)
-    update_hint()
+    for control, variable in engine_controls:
+        tooltip(control, hints.get(control.cget("value"), ""))
     general = tk.Frame(align, bg=SURFACE)
     general.pack(fill="x", pady=(0, 14))
     field(general, "Image resolution", app.res_var, ["512", "1024", "1536", "2048"])
@@ -392,6 +504,7 @@ def build_workspace(app, tooltip):
         control.grid(row=0, column=i, sticky="ew", padx=(0, 8))
         engines.columnconfigure(i, weight=1)
         engine_controls.append((control, app.train_engine_var))
+    wrap_choices(engines, 190)
     general = tk.Frame(train, bg=SURFACE)
     general.pack(fill="x", pady=(0, 16))
     field(general, "Training iterations", app.train_iter_var,

@@ -26,7 +26,9 @@ class PresetTests(unittest.TestCase):
 
     def close_root(self):
         for callback in self.root.tk.call("after", "info"):
-            self.root.after_cancel(callback)
+            # Widgets own their registered Python commands. Cancel only the Tcl
+            # timer here; widget.destroy() will delete each command exactly once.
+            self.root.tk.call("after", "cancel", callback)
         self.root.destroy()
 
     def save(self, name="Tour – Fast"):

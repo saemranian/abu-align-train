@@ -416,8 +416,8 @@ def main():
         control_layout="fixed",
         control_width="medium",
         dark_mode=True,
-        brand_color=(16, 185, 129),  # Emerald green (#10b981)
-        show_logo=True,
+        brand_color=(112, 219, 192),  # Shared mint accent.
+        show_logo=False,
         show_share_button=False
     )
 
@@ -428,11 +428,11 @@ def main():
     current_run_name = run_names[0]
 
     # --- TOP GUI: Project & Provenance Card ---
-    server.gui.add_markdown(f"## 🌐 Abu Align 3D Inspector\n**Project**: `{project_title}`")
+    server.gui.add_markdown(f"## Scene inspector\n{project_title}\n\nInspect geometry, cameras, and reconstruction runs.")
 
     # Run selection dropdown
     run_dropdown = server.gui.add_dropdown(
-        "Reconstruction Run",
+        "Reconstruction",
         options=run_names,
         initial_value=current_run_name
     )
@@ -441,19 +441,19 @@ def main():
     info_card = server.gui.add_markdown(content="*Inspecting run...*")
 
     # Action Toolbar
-    refresh_btn = server.gui.add_button("🔄 Refresh Runs")
-    focus_btn = server.gui.add_button("🎯 Focus View on Trajectory")
-    folder_btn = server.gui.add_button("📂 Open Run Folder in Explorer")
+    refresh_btn = server.gui.add_button("Refresh runs")
+    focus_btn = server.gui.add_button("Fit trajectory")
+    folder_btn = server.gui.add_button("Open run folder")
 
     # --- VIEW CONTROLS FOLDER ---
-    with server.gui.add_folder("Visual Aids & Toggles"):
-        show_traj_check = server.gui.add_checkbox("Show Camera Trajectory Path", initial_value=True)
-        show_cams_check = server.gui.add_checkbox("Show Camera Frustums", initial_value=True)
-        filter_outliers_check = server.gui.add_checkbox("Filter Extreme Outliers (<30m)", initial_value=True)
-        point_size_slider = server.gui.add_slider("Point Size", min=0.001, max=0.05, step=0.001, initial_value=0.006)
-        frustum_scale_slider = server.gui.add_slider("Camera Frustum Scale", min=0.01, max=0.3, step=0.01, initial_value=0.05)
+    with server.gui.add_folder("Display"):
+        show_traj_check = server.gui.add_checkbox("Trajectory", initial_value=True)
+        show_cams_check = server.gui.add_checkbox("Camera frustums", initial_value=False)
+        filter_outliers_check = server.gui.add_checkbox("Hide outliers beyond 30 m", initial_value=True)
+        point_size_slider = server.gui.add_slider("Point size", min=0.001, max=0.05, step=0.001, initial_value=0.006)
+        frustum_scale_slider = server.gui.add_slider("Camera size", min=0.01, max=0.3, step=0.01, initial_value=0.05)
         color_mode_dropdown = server.gui.add_dropdown(
-            "Color Mode",
+            "Color",
             options=["Original RGB", "Height Ramp (Z-axis)", "Distance Ramp", "Solid Emerald"],
             initial_value="Original RGB"
         )
