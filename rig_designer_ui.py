@@ -9,19 +9,32 @@ def wrap_row(row):
     children = list(row.winfo_children())
     for widget in children:
         widget.pack_forget()
+    row.pack_propagate(False)
     previous = [None]
     def arrange(event):
         if event.width == previous[0]:
             return
         previous[0] = event.width
-        x, line, column = 0, 0, 0
+        x, y, line_height = 0, 0, 0
         for widget in children:
             width = widget.winfo_reqwidth() + 8
             if x and x + width > event.width:
-                line, column, x = line + 1, 0, 0
-            widget.grid(row=line, column=column, sticky="w", padx=(0, 8), pady=5)
-            x, column = x + width, column + 1
+                y, x, line_height = y + line_height + 10, 0, 0
+            height = widget.winfo_reqheight()
+            widget.place(x=x, y=y+5, width=min(width-8, event.width), height=height)
+            x = x + width
+            line_height = max(line_height, height)
+        row.configure(height=y+line_height+10)
     row.bind("<Configure>", arrange)
+
+
+def friendly_choices(combo, variable, options):
+    display = tk.StringVar(value=options[variable.get()])
+    combo.configure(textvariable=display, values=list(options.values()))
+    reverse = {label: value for value, label in options.items()}
+    combo.bind("<<ComboboxSelected>>", lambda e: variable.set(reverse[display.get()]))
+    variable.trace_add("write", lambda *_: display.set(options[variable.get()]))
+    combo.display_variable = display
 
 
 def enhance_rig_designer(app, ctx):
@@ -55,11 +68,31 @@ def enhance_rig_designer(app, ctx):
         card.pack_forget()
         card.configure(text="", bd=0, padx=0, pady=0)
         card.pack(in_=page.body, fill="x")
+        card.lift()
     notebook.select(1)
     notebook.enable_traversal()
-    for name in ("m_row", "o1", "o3", "dome_row1", "video_card_frame"):
+    friendly_choices(ctx["mode_cb"], ctx["mode_var"],
+                     {"ring": "Ring", "cubemap": "Cubemap", "dome": "Dome", "fibonacci": "Fibonacci sphere"})
+    friendly_choices(ctx["solver_cb"], ctx["solver_mode_var"],
+                     {"free": "Manual", "lock_overlap": "Keep overlap", "lock_fov": "Keep field of view"})
+    ctx["solver_cb"].configure(width=17)
+    for widget in ctx["m_row"].winfo_children():
+        if isinstance(widget, tk.Label):
+            widget.configure(text="Layout" if "Architecture" in widget.cget("text") else "Adjustments",
+                             width=11, anchor="w")
+    for widget in ctx["m_row"].winfo_children():
+        widget.pack_forget()
+    for i, widget in enumerate(ctx["m_row"].winfo_children()):
+        widget.grid(row=i//2, column=i%2, sticky="w", pady=7, padx=(0, 10))
+    for name in ("o1", "o3", "dome_row1", "video_card_frame"):
         if name != "video_card_frame":  # This row's entry changes between FPS/stride via pack.
             wrap_row(ctx[name])
+    for widget in ctx["video_card_frame"].winfo_children():
+        if isinstance(widget, tk.Label):
+            if widget.cget("text") == "Video Sampling:":
+                widget.configure(text="Video")
+            elif widget.cget("text") == "Max Frames:":
+                widget.configure(text="Limit")
     # Long source fields stretch; vertical space belongs to the currently relevant step.
     for page, title, detail in zip(pages, ["Choose your panoramas", "Camera arrangement", "Output & sampling"],
                                   ["Start with 360° images or a panoramic video.",
@@ -122,6 +155,7 @@ def enhance_rig_designer(app, ctx):
                        bg=SURFACE, fg=MUTED, selectcolor=BG, activebackground=SURFACE,
                        activeforeground=ACCENT, bd=0, highlightthickness=0).pack(side="left", padx=(0, 14))
     ctx["viz_canvas"].configure(bg="#11191e", takefocus=True)
+    ctx["viz_canvas"].configure(highlightthickness=1, highlightbackground="#11191e", highlightcolor=BORDER)
     ctx["canvas_card"].configure(bg="#11191e", highlightthickness=0)
     ctx["telemetry_card"].configure(text="Rig summary", fg=MUTED, bd=0)
     ctx["t_c1"].pack_configure(side="top", fill="x", expand=False)
@@ -168,6 +202,16 @@ def enhance_rig_designer(app, ctx):
     for card, page in zip([ctx["paths_card"], ctx["rig_card"], ctx["optics_card"]], pages):
         def bind_card(widget, target=page):
             widget.bind("<MouseWheel>", lambda e: (target.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"), "break")[-1])
+            def reveal(event):
+                y = event.widget.winfo_rooty() - target.body.winfo_rooty()
+                top = target.canvas.canvasy(0)
+                visible = target.canvas.winfo_height()
+                total = max(1, target.body.winfo_height())
+                if y < top:
+                    target.canvas.yview_moveto(max(0, y-12) / total)
+                elif y + event.widget.winfo_height() > top + visible:
+                    target.canvas.yview_moveto((y + event.widget.winfo_height()-visible+12) / total)
+            widget.bind("<FocusIn>", reveal, add="+")
             for child in widget.winfo_children():
                 bind_card(child, target)
         bind_card(card)

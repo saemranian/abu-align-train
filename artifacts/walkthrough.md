@@ -1,60 +1,71 @@
-# Abu Align & Train v0.0.3.7 — PFGS360 Live Training & Telemetry Fix
+# Abu Align & Train v0.0.4.0 — Minimal rig designer and 3D preview
 
-## 1. Issue Diagnosis & Root Causes
+## Design changes and rationale
+The old splitter exposed all source, geometry, optics, and sampling controls at
+once. Its viewport drew every large frustum, ray, and label with stippled fills,
+which obscured the rig and made selection impossible.
 
-In the previous run reported by the user (`media_1790110129516.png`), clicking **TRAIN 3DGS ONLY** with PFGS360 appeared stuck with `Status: Initializing 3DGS Training...`, `0.0%`, low GPU/CPU utilization, and an empty black console.
+The new 360° Rig Designer separates Source, Rig, and Export into scrollable tabs.
+It keeps export actions pinned, uses readable layout/solver names, and shares
+the graphite/mint workspace theme. Parameters retain their existing underlying
+variables and solver callbacks. Rig summary details collapse by default.
+Labels and inputs wrap without sharing grid-column widths across unrelated rows.
+Controls remain above the notebook in Tk's stacking order, avoiding hidden cards.
 
-Investigation revealed three distinct root causes:
+The CPU-only Pillow renderer uses supersampling and smooth translucent coverage.
+Camera markers show viewing directions from a shared origin; they do not imply
+physical camera baselines. One selected camera is emphasized by default. Click a
+marker to select it; independently toggle All coverage, Labels, and Grid. Fit,
+Top, Front, and Rotate provide repeatable views. Orbit/pan/wheel interactions
+remain; arrows, +/-, F, and bracket keys support keyboard navigation. Polar and
+Map overviews remain available. Coverage is an ideal pinhole illustration, not
+a lens-distortion or occlusion simulation. Export geometry is unchanged.
 
-1. **Dataparser Selection Mismatch (CPU Matching vs Instant GPU Handoff)**:
-   - The user selected `◉ Pose Free Direct [Unposed Video - CPU Matching]`.
-   - The dataset already had 169 frames with pre-aligned OpenSfM poses in `results/sparse_16_opensfm/3dgs_dataset`.
-   - In `Pose-Free Direct` mode, PFGS360 intentionally discards prior poses and calculates relative poses from scratch on CPU using pairwise SIFT matching (`compute relative camera pose for views [0, 1, 2, 3] and 4: 10635 pairs`). This is CPU-bound and takes ~15–30 minutes before 3DGS optimization begins.
-   - In contrast, when `Auto-Detect` or `OpenSfM / 360DVO Handoff` is chosen, PFGS360 instantly detects `reconstruction.json` or `transforms.json`, bypasses CPU matching completely, engages 100% RTX 4090 GPU, and finishes training + PLY export in under ~70 seconds.
+Preview basis calculations apply roll simultaneously to right/up axes and are
+tested at poles and arbitrary orientations. Selection clamps when camera count
+shrinks. Partial invalid numeric edits show a prompt rather than a Tk traceback.
+Closing is blocked during export; normal close and Use dataset cancel rotation.
+Deferred export failures retain their exception text for the error dialog.
 
-2. **Console Output Buffering & Tkinter Event Loop**:
-   - In earlier versions, subprocess stdout buffering delayed log output on Windows until buffers flushed.
-   - Text logged via `_log` lacked an immediate `self.root.update_idletasks()` flush, causing the GUI console to remain blank while the process began.
+Implementation: rig_designer_ui.py manages presentation and progressive
+disclosure; rig_viewport.py provides geometry/rendering; abu_align_gui.py retains
+workflow callbacks. version_manager.py now includes both modules in snapshots.
 
-3. **Telemetry & Progress Bar Gap for Training Engines**:
-   - `_check_queue()` in `abu_align_gui.py` did not include `[PFGS360]` in its stage badge and telemetry handlers.
-   - While stage 3 (Neural Inference) and stage 5 (Tracking & BA) had regex percentage parsers, stage 6 (3DGS Training) lacked parsing for iteration steps (`Step (% Done)`), depth prior generation (`XX%|...| X/Y`), and ETAs (`1 m, 0 s`).
-   - Consequently, the progress bar remained pinned at `0.0%` and the status label remained on `Status: Initializing 3DGS Training...` for the entire duration of the training session.
+## Verification and performance
+In the vggt environment:
 
----
+```powershell
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests -p test_rig_designer.py -v
+python -c "import py_compile; [py_compile.compile(f,doraise=True) for f in ['abu_align_gui.py','desktop_ui.py','rig_designer_ui.py','rig_viewport.py','align_cli.py','train_engine.py','opensfm_engine.py','360dvo_engine.py','version_manager.py']]"
+python version_manager.py --bump
+git diff --check
+```
 
-## 2. Changes Made in v0.0.3.7
+All 16 tests passed in 54.228 seconds. Tests cover the existing workspace,
+presets, workflow controls, and telemetry, plus all four rig layouts and three
+preview modes, camera picking/clamping, FOV/aspect math, orthonormal rolled
+bases, invalid numeric edits, and visible minimum-size controls. The five rig
+tests were rerun after the final wrapping adjustment. Native NumPy/Pillow tests
+ran outside the sandbox due DLL-loading restrictions. Nine modules compiled.
+Desktop visual inspection caught and corrected a clipped adjustments label.
+No panorama export, reconstruction, or training job was launched for these tests.
 
-1. **Smart Pre-Aligned Poses Guard for PFGS360**:
-   - When the user selects `Pose-Free Direct [CPU Matching]` but the dataset already contains pre-aligned poses (`transforms.json`, `reconstruction.json`, or in `3dgs_dataset/` / `results/`), the GUI displays an interactive confirmation dialog asking if the user would like to switch to `Auto-Detect` to leverage existing poses and train immediately at 100% GPU power.
-   - Clicking **Yes** automatically switches the dataparser mode to `auto` and launches 100% GPU training.
+At 890x559 viewport pixels, 30 CPU-only renders after warmup measured:
+- Median render: 38.32 ms; maximum: 42.32 ms.
+- Retained process RSS: 81.21 MB before, 81.28 MB after (+0.07 MB).
+These are local smoke measurements, not a universal frame-rate guarantee or a
+peak-memory benchmark. The renderer holds one Tk image; intermediate raster
+buffers are released. No GPU models/tensors are initialized by the renderer.
+GPU VRAM was not separately benchmarked; existing hardware monitoring remains.
 
-2. **Live Training Telemetry & Real-Time Progress Bar**:
-   - Upgraded `_check_queue()` in `abu_align_gui.py` to parse:
-     - **Depth Prior Generation**: `[PFGS360] 25%|██▌ | 43/169` -> updates progress bar and shows `Stage 6/6: Precomputing Depth Priors [43/169] (25%)`.
-     - **Training Iterations**: `[PFGS360] 1000 (3.33%)` -> updates progress bar to 3.3% and shows `Stage 6/6: PFGS360 Active [Step 1,000] (3.3%)`.
-     - **Accurate ETA**: extracts elapsed iteration time and ETA (`⏱ ETA: 1 m, 0 s`).
-     - **LichtFeld Studio**: `Iteration 500/7000 (7.1%) - ETA: 45s`.
-     - **Pose-Free CPU Matching**: `compute relative camera pose for views ... and X:` -> displays `Stage 6/6: CPU Relative Pose Matching (View #X)`.
-     - **Export & Completion**: updates telemetry to `Exporting 3D Gaussian Splat (.ply)...` and sets progress to 100% when finished.
+## Release and co-development
+Odometer rollover: v0.0.3.9 -> v0.0.4.0. Active and versioned C# launchers rebuilt.
+Snapshot: versions/v0.0.4.0/. Walkthrough copies: root, artifacts/, and docs/.
+The consolidated repository is canonical; no retired Abu_Align mirror is made.
 
-3. **Instant GUI Console Rendering**:
-   - Added `self.root.update_idletasks()` to `self._log()` to force Tkinter to immediately repaint text in the console widget.
-
-4. **Launchers & Version Snapshot**:
-   - Recompiled `Abu_Align.exe` and `Abu_Align_and_Train.exe` with C# compiler `csc.exe`.
-   - Created `versions/v0.0.3.7/` snapshot via `version_manager.py --bump`.
-   - Added unit test `test_train_only_pfgs360_workflow_and_telemetry_parsing` in `tests/test_desktop_ui.py`.
-
----
-
-## 3. Verification & Benchmark
-
-1. **Live PFGS360 Training Verification**:
-   - Executed `train_engine.py` on the user's test dataset (`Container_03\Insta360\Tests\Extract 1\CC\Equirectangular`).
-   - `Auto-Detect` mode detected pre-aligned OpenSfM poses, bypassed CPU matching, engaged 100% RTX 4090 GPU, trained 1,042,222 Gaussians, and exported `pfgs360_splat.ply` (258,472,613 bytes) in **77.1 seconds**.
-   - `Pose-Free Direct` mode executed successfully in **70.1 seconds** for 5 test steps and exported `pfgs360_splat.ply` (260,610,869 bytes).
-
-2. **Automated Test Suite**:
-   - Ran `python -m unittest discover -s tests -v`:
-   - All 11 tests passed in 15.55s with 0 errors and 0 failures.
+Antigravity completed its engine commits while this UI work was in progress.
+Its v0.0.3.9 commit captured the initial rig UI modules from the shared folder.
+This dedicated UI release finishes and validates that work on top of its commit.
+Existing engine logic is preserved; CLI/training changes in this commit are
+version headers only. The user requested keeping engine work separate.

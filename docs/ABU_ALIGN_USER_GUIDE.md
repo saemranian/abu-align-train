@@ -1,7 +1,7 @@
 # Abu Align & Train: Complete User Guide & Technical Manual
 
 **Software:** Abu Align & Train (Unified Neural Photogrammetry & 3D Gaussian Splatting Suite)  
-**Version:** v0.0.3.6
+**Version:** v0.0.4.0
 **Maintainer:** saemranian  
 **Target Environments:** Windows 10/11 (CUDA 12.x+), Linux / RunPod Cloud GPU  
 **Integrated Align Engines:** VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO  
@@ -11,6 +11,35 @@
 ---
 
 ## Desktop workspace (v0.0.3.6)
+
+### 360° Rig Designer (v0.0.4.0)
+
+Open **360° splitter** from the workspace. The designer separates **Source**,
+**Rig**, and **Export** into scrollable tabs, with export actions always visible.
+Layout names are Ring, Cubemap, Dome, and Fibonacci sphere. Adjustments can be
+Manual, Keep overlap, or Keep field of view; these use the existing solver.
+
+The **Orbit** preview uses antialiased camera direction markers. Click a marker
+to inspect that camera's pinhole coverage. All cameras share the panorama's
+origin; marker positions illustrate viewing directions, not physical baselines.
+**All coverage**, **Labels**, and **Grid** independently control preview detail.
+Coverage is an ideal pinhole illustration, not a distorted-lens or occlusion
+simulation. Output camera generation remains unchanged.
+
+- Drag to orbit; Shift-drag or right-drag to pan; scroll to zoom.
+- **Fit**, **Top**, and **Front** provide repeatable viewpoints; double-click
+  also resets the orbit. **Rotate** toggles turntable motion.
+- With the viewport focused, arrow keys orbit, +/− zoom, F resets, and [ / ]
+  select the previous or next camera.
+- **Polar** and **Map** retain the overview diagrams. **Details** expands the
+  numeric rig summary, leaving the preview clear by default.
+- **Export views**, **Use dataset**, and **Open output** remain at the bottom.
+  Closing is blocked during an active export; closing afterward stops rotation.
+
+The renderer runs on the CPU and does not initialize an alignment/training GPU
+model. It requires Pillow, already present in the GUI environment.
+
+### Main workspace
 
 The desktop UI uses three focused tabs: **Alignment**, **Training**, and
 **Activity**. Dataset selection, presets, progress, and run controls remain

@@ -53,7 +53,7 @@ class RigSceneRenderer:
         vr, vu, vf = basis(orbit["yaw"], orbit["pitch"])
         # Orthographic orbit keeps glyph size stable and avoids near-plane clipping.
         zoom = 3.4 / max(1.2, orbit["dist"])
-        pixels = min(width, max(100, height - 130)) * .29 * zoom
+        pixels = min(width, max(100, height - 130)) * .40 * zoom
         cx, cy = width / 2 + orbit["pan_x"], height / 2 + 15 + orbit["pan_y"]
 
         def project(point):
@@ -129,7 +129,7 @@ class RigSceneRenderer:
             name, yaw, pitch, roll, fov = rig[self.selected]
             canvas.create_text(22, 22, anchor="nw", text=f"Camera {self.selected + 1:02d}  /  {len(rig):02d}",
                                fill="#e7edef", font=("Segoe UI", 12, "bold"))
-            canvas.create_text(22, 49, anchor="nw", text=f"{name}   ·   FOV {fov:g}°   ·   yaw {yaw:g}° / pitch {pitch:g}°",
+            canvas.create_text(22, 49, anchor="nw", text=f"Pinhole preview   ·   FOV {fov:g}°   ·   yaw {yaw:g}° / pitch {pitch:g}°",
                                fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width-44))
         canvas.create_text(22, height - 22, anchor="sw", text="Drag to orbit   ·   Scroll to zoom   ·   Click a camera to inspect",
                            fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width - 105))

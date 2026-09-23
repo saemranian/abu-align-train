@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.9
+Abu Align & Train Version 0.0.4.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.0 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2085,6 +2085,9 @@ class AbuAlignApp:
         ToolTip(auto_spin_btn, "Toggle continuous 3D turntable orbit rotation.")
 
         def on_close_dialog():
+            if orbit_state.get("exporting", False):
+                messagebox.showinfo("Export in progress", "Wait for the export to finish before closing this window.", parent=dialog)
+                return
             orbit_state["auto_orbit"] = False
             if orbit_state["after_id"]:
                 try:
@@ -2477,7 +2480,12 @@ class AbuAlignApp:
                 cw = 520
                 ch = 370
 
-            rig = get_current_rig()
+            try:
+                rig = get_current_rig()
+            except (tk.TclError, ValueError, ZeroDivisionError):
+                viz_canvas.create_text(24, 30, anchor="nw", text="Enter valid rig settings to update the preview.",
+                                       fill=self.text_secondary, font=("Segoe UI", 10))
+                return
             vmode = canvas_view_mode_var.get()
 
             if vmode == "polar":
@@ -2793,7 +2801,7 @@ class AbuAlignApp:
             if os.path.isdir(d):
                 self.dataset_var.set(d)
                 messagebox.showinfo("Dataset Configured", f"Active Abu Align dataset updated to:\n{d}")
-                dialog.destroy()
+                on_close_dialog()
 
         use_ds_btn.config(command=set_as_dataset)
 
@@ -2814,7 +2822,8 @@ class AbuAlignApp:
                 out_d = os.path.join(in_p, "pinhole_rig") if os.path.isdir(in_p) else f"{os.path.splitext(in_p)[0]}_pinhole_rig"
                 out_var.set(out_d)
 
-            split_btn.config(state=tk.DISABLED, text="⏳ Synthesizing Rig Views...")
+            orbit_state["exporting"] = True
+            split_btn.config(state=tk.DISABLED, text="Exporting…")
             close_btn.config(state=tk.DISABLED)
             dlg_pbar["value"] = 0
             status_lbl.config(text="Status: Initializing virtual multi-camera rig projection...", fg="#a855f7")
@@ -2869,6 +2878,7 @@ class AbuAlignApp:
                     sec = res.get("elapsed_seconds", 0.0)
 
                     def on_done():
+                        orbit_state["exporting"] = False
                         dlg_pbar["value"] = 100
                         status_lbl.config(
                             text=f"Status: Complete! Generated {tot:,} pinhole views from {panos} panoramas/frames in {sec}s.",
@@ -2882,11 +2892,12 @@ class AbuAlignApp:
 
                     dialog.after(0, on_done)
                 except Exception as ex:
-                    def on_err():
-                        status_lbl.config(text=f"Status: Failed - {ex}", fg=self.accent_red)
+                    def on_err(error=str(ex)):
+                        orbit_state["exporting"] = False
+                        status_lbl.config(text=f"Status: Failed - {error}", fg=self.accent_red)
                         split_btn.config(state=tk.NORMAL, text="Export views")
                         close_btn.config(state=tk.NORMAL)
-                        messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{ex}")
+                        messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{error}")
                     dialog.after(0, on_err)
 
             t = threading.Thread(target=worker, daemon=True)
@@ -3419,7 +3430,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3777,7 +3788,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.9 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4051,7 +4062,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.9\n"
+            "Abu Align & Train - Version 0.0.4.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

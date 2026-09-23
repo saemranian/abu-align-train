@@ -1,90 +1,71 @@
-# Walkthrough: Abu Align & Train v0.0.3.9 — 360DVO to PFGS360 OpenSfM Handoff & Dataparser Hardening
+# Abu Align & Train v0.0.4.0 — Minimal rig designer and 3D preview
 
-## Executive Summary
+## Design changes and rationale
+The old splitter exposed all source, geometry, optics, and sampling controls at
+once. Its viewport drew every large frustum, ray, and label with stippled fills,
+which obscured the rig and made selection impossible.
 
-Following a deep forensic analysis of the two operational logs:
-1. **Alignment Log**: `abu_align_2026-09-23_10-16-37.log` (360DVO)
-2. **Training Log**: `abu_train_2026-09-23_10-18-56.log` (PFGS360)
+The new 360° Rig Designer separates Source, Rig, and Export into scrollable tabs.
+It keeps export actions pinned, uses readable layout/solver names, and shares
+the graphite/mint workspace theme. Parameters retain their existing underlying
+variables and solver callbacks. Rig summary details collapse by default.
+Labels and inputs wrap without sharing grid-column widths across unrelated rows.
+Controls remain above the notebook in Tk's stacking order, avoiding hidden cards.
 
-We identified and resolved the exact data handoff issue where PFGS360 aborted with:
-```text
-[Open3D WARNING] Write PLY failed: point cloud has 0 points.
-Loading 0 points from .../opensfm/reconstruction.json ...
-RuntimeError: mat1 and mat2 shapes cannot be multiplied (1x0 and 4x3)
+The CPU-only Pillow renderer uses supersampling and smooth translucent coverage.
+Camera markers show viewing directions from a shared origin; they do not imply
+physical camera baselines. One selected camera is emphasized by default. Click a
+marker to select it; independently toggle All coverage, Labels, and Grid. Fit,
+Top, Front, and Rotate provide repeatable views. Orbit/pan/wheel interactions
+remain; arrows, +/-, F, and bracket keys support keyboard navigation. Polar and
+Map overviews remain available. Coverage is an ideal pinhole illustration, not
+a lens-distortion or occlusion simulation. Export geometry is unchanged.
+
+Preview basis calculations apply roll simultaneously to right/up axes and are
+tested at poles and arbitrary orientations. Selection clamps when camera count
+shrinks. Partial invalid numeric edits show a prompt rather than a Tk traceback.
+Closing is blocked during export; normal close and Use dataset cancel rotation.
+Deferred export failures retain their exception text for the error dialog.
+
+Implementation: rig_designer_ui.py manages presentation and progressive
+disclosure; rig_viewport.py provides geometry/rendering; abu_align_gui.py retains
+workflow callbacks. version_manager.py now includes both modules in snapshots.
+
+## Verification and performance
+In the vggt environment:
+
+```powershell
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests -p test_rig_designer.py -v
+python -c "import py_compile; [py_compile.compile(f,doraise=True) for f in ['abu_align_gui.py','desktop_ui.py','rig_designer_ui.py','rig_viewport.py','align_cli.py','train_engine.py','opensfm_engine.py','360dvo_engine.py','version_manager.py']]"
+python version_manager.py --bump
+git diff --check
 ```
 
-In **v0.0.3.9**, 360DVO's 12,192 dense tie points are now fully converted into standard Mapillary OpenSfM `reconstruction.json` format, `opensfm_dataparser.py` in PFGS360 is hardened with a multi-source PLY fallback and 0-point shape safety, and `train_engine.py` includes auto-healing point injection.
+All 16 tests passed in 54.228 seconds. Tests cover the existing workspace,
+presets, workflow controls, and telemetry, plus all four rig layouts and three
+preview modes, camera picking/clamping, FOV/aspect math, orthonormal rolled
+bases, invalid numeric edits, and visible minimum-size controls. The five rig
+tests were rerun after the final wrapping adjustment. Native NumPy/Pillow tests
+ran outside the sandbox due DLL-loading restrictions. Nine modules compiled.
+Desktop visual inspection caught and corrected a clipped adjustments label.
+No panorama export, reconstruction, or training job was launched for these tests.
 
----
+At 890x559 viewport pixels, 30 CPU-only renders after warmup measured:
+- Median render: 38.32 ms; maximum: 42.32 ms.
+- Retained process RSS: 81.21 MB before, 81.28 MB after (+0.07 MB).
+These are local smoke measurements, not a universal frame-rate guarantee or a
+peak-memory benchmark. The renderer holds one Tk image; intermediate raster
+buffers are released. No GPU models/tensors are initialized by the renderer.
+GPU VRAM was not separately benchmarked; existing hardware monitoring remains.
 
-## 1. Forensic Analysis & Root Cause
+## Release and co-development
+Odometer rollover: v0.0.3.9 -> v0.0.4.0. Active and versioned C# launchers rebuilt.
+Snapshot: versions/v0.0.4.0/. Walkthrough copies: root, artifacts/, and docs/.
+The consolidated repository is canonical; no retired Abu_Align mirror is made.
 
-| Pipeline Stage | Engine | Observed Result in Logs | Diagnosis |
-| :--- | :--- | :--- | :--- |
-| **Stage 1: Alignment** | **360DVO** | 169 frames tracked in 29.21s (60+ FPS), generated `360dvo_trajectory.txt` and `360dvo_points.ply` (12,192 points). Exit Code: 0 | **100% SUCCESS**. WSL2 Ubuntu and RTX 4090 executed with full hardware acceleration. |
-| **Stage 2: Handoff** | **OpenSfM Exporter** | Wrote `opensfm/reconstruction.json` with 169 camera shots, but hardcoded `"points": {}` as empty. | **BUG IDENTIFIED**. `tum_trajectory_to_opensfm` omitted point loading from `points_ply`. |
-| **Stage 3: Training** | **PFGS360** | `ns-train pfgs360` launched on RTX 4090, initialized optimizers, but crashed during dataparser setup. | **CRASH IDENTIFIED**. `opensfm_dataparser.py` attempted matrix multiplication on a 0-element tensor when `"points"` was empty. |
-
----
-
-## 2. Changes Made in v0.0.3.9
-
-### A. 360DVO OpenSfM Format Completeness (`360dvo_engine.py` & `dvo360_engine.py`)
-- Implemented `load_ply_points_for_opensfm` supporting both ASCII and binary PLY point cloud formats.
-- Updated `tum_trajectory_to_opensfm` to read `points_ply` and populate `reconstruction[0]["points"]` with:
-  ```json
-  "points": {
-      "0": {
-          "coordinates": [x, y, z],
-          "color": [r, g, b]
-      }, ...
-  }
-  ```
-- Guaranteed complete OpenSfM schema compatibility so downstream parsers receive full 3D point data.
-
-### B. PFGS360 OpenSfM Data Parser Hardening (`opensfm_dataparser.py` in WSL2)
-- Added multi-tier fallback: if `reconstruction.json` contains 0 points, the parser automatically checks for and loads `points.ply`, `360dvo_points.ply`, or `sparse.ply` from the dataset folder.
-- Added zero-point tensor safety: if 0 points are present, safely returns `torch.empty((0, 3))` without attempting invalid matrix multiplication.
-- Added bounding-box fallback: if 0 points are present, computes `scene_box` from the camera trajectory span (`diff_pose.norm().max() * 3.0`) instead of crashing on empty quantile sorting.
-- Guarded `_export_scene` against zero-point export crashes.
-
-### C. Training Engine Point Auto-Healing (`train_engine.py`)
-- In `train_pfgs360`, when `opensfm-dataparser` is active:
-  - If `reconstruction.json` has an empty `"points": {}` dictionary, `train_engine.py` detects any available `points.ply` or `360dvo_points.ply` and auto-injects the points before starting `ns-train`.
-- Patched existing `sparse_17_360dvo/3dgs_dataset/opensfm/reconstruction.json` with all 12,192 tie points.
-
----
-
-## 3. Live Verification & Benchmark
-
-1. **OpenSfM Data Parser Test**:
-   - Loaded all 169 equirectangular keyframes and all 12,192 points:
-     ```text
-     [10:31:55] OpenSfM Camera Box: [[-0.045, -0.628, -0.121], [0.134, 0.999, 0.066]]
-                Loading 12192 points for OpenSfM Dataparser...
-                OpenSfM Scene Box: [[-19414.492, -19414.492, -19414.492], [19414.492, 19414.492, 19414.492]]
-     === TEST RESULT: SUCCESS ===
-     Images count: 169
-     Points shape: torch.Size([12192, 3])
-     Return code: 0
-     ```
-
-2. **End-to-End PFGS360 Training Test**:
-   - Successfully cached all 169 frames.
-   - Precomputed UniK3D spherical metric depth priors at 14.11 it/s on the RTX 4090.
-   - Initialized Gaussian Splats, trained, saved checkpoint `step-000000004.ckpt`, and exported:
-     `pfgs360_splat.ply`.
-   - **Exit Code: 0 (Success)**.
-
-3. **Automated Unit Tests**:
-   - Ran `python -m unittest discover -s tests -v`.
-   - All 11 tests passed in 18.4s with 0 errors.
-
----
-
-## 4. Summary Table
-
-| Engine | WSL2 Backend Status | Photogrammetric Handoff | Result |
-| :--- | :--- | :--- | :--- |
-| **360DVO** | Verified (RTX 4090) | 12,192 dense points into PLY + OpenSfM | Clean 6-DoF trajectory + dense tie-points |
-| **PFGS360** | Verified (RTX 4090) | Parses OpenSfM poses + UniK3D metric depth | Full GPU training + automated PLY export |
+Antigravity completed its engine commits while this UI work was in progress.
+Its v0.0.3.9 commit captured the initial rig UI modules from the shared folder.
+This dedicated UI release finishes and validates that work on top of its commit.
+Existing engine logic is preserved; CLI/training changes in this commit are
+version headers only. The user requested keeping engine work separate.

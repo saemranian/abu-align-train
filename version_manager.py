@@ -93,6 +93,8 @@ def create_version_snapshot(version_str: str) -> None:
     snapshot_files = [
         "abu_align_gui.py",
         "desktop_ui.py",
+        "rig_designer_ui.py",
+        "rig_viewport.py",
         "align_cli.py",
         "train_engine.py",
         "opensfm_engine.py",
