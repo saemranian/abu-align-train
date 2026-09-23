@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.1 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.2 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -497,6 +497,7 @@ def train_3dgrut(
         f"path={os.path.abspath(dataset_dir)}",
         f"out_dir={os.path.abspath(output_dir)}",
         f"experiment_name=run_{variant}",
+        f"n_iterations={iterations}",
         f"dataset.downsample_factor={downsample_factor}",
         f"with_viser_gui={str(with_viser_gui)}",
     ]
@@ -823,8 +824,17 @@ def train_pfgs360(
     Executes 360° Omnidirectional Gaussian Splatting using PFGS360 (CVPR 2026).
     Supports both pose-free direct learning and OpenSfM / 360DVO alignment handoff.
     """
+    viewer_opened = False
     def log(msg):
+        nonlocal viewer_opened
         s = str(msg)
+        if ("localhost:7007" in s or "Viewer running at" in s) and not viewer_opened:
+            viewer_opened = True
+            try:
+                import webbrowser
+                webbrowser.open("http://localhost:7007")
+            except Exception:
+                pass
         try:
             if progress_callback:
                 progress_callback(s)
@@ -1004,7 +1014,8 @@ def train_pfgs360(
             "--output-dir", f"'{wsl_out}'",
             "--pipeline.model.sh-degree", str(sh_degree),
             "--pipeline.model.depth-type", depth_type,
-            "--vis", "tensorboard",
+            "--vis", "viewer+tensorboard",
+            "--viewer.quit-on-train-completion", "True",
         ]
         if not spherical_aware:
             wsl_cmd_parts.extend(["--pipeline.model.spherical-aware", "False"])
@@ -1088,7 +1099,8 @@ def train_pfgs360(
         "--output-dir", output_dir,
         "--pipeline.model.sh-degree", str(sh_degree),
         "--pipeline.model.depth-type", depth_type,
-        "--vis", "tensorboard",
+        "--vis", "viewer+tensorboard",
+        "--viewer.quit-on-train-completion", "True",
     ]
     if not spherical_aware:
         cmd.extend(["--pipeline.model.spherical-aware", "False"])

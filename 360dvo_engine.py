@@ -649,7 +649,8 @@ def run_360dvo_reconstruction(
         wsl_cmd = (
             f"cd {wsl_bridge.WSL_360DVO_DIR} && "
             f"{wsl_bridge.WSL_PYTHON} abu_360dvo_runner.py "
-            f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride {stride}"
+            f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride {stride} "
+            f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale}"
         )
         ret, out = wsl_bridge.run_command_in_wsl(wsl_cmd, log_callback=log)
         if ret == 0 and os.path.isfile(trajectory_txt):
