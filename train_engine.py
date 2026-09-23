@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.0 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.1 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -1054,6 +1054,17 @@ def train_pfgs360(
             wsl_cfg = wsl_bridge.win_to_wsl_path(latest_config)
             export_cmd = f"{wsl_bridge.WSL_NS_EXPORT} gaussian-splat --load-config '{wsl_cfg}' --output-dir '{wsl_out}' --output-filename 'pfgs360_splat.ply'"
             wsl_bridge.run_command_in_wsl(export_cmd, log_callback=log)
+
+        target_splat = os.path.join(output_dir, "pfgs360_splat.ply")
+        if os.path.isfile(target_splat):
+            log(f"      * [PFGS360] Training complete! Model exported: {target_splat}")
+            return target_splat
+
+        splat_candidates = [p for p in glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True) if "splat" in os.path.basename(p).lower()]
+        if splat_candidates:
+            best_splat = max(splat_candidates, key=os.path.getmtime)
+            log(f"      * [PFGS360] Training complete! Model exported: {best_splat}")
+            return best_splat
 
         ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
                          glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
