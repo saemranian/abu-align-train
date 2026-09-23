@@ -237,7 +237,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.3.8", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.3.9", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
 
     # Pin run controls to the bottom before allocating expandable notebook space.
@@ -449,7 +449,8 @@ def build_workspace(app, tooltip):
     for i in range(3):
         root.bind(f"<Alt-Key-{i + 1}>", lambda e, index=i: app.workspace_tabs.select(index))
     def on_map(event):
-        if isinstance(event.widget, tk.Toplevel) and not event.widget.overrideredirect():
+        if (isinstance(event.widget, tk.Toplevel) and not event.widget.overrideredirect()
+                and not getattr(event.widget, "_custom_theme", False)):
             polish_dialog(event.widget)
     root.bind_class("Toplevel", "<Map>", on_map, add="+")
     for widget, text in [

@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.3.8
+Abu Align & Train Version 0.0.3.9
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.3.8 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.3.9 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2024,6 +2024,7 @@ class AbuAlignApp:
             orbit_state["dist"] = 3.4
             orbit_state["pan_x"] = 0.0
             orbit_state["pan_y"] = 0.0
+            canvas_view_mode_var.set("3d")
             draw_visualizer()
 
         reset_3d_btn = tk.Button(
@@ -2056,12 +2057,12 @@ class AbuAlignApp:
         def toggle_auto_orbit():
             orbit_state["auto_orbit"] = not orbit_state["auto_orbit"]
             if orbit_state["auto_orbit"]:
-                auto_spin_btn.config(bg="#4f46e5", fg="#ffffff", text="⏹ Stop Spin")
+                auto_spin_btn.config(bg="#24483f", fg="#70dbc0", text="Stop rotation")
                 if canvas_view_mode_var.get() != "3d":
                     canvas_view_mode_var.set("3d")
                 run_auto_orbit()
             else:
-                auto_spin_btn.config(bg="#312e81", fg="#c7d2fe", text="⚡ Auto-Spin")
+                auto_spin_btn.config(bg="#242d32", fg="#e7edef", text="Rotate")
                 if orbit_state["after_id"]:
                     try:
                         dialog.after_cancel(orbit_state["after_id"])
@@ -2071,7 +2072,7 @@ class AbuAlignApp:
 
         auto_spin_btn = tk.Button(
             vm_frame,
-            text="⚡ Auto-Spin",
+            text="Rotate",
             font=("Segoe UI", 7, "bold"),
             bg="#312e81",
             fg="#c7d2fe",
@@ -2107,10 +2108,14 @@ class AbuAlignApp:
             height=370
         )
         viz_canvas.pack(fill=tk.BOTH, expand=True)
+        from rig_viewport import RigSceneRenderer
+        renderer = RigSceneRenderer(viz_canvas)
 
         # Mouse Interaction Handlers for 3D Orbit Viewport
         def on_canvas_b1_down(evt):
             if canvas_view_mode_var.get() == "3d":
+                viz_canvas.focus_set()
+                orbit_state["press_x"], orbit_state["press_y"] = evt.x, evt.y
                 orbit_state["is_dragging"] = True
                 orbit_state["last_x"] = evt.x
                 orbit_state["last_y"] = evt.y
@@ -2131,6 +2136,11 @@ class AbuAlignApp:
                 draw_visualizer()
 
         def on_canvas_b1_up(evt):
+            if (canvas_view_mode_var.get() == "3d" and orbit_state["drag_mode"] == "orbit"
+                    and math.hypot(evt.x - orbit_state.get("press_x", -999),
+                                   evt.y - orbit_state.get("press_y", -999)) < 5):
+                renderer.pick(evt.x, evt.y)
+                draw_visualizer()
             orbit_state["is_dragging"] = False
 
         def on_canvas_b3_down(evt):
@@ -2251,7 +2261,7 @@ class AbuAlignApp:
 
         split_btn = tk.Button(
             btn_row,
-            text="▶ Start Rig Projection",
+            text="Export views",
             font=("Segoe UI", 9, "bold"),
             bg="#7c3aed",
             fg="#ffffff",
@@ -2668,290 +2678,11 @@ class AbuAlignApp:
                     viz_canvas.create_text(cx_cam, cy_cam - 9, text=tag_short, fill="#ffffff", font=("Segoe UI", 7, "bold"))
 
             else:
-                # ---------------------------------------------------------
-                # Interactive 3D Camera Rig Orbit Viewport (vmode == "3d")
-                # ---------------------------------------------------------
-                yaw_r = math.radians(orbit_state["yaw"])
-                pitch_r = math.radians(orbit_state["pitch"])
-                dist_o = max(0.5, orbit_state["dist"])
-                pan_x = orbit_state["pan_x"]
-                pan_y = orbit_state["pan_y"]
-
-                # Camera Eye position in spherical orbit
-                ex = dist_o * math.cos(pitch_r) * math.sin(yaw_r)
-                ey = dist_o * math.sin(pitch_r)
-                ez = dist_o * math.cos(pitch_r) * math.cos(yaw_r)
-
-                # Camera basis vectors (looking at origin)
-                vf = (-ex / dist_o, -ey / dist_o, -ez / dist_o)
-                if abs(vf[1]) > 0.999:
-                    ref_up = (0.0, 0.0, -1.0 if vf[1] > 0 else 1.0)
-                else:
-                    ref_up = (0.0, 1.0, 0.0)
-
-                vr_x = vf[1] * ref_up[2] - vf[2] * ref_up[1]
-                vr_y = vf[2] * ref_up[0] - vf[0] * ref_up[2]
-                vr_z = vf[0] * ref_up[1] - vf[1] * ref_up[0]
-                vr_len = math.hypot(vr_x, vr_y, vr_z)
-                vr = (vr_x / max(1e-6, vr_len), vr_y / max(1e-6, vr_len), vr_z / max(1e-6, vr_len))
-
-                vu = (
-                    vr[1] * vf[2] - vr[2] * vf[1],
-                    vr[2] * vf[0] - vr[0] * vf[2],
-                    vr[0] * vf[1] - vr[1] * vf[0]
-                )
-
-                fscale = min(cw, ch) * 0.92
-
-                def project_pt_3d(px, py, pz):
-                    rx = px - ex
-                    ry = py - ey
-                    rz = pz - ez
-                    zc = rx * vf[0] + ry * vf[1] + rz * vf[2]
-                    if zc <= 0.05:
-                        return None
-                    xc = rx * vr[0] + ry * vr[1] + rz * vr[2]
-                    yc = rx * vu[0] + ry * vu[1] + rz * vu[2]
-                    sx = cw / 2.0 + pan_x + (xc / zc) * fscale
-                    sy = ch / 2.0 + pan_y - (yc / zc) * fscale
-                    return (sx, sy, zc)
-
-                # 1. Background S^2 Sphere Reference Grid
-                # Latitude circles: +/-30 deg, +/-60 deg
-                for lat_deg, col, dsh in [(30, "#252538", (2, 4)), (-30, "#252538", (2, 4)), (60, "#1c1c2b", (2, 4)), (-60, "#1c1c2b", (2, 4))]:
-                    lat_r = math.radians(lat_deg)
-                    y_level = math.sin(lat_r)
-                    r_ring = math.cos(lat_r)
-                    seg_pts = []
-                    for s in range(37):
-                        ang = 2.0 * math.pi * (s / 36.0)
-                        pt = project_pt_3d(r_ring * math.sin(ang), y_level, r_ring * math.cos(ang))
-                        if pt:
-                            seg_pts.extend([pt[0], pt[1]])
-                    if len(seg_pts) >= 4:
-                        viz_canvas.create_line(seg_pts, fill=col, width=1, dash=dsh)
-
-                # Meridians: 0-180 and 90-270
-                for lon_d in [0, 90]:
-                    lon_r = math.radians(lon_d)
-                    sin_lon = math.sin(lon_r)
-                    cos_lon = math.cos(lon_r)
-                    mer_pts = []
-                    for s in range(37):
-                        ang = 2.0 * math.pi * (s / 36.0)
-                        px = math.cos(ang) * sin_lon
-                        py = math.sin(ang)
-                        pz = math.cos(ang) * cos_lon
-                        pt = project_pt_3d(px, py, pz)
-                        if pt:
-                            mer_pts.extend([pt[0], pt[1]])
-                    if len(mer_pts) >= 4:
-                        viz_canvas.create_line(mer_pts, fill="#232338", width=1, dash=(2, 4))
-
-                # Equator Circle (Pitch = 0°)
-                eq_pts = []
-                for s in range(49):
-                    ang = 2.0 * math.pi * (s / 48.0)
-                    pt = project_pt_3d(math.sin(ang), 0.0, math.cos(ang))
-                    if pt:
-                        eq_pts.extend([pt[0], pt[1]])
-                if len(eq_pts) >= 4:
-                    viz_canvas.create_line(eq_pts, fill="#4f46e5", width=1.5)
-
-                # Polar Vertical Axis (Zenith to Nadir)
-                p_zen = project_pt_3d(0.0, 1.30, 0.0)
-                p_nad = project_pt_3d(0.0, -1.30, 0.0)
-                p_cen = project_pt_3d(0.0, 0.0, 0.0)
-
-                if p_cen and p_zen:
-                    viz_canvas.create_line(p_cen[0], p_cen[1], p_zen[0], p_zen[1], fill="#a855f7", width=1.5, arrow=tk.LAST, arrowshape=(6, 8, 3))
-                    p_zen_lbl = project_pt_3d(0.0, 1.42, 0.0)
-                    if p_zen_lbl:
-                        viz_canvas.create_text(p_zen_lbl[0], p_zen_lbl[1], text="Zenith (+Y)", fill="#c084fc", font=("Segoe UI", 7, "bold"))
-
-                if p_cen and p_nad:
-                    viz_canvas.create_line(p_cen[0], p_cen[1], p_nad[0], p_nad[1], fill="#475569", width=1, dash=(2, 3))
-                    p_nad_lbl = project_pt_3d(0.0, -1.42, 0.0)
-                    if p_nad_lbl:
-                        viz_canvas.create_text(p_nad_lbl[0], p_nad_lbl[1], text="Nadir (-Y)", fill="#64748b", font=("Segoe UI", 7))
-
-                # Cardinal Directions at Equator
-                for card_name, (cx_i, cz_i) in [("N (0°)", (0.0, 1.15)), ("E (+90°)", (1.15, 0.0)), ("S (180°)", (0.0, -1.15)), ("W (-90°)", (-1.15, 0.0))]:
-                    p_c = project_pt_3d(cx_i, 0.0, cz_i)
-                    p_rim = project_pt_3d(cx_i / 1.15, 0.0, cz_i / 1.15)
-                    if p_rim and p_c:
-                        viz_canvas.create_line(p_rim[0], p_rim[1], p_c[0], p_c[1], fill="#38bdf8", width=1)
-                        viz_canvas.create_text(p_c[0], p_c[1], text=card_name, fill="#38bdf8", font=("Segoe UI", 7, "bold"))
-
-                # 2. Compute Camera Frustums Geometry & Depth-Sorting
-                out_w = out_w_var.get()
-                out_h = out_h_var.get()
-                aspect = max(0.1, out_w / max(1, out_h))
-                d_frustum = 1.12
-
-                # Overlap coloring
-                ol = overlap_var.get()
-                if 40.0 <= ol <= 65.0:
-                    f_outline = "#10b981"  # Emerald green (optimal)
-                    f_fill = "#064e3b"
-                    edge_col = "#059669"
-                elif ol > 65.0:
-                    f_outline = "#38bdf8"  # Sky blue (dense)
-                    f_fill = "#1e3a8a"
-                    edge_col = "#0284c7"
-                elif ol >= 20.0:
-                    f_outline = "#f59e0b"  # Amber (medium)
-                    f_fill = "#78350f"
-                    edge_col = "#d97706"
-                else:
-                    f_outline = "#ef4444"  # Red (loose)
-                    f_fill = "#7f1d1d"
-                    edge_col = "#dc2626"
-
-                frustum_list = []
-                for idx, (cam_name, yaw_d, pitch_d, roll_d, fov_d) in enumerate(rig):
-                    yaw_cam_r = math.radians(yaw_d)
-                    pitch_cam_r = math.radians(pitch_d)
-
-                    # Forward vector
-                    cf_x = math.cos(pitch_cam_r) * math.sin(yaw_cam_r)
-                    cf_y = math.sin(pitch_cam_r)
-                    cf_z = math.cos(pitch_cam_r) * math.cos(yaw_cam_r)
-
-                    # Reference up vector
-                    if abs(cf_y) > 0.999:
-                        ref_cam_up = (0.0, 0.0, -1.0 if cf_y > 0 else 1.0)
-                    else:
-                        ref_cam_up = (0.0, 1.0, 0.0)
-
-                    # Right = ref_up x cfwd
-                    cr_x = ref_cam_up[1] * cf_z - ref_cam_up[2] * cf_y
-                    cr_y = ref_cam_up[2] * cf_x - ref_cam_up[0] * cf_z
-                    cr_z = ref_cam_up[0] * cf_y - ref_cam_up[1] * cf_x
-                    cr_l = math.hypot(cr_x, cr_y, cr_z)
-                    if cr_l < 1e-6:
-                        cr = (1.0, 0.0, 0.0)
-                    else:
-                        cr = (cr_x / cr_l, cr_y / cr_l, cr_z / cr_l)
-
-                    # Up = cfwd x cr
-                    cu = (
-                        cf_y * cr[2] - cf_z * cr[1],
-                        cf_z * cr[0] - cf_x * cr[2],
-                        cf_x * cr[1] - cf_y * cr[0]
-                    )
-
-                    # Apply roll if present
-                    roll_cam_r = math.radians(roll_d)
-                    if abs(roll_cam_r) > 1e-4:
-                        cos_r = math.cos(roll_cam_r)
-                        sin_r = math.sin(roll_cam_r)
-                        cr = (cr[0]*cos_r + cu[0]*sin_r, cr[1]*cos_r + cu[1]*sin_r, cr[2]*cos_r + cu[2]*sin_r)
-                        cu = (cu[0]*cos_r - cr[0]*sin_r, cu[1]*cos_r - cr[1]*sin_r, cu[2]*cos_r - cr[2]*sin_r)
-
-                    # Dimensions of sensor plane
-                    half_fov_h = math.radians(fov_d / 2.0)
-                    w_sensor = d_frustum * math.tan(half_fov_h)
-                    h_sensor = w_sensor / aspect
-
-                    # Sensor center in 3D
-                    c_center = (cf_x * d_frustum, cf_y * d_frustum, cf_z * d_frustum)
-
-                    # 4 Corners (TL, TR, BR, BL)
-                    c0 = (c_center[0] - w_sensor*cr[0] + h_sensor*cu[0], c_center[1] - w_sensor*cr[1] + h_sensor*cu[1], c_center[2] - w_sensor*cr[2] + h_sensor*cu[2])
-                    c1 = (c_center[0] + w_sensor*cr[0] + h_sensor*cu[0], c_center[1] + w_sensor*cr[1] + h_sensor*cu[1], c_center[2] + w_sensor*cr[2] + h_sensor*cu[2])
-                    c2 = (c_center[0] + w_sensor*cr[0] - h_sensor*cu[0], c_center[1] + w_sensor*cr[1] - h_sensor*cu[1], c_center[2] + w_sensor*cr[2] - h_sensor*cu[2])
-                    c3 = (c_center[0] - w_sensor*cr[0] - h_sensor*cu[0], c_center[1] - w_sensor*cr[1] - h_sensor*cu[1], c_center[2] - w_sensor*cr[2] - h_sensor*cu[2])
-
-                    # Ray tip
-                    ray_tip = (cf_x * (d_frustum * 1.25), cf_y * (d_frustum * 1.25), cf_z * (d_frustum * 1.25))
-
-                    # Label position (just outside sensor top)
-                    lbl_pos = (c_center[0] + (h_sensor + 0.12)*cu[0], c_center[1] + (h_sensor + 0.12)*cu[1], c_center[2] + (h_sensor + 0.12)*cu[2])
-
-                    # View space depth (for Painter's algorithm sort)
-                    z_cam_depth = (c_center[0] - ex) * vf[0] + (c_center[1] - ey) * vf[1] + (c_center[2] - ez) * vf[2]
-
-                    frustum_list.append((z_cam_depth, idx, cam_name, c_center, [c0, c1, c2, c3], ray_tip, lbl_pos))
-
-                # Sort frustums back-to-front (largest Z first)
-                frustum_list.sort(key=lambda item: item[0], reverse=True)
-
-                # Draw Frustums
-                for z_depth, idx, cam_name, c_center, corners, ray_tip, lbl_pos in frustum_list:
-                    p_orig = project_pt_3d(0.0, 0.0, 0.0)
-                    p_c0 = project_pt_3d(*corners[0])
-                    p_c1 = project_pt_3d(*corners[1])
-                    p_c2 = project_pt_3d(*corners[2])
-                    p_c3 = project_pt_3d(*corners[3])
-                    p_tip = project_pt_3d(*ray_tip)
-                    p_lbl = project_pt_3d(*lbl_pos)
-                    p_cntr = project_pt_3d(*c_center)
-
-                    if p_c0 and p_c1 and p_c2 and p_c3:
-                        # 4 Pyramid lines from origin to corners
-                        if p_orig:
-                            viz_canvas.create_line(p_orig[0], p_orig[1], p_c0[0], p_c0[1], fill=edge_col, width=1)
-                            viz_canvas.create_line(p_orig[0], p_orig[1], p_c1[0], p_c1[1], fill=edge_col, width=1)
-                            viz_canvas.create_line(p_orig[0], p_orig[1], p_c2[0], p_c2[1], fill=edge_col, width=1)
-                            viz_canvas.create_line(p_orig[0], p_orig[1], p_c3[0], p_c3[1], fill=edge_col, width=1)
-
-                        # Sensor plane rectangle polygon
-                        viz_canvas.create_polygon(
-                            [p_c0[0], p_c0[1], p_c1[0], p_c1[1], p_c2[0], p_c2[1], p_c3[0], p_c3[1]],
-                            fill=f_fill,
-                            stipple="gray25",
-                            outline=f_outline,
-                            width=1.5
-                        )
-
-                        # Optical axis ray arrow
-                        if p_orig and p_tip:
-                            viz_canvas.create_line(p_orig[0], p_orig[1], p_tip[0], p_tip[1], fill="#ffffff", arrow=tk.LAST, arrowshape=(5, 7, 3), width=1.5)
-
-                        # Camera label
-                        tag_short = f"C{idx}" if len(rig) > 6 else cam_name.split("_")[0]
-                        if p_lbl:
-                            viz_canvas.create_text(p_lbl[0], p_lbl[1], text=tag_short, fill="#ffffff", font=("Segoe UI", 7, "bold"))
-                        elif p_cntr:
-                            viz_canvas.create_text(p_cntr[0], p_cntr[1], text=tag_short, fill="#ffffff", font=("Segoe UI", 7, "bold"))
-
-                # 3. Center Origin Node
-                p_orig = project_pt_3d(0.0, 0.0, 0.0)
-                if p_orig:
-                    viz_canvas.create_oval(p_orig[0] - 5, p_orig[1] - 5, p_orig[0] + 5, p_orig[1] + 5, fill="#a855f7", outline="#ffffff", width=1.5)
-
-                # 4. Viewport Corner Orientation Triad (Orthographic XYZ Gizmo)
-                gx = cw - 42.0
-                gy = ch - 42.0
-                for ax_name, ax_col, ax_vec in [("X", "#ef4444", (1.0, 0.0, 0.0)), ("Y", "#10b981", (0.0, 1.0, 0.0)), ("Z", "#38bdf8", (0.0, 0.0, 1.0))]:
-                    dx_screen = (ax_vec[0] * vr[0] + ax_vec[1] * vr[1] + ax_vec[2] * vr[2]) * 20.0
-                    dy_screen = -(ax_vec[0] * vu[0] + ax_vec[1] * vu[1] + ax_vec[2] * vu[2]) * 20.0
-                    viz_canvas.create_line(gx, gy, gx + dx_screen, gy + dy_screen, fill=ax_col, width=2, arrow=tk.LAST, arrowshape=(4, 6, 2))
-                    viz_canvas.create_text(gx + dx_screen * 1.35, gy + dy_screen * 1.35, text=ax_name, fill=ax_col, font=("Segoe UI", 7, "bold"))
-
-                # 5. Canvas HUD Diagnostics Overlay
-                viz_canvas.create_text(
-                    12, 14,
-                    anchor="nw",
-                    text=f"🌐 3D RIG ORBIT VIEW • N={len(rig)} Cams | FOV={fov_var.get():.1f}° | Overlap={ol:.1f}%",
-                    fill="#38bdf8",
-                    font=("Segoe UI", 8, "bold")
-                )
-                viz_canvas.create_text(
-                    12, 30,
-                    anchor="nw",
-                    text=f"Azimuth: {orbit_state['yaw']:.1f}°  |  Elevation: {orbit_state['pitch']:.1f}°  |  Zoom: {orbit_state['dist']:.2f}x",
-                    fill="#a0adb5",
-                    font=("Segoe UI", 7)
-                )
-                viz_canvas.create_text(
-                    12, ch - 12,
-                    anchor="sw",
-                    text="🖱️ Left-Drag: Orbit 3D  •  Shift / Right-Drag: Pan  •  Scroll: Zoom  •  2x-Click: Reset",
-                    fill="#64748b",
-                    font=("Segoe UI", 7)
-                )
+                try:
+                    renderer.render(rig, orbit_state, out_w_var.get() / max(1, out_h_var.get()))
+                except (tk.TclError, ValueError, ZeroDivisionError):
+                    viz_canvas.create_text(24, 30, anchor="nw", text="Enter a valid image size to preview the rig.",
+                                           fill=self.text_secondary, font=("Segoe UI", 10))
 
         # Bind canvas resize to redraw
         viz_canvas.bind("<Configure>", draw_visualizer)
@@ -3143,7 +2874,7 @@ class AbuAlignApp:
                             text=f"Status: Complete! Generated {tot:,} pinhole views from {panos} panoramas/frames in {sec}s.",
                             fg=self.accent_green
                         )
-                        split_btn.config(state=tk.NORMAL, text="▶ Start Rig Projection")
+                        split_btn.config(state=tk.NORMAL, text="Export views")
                         close_btn.config(state=tk.NORMAL)
                         use_ds_btn.config(state=tk.NORMAL)
                         open_folder_btn.config(state=tk.NORMAL)
@@ -3153,7 +2884,7 @@ class AbuAlignApp:
                 except Exception as ex:
                     def on_err():
                         status_lbl.config(text=f"Status: Failed - {ex}", fg=self.accent_red)
-                        split_btn.config(state=tk.NORMAL, text="▶ Start Rig Projection")
+                        split_btn.config(state=tk.NORMAL, text="Export views")
                         close_btn.config(state=tk.NORMAL)
                         messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{ex}")
                     dialog.after(0, on_err)
@@ -3166,6 +2897,8 @@ class AbuAlignApp:
         # Initial inspection and math sync
         inspect_input_source()
         sync_math_and_ui()
+        from rig_designer_ui import enhance_rig_designer
+        enhance_rig_designer(self, locals())
 
     def _clear_console(self):
         self.console.configure(state="normal")
@@ -3686,7 +3419,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.3.8 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.3.9 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4044,7 +3777,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.3.8 - {title}")
+        doc_win.title(f"Abu Align v0.0.3.9 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4318,7 +4051,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.3.8\n"
+            "Abu Align & Train - Version 0.0.3.9\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

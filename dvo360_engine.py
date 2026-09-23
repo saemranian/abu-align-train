@@ -291,6 +291,63 @@ def tum_trajectory_to_colmap(
     return True, f"Converted {num_to_write} frames to COLMAP format."
 
 
+def load_ply_points_for_opensfm(ply_path: Optional[str]) -> dict:
+    """
+    Extracts 3D coordinates and RGB colors from a PLY file for OpenSfM points dictionary.
+    """
+    pts_dict = {}
+    if not ply_path or not os.path.isfile(ply_path):
+        return pts_dict
+
+    try:
+        from plyfile import PlyData
+        pdata = PlyData.read(ply_path)
+        v = pdata['vertex']
+        xs, ys, zs = v['x'], v['y'], v['z']
+        has_rgb = 'red' in v and 'green' in v and 'blue' in v
+        rs = v['red'] if has_rgb else None
+        gs = v['green'] if has_rgb else None
+        bs = v['blue'] if has_rgb else None
+        for i in range(len(xs)):
+            pts_dict[str(i)] = {
+                "coordinates": [round(float(xs[i]), 6), round(float(ys[i]), 6), round(float(zs[i]), 6)],
+                "color": [int(rs[i]), int(gs[i]), int(bs[i])] if has_rgb else [128, 128, 128]
+            }
+        return pts_dict
+    except Exception:
+        pass
+
+    # Pure Python ASCII parser fallback
+    try:
+        with open(ply_path, "r", encoding="utf-8", errors="replace") as f:
+            header = True
+            idx = 0
+            for line in f:
+                s = line.strip()
+                if header:
+                    if s == "end_header":
+                        header = False
+                    continue
+                parts = s.split()
+                if len(parts) >= 3:
+                    try:
+                        x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                        r = int(parts[3]) if len(parts) >= 6 else 128
+                        g = int(parts[4]) if len(parts) >= 6 else 128
+                        b = int(parts[5]) if len(parts) >= 6 else 128
+                        pts_dict[str(idx)] = {
+                            "coordinates": [round(x, 6), round(y, 6), round(z, 6)],
+                            "color": [r, g, b]
+                        }
+                        idx += 1
+                    except ValueError:
+                        continue
+    except Exception:
+        pass
+
+    return pts_dict
+
+
 def tum_trajectory_to_opensfm(
     trajectory_file: str,
     image_names: List[str],
@@ -349,6 +406,8 @@ def tum_trajectory_to_opensfm(
             "translation": [round(float(v), 8) for v in t_vec]
         }
 
+    points_dict = load_ply_points_for_opensfm(points_ply)
+
     reconstruction = [{
         "cameras": {
             "camera_360": {
@@ -358,7 +417,7 @@ def tum_trajectory_to_opensfm(
             }
         },
         "shots": shots,
-        "points": {}
+        "points": points_dict
     }]
 
     reconstruction_json = os.path.join(output_opensfm_dir, "reconstruction.json")

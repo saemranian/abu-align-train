@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.3.8 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.3.9 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -937,6 +937,40 @@ def train_pfgs360(
                 if os.path.isfile(cand):
                     shutil.copy2(cand, target_rec)
                     break
+
+        # Auto-heal: If reconstruction.json exists but points is empty, inject points from points.ply or 360dvo_points.ply
+        if os.path.isfile(target_rec):
+            try:
+                with open(target_rec, "r", encoding="utf-8") as f:
+                    rec_content = json.load(f)
+                if isinstance(rec_content, list) and len(rec_content) > 0:
+                    pts_meta = rec_content[0].get("points", {})
+                    if len(pts_meta) == 0:
+                        ply_cands = [
+                            os.path.join(dataset_abs, "points.ply"),
+                            os.path.join(dataset_abs, "360dvo_points.ply"),
+                            os.path.join(dataset_abs, "points3D.ply"),
+                            os.path.join(os.path.dirname(dataset_abs), "360dvo_points.ply"),
+                            os.path.join(os.path.dirname(dataset_abs), "points.ply"),
+                            os.path.join(os.path.dirname(dataset_abs), "points3D.ply"),
+                        ]
+                        for pc in ply_cands:
+                            if os.path.isfile(pc):
+                                from dvo360_engine import load_ply_points_for_opensfm
+                                healed_pts = load_ply_points_for_opensfm(pc)
+                                if healed_pts:
+                                    rec_content[0]["points"] = healed_pts
+                                    with open(target_rec, "w", encoding="utf-8") as fw:
+                                        json.dump(rec_content, fw, indent=4)
+                                    log(f"      * [Auto-Heal] Injected {len(healed_pts)} 3D tie points from {os.path.basename(pc)} into reconstruction.json")
+                                    root_rec = os.path.join(dataset_abs, "reconstruction.json")
+                                    if os.path.isfile(root_rec):
+                                        with open(root_rec, "w", encoding="utf-8") as fwr:
+                                            json.dump(rec_content, fwr, indent=4)
+                                    break
+            except Exception as ex:
+                log(f"      * [Auto-Heal Warning] Point injection check: {ex}")
+
         try:
             from opensfm_engine import ensure_opensfm_metadata
             ensure_opensfm_metadata(dataset_abs)
