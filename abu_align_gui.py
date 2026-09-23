@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.4.7
+Abu Align & Train Version 0.0.4.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -210,7 +210,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.4.7 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.4.8 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -324,6 +324,7 @@ class AbuAlignApp:
         self.auto_train_var = tk.BooleanVar(value=True)
         self.train_engine_var = tk.StringVar(value="lichtfeld")
         self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
+        self.train_target_run_var = tk.StringVar(value="Latest Run (Auto-Detect)")
 
         # LichtFeld Studio Specific Options
         self.lf_mode_var = tk.StringVar(value="interactive")
@@ -650,10 +651,16 @@ class AbuAlignApp:
         tk.Label(cu_col2, text="Pose Initialization Prior:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
         rb_cu_i1 = tk.Radiobutton(cu_col2, text="VGGT-Omega Coarse Prior", variable=self.cusfm_init_var, value="omega", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_cu_i1.pack(anchor="w")
-        rb_cu_i2 = tk.Radiobutton(cu_col2, text="Visual Odometry (Ego)", variable=self.cusfm_init_var, value="ego", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cu_i2 = tk.Radiobutton(cu_col2, text="OpenSfM Prior (reconstruction.json)", variable=self.cusfm_init_var, value="opensfm", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_cu_i2.pack(anchor="w")
+        rb_cu_i3 = tk.Radiobutton(cu_col2, text="Auto-Detect (Prior / Cache)", variable=self.cusfm_init_var, value="auto", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cu_i3.pack(anchor="w")
+        rb_cu_i4 = tk.Radiobutton(cu_col2, text="Visual Odometry (Ego / None)", variable=self.cusfm_init_var, value="ego", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_cu_i4.pack(anchor="w")
         ToolTip(rb_cu_i1, "VGGT-Omega Prior [Recommended]:\nSeeds PyCuSFM bundle adjustment with global foundation model poses for instant convergence and zero drift.")
-        ToolTip(rb_cu_i2, "Visual Odometry (Ego):\nSequential pairwise epipolar chaining. Ideal for continuous video captures and smooth drone fly-throughs.")
+        ToolTip(rb_cu_i2, "OpenSfM Prior (reconstruction.json):\nIngests camera poses and intrinsics computed by OpenSfM into Isaac cuSFM frames_meta.")
+        ToolTip(rb_cu_i3, "Auto-Detect Prior:\nSearches for existing OpenSfM poses, transforms.json, or VGGT cache before falling back to odometry.")
+        ToolTip(rb_cu_i4, "Visual Odometry (Ego):\nSequential pairwise epipolar chaining. Ideal for continuous video captures and smooth drone fly-throughs.")
 
         # Col C: cuDSS Sparse Solver & Colorization
         cu_col3 = tk.Frame(self.panel_align_pycusfm, bg=self.panel_bg)
@@ -1233,6 +1240,22 @@ class AbuAlignApp:
         else:
             status_text = "⚠️ No image or video files detected in this folder. Please select a valid photo folder."
             self.dataset_status_lbl.config(text=status_text, fg="#f59e0b")
+
+        # Discover all available alignment runs in results/
+        runs = ["Latest Run (Auto-Detect)"]
+        cand_results = os.path.join(path, "results")
+        if not os.path.isdir(cand_results):
+            cand_p_results = os.path.join(os.path.dirname(path), "results")
+            if os.path.isdir(cand_p_results):
+                cand_results = cand_p_results
+        if os.path.isdir(cand_results):
+            subdirs = [d for d in os.listdir(cand_results) if d.startswith("sparse_")]
+            subdirs.sort(key=lambda d: os.path.getmtime(os.path.join(cand_results, d)), reverse=True)
+            runs.extend(subdirs)
+        if hasattr(self, "train_target_run_cb"):
+            self.train_target_run_cb["values"] = runs
+            if self.train_target_run_var.get() not in runs:
+                self.train_target_run_var.set(runs[0])
 
     def _open_video_extractor_dialog(self):
         """
@@ -3126,9 +3149,9 @@ class AbuAlignApp:
                 cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
         elif align_engine == "ace0":
             cmd.extend([
-                "--ace_iter", str(self.ace_iter_var.get()),
-                "--ace_refine", self.ace_refine_var.get(),
-                "--ace_seeds", str(self.ace_seeds_var.get()),
+                "--ace_iterations", str(self.ace_iter_var.get()),
+                "--ace_refinement", self.ace_refine_var.get(),
+                "--ace_try_seeds", str(self.ace_seeds_var.get()),
             ])
             if self.ace_calib_var.get():
                 cmd.append("--ace_refine_calib")
@@ -3374,11 +3397,26 @@ class AbuAlignApp:
         )
 
         train_engine = self.train_engine_var.get()
+        effective_dataset = dataset_path
+        target_run = getattr(self, "train_target_run_var", None)
+        selected_run = target_run.get() if target_run else "Latest Run (Auto-Detect)"
+        if selected_run and selected_run != "Latest Run (Auto-Detect)":
+            cand_results = os.path.join(dataset_path, "results")
+            if not os.path.isdir(cand_results):
+                cand_p_results = os.path.join(os.path.dirname(dataset_path), "results")
+                if os.path.isdir(cand_p_results):
+                    cand_results = cand_p_results
+            run_path = os.path.join(cand_results, selected_run)
+            if os.path.isdir(os.path.join(run_path, "3dgs_dataset")):
+                effective_dataset = os.path.join(run_path, "3dgs_dataset")
+            elif os.path.isdir(run_path):
+                effective_dataset = run_path
+
         cmd = [
             self.conda_python,
             "-u",
             self.train_script,
-            "--dataset", dataset_path,
+            "--dataset", effective_dataset,
             "--engine", train_engine,
             "--iterations", str(self._parse_train_iterations()),
         ]
@@ -3456,7 +3494,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.4.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.4.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3888,7 +3926,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.4.7 - {title}")
+        doc_win.title(f"Abu Align v0.0.4.8 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4162,7 +4200,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.4.7\n"
+            "Abu Align & Train - Version 0.0.4.8\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

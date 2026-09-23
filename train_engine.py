@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.4.7 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.4.8 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -1363,7 +1363,9 @@ def run_3dgs_training(
             os.path.isdir(os.path.join(dataset_dir, "sparse", "0"))):
         
         cand_3dgs = os.path.join(dataset_dir, "3dgs_dataset")
-        if os.path.isfile(os.path.join(cand_3dgs, "transforms.json")) or os.path.isfile(os.path.join(cand_3dgs, "opensfm", "reconstruction.json")):
+        if (os.path.isfile(os.path.join(cand_3dgs, "transforms.json")) or 
+            os.path.isfile(os.path.join(cand_3dgs, "opensfm", "reconstruction.json")) or
+            os.path.isdir(os.path.join(cand_3dgs, "sparse", "0"))):
             discovered_dataset = cand_3dgs
         else:
             cand_results = os.path.join(dataset_dir, "results")
@@ -1377,8 +1379,14 @@ def run_3dgs_training(
                 subdirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
                 for sd in subdirs:
                     target_cand = os.path.join(sd, "3dgs_dataset")
-                    if os.path.isfile(os.path.join(target_cand, "transforms.json")) or os.path.isfile(os.path.join(target_cand, "opensfm", "reconstruction.json")):
+                    if (os.path.isfile(os.path.join(target_cand, "transforms.json")) or 
+                        os.path.isfile(os.path.join(target_cand, "opensfm", "reconstruction.json")) or
+                        os.path.isdir(os.path.join(target_cand, "sparse", "0"))):
                         discovered_dataset = target_cand
+                        break
+                    elif (os.path.isfile(os.path.join(sd, "transforms.json")) or 
+                          os.path.isdir(os.path.join(sd, "sparse", "0"))):
+                        discovered_dataset = sd
                         break
 
     if discovered_dataset:

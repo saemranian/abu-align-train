@@ -246,17 +246,17 @@ def build_frames_meta_json(
             "calibration_parameters": {
                 "image_width": int(img_width),
                 "image_height": int(img_height),
-                "camera_matrix": {
+                "projection_matrix": {
                     "data": [
-                        float(fx), 0.0, float(cx),
-                        0.0, float(fy), float(cy),
-                        0.0, 0.0, 1.0
-                    ]
-                },
-                "distortion_coefficients": {
-                    "data": [0.0, 0.0, 0.0, 0.0, 0.0]
+                        float(fx), 0.0, float(cx), 0.0,
+                        0.0, float(fy), float(cy), 0.0,
+                        0.0, 0.0, 1.0, 0.0
+                    ],
+                    "row_count": 3,
+                    "column_count": 4
                 }
-            }
+            },
+            "camera_projection_model_type": "PINHOLE"
         }
     }
 

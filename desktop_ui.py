@@ -240,7 +240,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.4.7", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.4.8", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
 
     # Pin run controls to the bottom before allocating expandable notebook space.
@@ -395,7 +395,10 @@ def build_workspace(app, tooltip):
     general = tk.Frame(train, bg=SURFACE)
     general.pack(fill="x", pady=(0, 16))
     field(general, "Training iterations", app.train_iter_var,
-          ["7,000 (Fast Preview)", "15,000 (Balanced / Standard)", "30,000 (Production High-Fidelity)"], width=34)
+          ["7,000 (Fast Preview)", "15,000 (Balanced / Standard)", "30,000 (Production High-Fidelity)"], width=32)
+    app.train_target_run_cb = field(general, "Alignment run target", app.train_target_run_var,
+          ["Latest Run (Auto-Detect)"], width=26)
+    tooltip(app.train_target_run_cb, "Alignment Output Run Target:\nSelect which alignment run in results/ to use for 3DGS training.\n• Latest Run (Auto-Detect): Automatically detects and uses the newest sparse_* alignment.\n• Specific run: Explicitly targets that alignment run.")
     tk.Checkbutton(general, text="Train after alignment", variable=app.auto_train_var).pack(side="left", padx=14)
     app.train_dynamic_container = tk.Frame(train, bg=SURFACE)
     app.train_dynamic_container.pack(fill="both", expand=True)

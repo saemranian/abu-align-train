@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.4.7 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.4.8 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -982,6 +982,174 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     return reconstruction, dense_3d, dense_rgb
 
 
+def load_prior_poses_from_opensfm(scan_dir: str, image_paths: list):
+    """
+    Discovers and parses OpenSfM reconstruction.json to extract (R_c2w, t_c2w) camera poses.
+    Searches scan_dir, opensfm_workspace, opensfm subdirectories, and previous sparse results.
+    """
+    candidates = [
+        os.path.join(scan_dir, "reconstruction.json"),
+        os.path.join(scan_dir, "opensfm", "reconstruction.json"),
+        os.path.join(scan_dir, "opensfm_workspace", "reconstruction.json"),
+    ]
+    results_dir = os.path.join(scan_dir, "results")
+    if not os.path.isdir(results_dir):
+        parent_results = os.path.join(os.path.dirname(scan_dir), "results")
+        if os.path.isdir(parent_results):
+            results_dir = parent_results
+    if os.path.isdir(results_dir):
+        sparse_dirs = [os.path.join(results_dir, d) for d in os.listdir(results_dir) if d.startswith("sparse_")]
+        sparse_dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for sd in sparse_dirs:
+            candidates.append(os.path.join(sd, "reconstruction.json"))
+            candidates.append(os.path.join(sd, "opensfm_workspace", "reconstruction.json"))
+            candidates.append(os.path.join(sd, "3dgs_dataset", "reconstruction.json"))
+            candidates.append(os.path.join(sd, "3dgs_dataset", "opensfm", "reconstruction.json"))
+
+    rec_path = None
+    for cand in candidates:
+        if os.path.isfile(cand):
+            rec_path = cand
+            break
+
+    if not rec_path:
+        return None, None
+
+    try:
+        with open(rec_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) > 0:
+            rec = data[0]
+        elif isinstance(data, dict):
+            rec = data
+        else:
+            return None, None
+    except Exception:
+        return None, None
+
+    shots = rec.get("shots", {})
+    if not shots:
+        return None, None
+
+    import cv2
+    poses = []
+    found_count = 0
+    for p in image_paths:
+        bname = os.path.basename(p)
+        matched_shot = None
+        if bname in shots:
+            matched_shot = shots[bname]
+        else:
+            for s_name, s_data in shots.items():
+                if os.path.basename(s_name) == bname or s_name.endswith(bname):
+                    matched_shot = s_data
+                    break
+        if matched_shot:
+            r_vec = np.array(matched_shot.get("rotation", [0, 0, 0]), dtype=np.float64)
+            t_vec = np.array(matched_shot.get("translation", [0, 0, 0]), dtype=np.float64)
+            R_w2c, _ = cv2.Rodrigues(r_vec)
+            R_c2w = R_w2c.T
+            t_c2w = -R_w2c.T @ t_vec
+            poses.append((R_c2w, t_c2w))
+            found_count += 1
+        else:
+            poses.append((np.eye(3), np.array([0.0, 0.0, len(poses) * 0.1])))
+
+    intrinsics = None
+    cameras = rec.get("cameras", {})
+    if cameras:
+        cam = list(cameras.values())[0]
+        focal_norm = cam.get("focal", 0.85)
+        w = cam.get("width", 1920)
+        h = cam.get("height", 1080)
+        fx = fy = float(focal_norm * max(w, h))
+        cx = float(w / 2.0)
+        cy = float(h / 2.0)
+        intrinsics = (fx, fy, cx, cy)
+
+    print(f"      * [OpenSfM Prior] Loaded {found_count}/{len(image_paths)} camera poses from: {rec_path}")
+    return poses, intrinsics
+
+
+def load_prior_poses_from_transforms(scan_dir: str, image_paths: list):
+    """
+    Discovers and parses transforms.json to extract (R_c2w, t_c2w) camera poses.
+    Converts from Nerfstudio/OpenGL convention to PyCuSFM pinhole camera frames.
+    """
+    candidates = [
+        os.path.join(scan_dir, "transforms.json"),
+        os.path.join(scan_dir, "3dgs_dataset", "transforms.json"),
+    ]
+    results_dir = os.path.join(scan_dir, "results")
+    if not os.path.isdir(results_dir):
+        parent_results = os.path.join(os.path.dirname(scan_dir), "results")
+        if os.path.isdir(parent_results):
+            results_dir = parent_results
+    if os.path.isdir(results_dir):
+        sparse_dirs = [os.path.join(results_dir, d) for d in os.listdir(results_dir) if d.startswith("sparse_")]
+        sparse_dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for sd in sparse_dirs:
+            candidates.append(os.path.join(sd, "transforms.json"))
+            candidates.append(os.path.join(sd, "3dgs_dataset", "transforms.json"))
+
+    tf_path = None
+    for cand in candidates:
+        if os.path.isfile(cand):
+            tf_path = cand
+            break
+
+    if not tf_path:
+        return None, None
+
+    try:
+        with open(tf_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None, None
+
+    frames = data.get("frames", [])
+    if not frames:
+        return None, None
+
+    frame_map = {}
+    for fr in frames:
+        fp = fr.get("file_path", "")
+        bn = os.path.basename(fp)
+        frame_map[bn] = fr
+
+    poses = []
+    found_count = 0
+    ns_to_cv = np.diag([1.0, -1.0, -1.0])
+    for p in image_paths:
+        bname = os.path.basename(p)
+        matched = frame_map.get(bname)
+        if not matched:
+            stem = os.path.splitext(bname)[0]
+            for fn, fr in frame_map.items():
+                if os.path.splitext(fn)[0] == stem:
+                    matched = fr
+                    break
+        if matched and "transform_matrix" in matched:
+            c2w_ns = np.array(matched["transform_matrix"], dtype=np.float64)
+            R_c2w = c2w_ns[:3, :3] @ ns_to_cv
+            t_c2w = c2w_ns[:3, 3]
+            poses.append((R_c2w, t_c2w))
+            found_count += 1
+        else:
+            poses.append((np.eye(3), np.array([0.0, 0.0, len(poses) * 0.1])))
+
+    intrinsics = None
+    if "fl_x" in data and "fl_y" in data:
+        fx = float(data["fl_x"])
+        fy = float(data["fl_y"])
+        cx = float(data.get("cx", data.get("w", 1920) / 2.0))
+        cy = float(data.get("cy", data.get("h", 1080) / 2.0))
+        intrinsics = (fx, fy, cx, cy)
+
+    print(f"      * [Transforms Prior] Loaded {found_count}/{len(image_paths)} camera poses from: {tf_path}")
+    return poses, intrinsics
+
+
 def main():
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
     parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
@@ -1021,16 +1189,16 @@ def main():
     parser.add_argument("--split_format", choices=["jpg", "png"], default="jpg", help="Split image output format (default: jpg)")
     parser.add_argument("--split_quality", type=int, default=95, help="JPEG quality for split images (default: 95)")
     parser.add_argument("--split_only", action="store_true", help="Perform panoramic splitting into virtual camera rig and exit without aligning")
-    parser.add_argument("--ace_iterations", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
-    parser.add_argument("--ace_refinement", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
+    parser.add_argument("--ace_iterations", "--ace_iter", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
+    parser.add_argument("--ace_refinement", "--ace_refine", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
-    parser.add_argument("--ace_try_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
+    parser.add_argument("--ace_try_seeds", "--ace_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
     parser.add_argument("--ace_refine_calib", dest="ace_refine_calib", action="store_true", default=True, help="Optimize camera focal length during ACE0 mapping (default: True)")
     parser.add_argument("--no_ace_refine_calib", dest="ace_refine_calib", action="store_false", help="Keep camera focal length fixed during ACE0 mapping")
     parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
     parser.add_argument("--cusfm_matcher", type=str, choices=["lightglue", "superglue"], default="lightglue", help="Keypoint matcher for PyCuSFM (default: lightglue)")
-    parser.add_argument("--cusfm_init", type=str, choices=["omega", "ace0", "none"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
+    parser.add_argument("--cusfm_init", type=str, choices=["omega", "opensfm", "transforms", "auto", "ace0", "none", "ego"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
     parser.add_argument("--cusfm_ba_iterations", type=int, default=100, help="Maximum bundle adjustment iterations for PyCuSFM (default: 100)")
     parser.add_argument("--cusfm_rgb", dest="cusfm_rgb", action="store_true", default=True, help="Generate colorized RGB 3D point cloud for PyCuSFM")
     parser.add_argument("--no_cusfm_rgb", dest="cusfm_rgb", action="store_false", help="Generate geometric sparse point cloud for PyCuSFM")
@@ -1350,7 +1518,45 @@ def main():
 
         initial_poses = None
         initial_intrinsics = None
-        if args.cusfm_init in ["omega", "vggt"] and model is not None:
+        if args.cusfm_init == "opensfm":
+            initial_poses, initial_intrinsics = load_prior_poses_from_opensfm(scan_dir, image_paths)
+            if initial_poses is None:
+                print("      * [WARNING] OpenSfM prior requested but reconstruction.json was not found. Falling back to odometry.")
+        elif args.cusfm_init == "transforms":
+            initial_poses, initial_intrinsics = load_prior_poses_from_transforms(scan_dir, image_paths)
+            if initial_poses is None:
+                print("      * [WARNING] transforms.json prior requested but was not found. Falling back to odometry.")
+        elif args.cusfm_init == "auto":
+            initial_poses, initial_intrinsics = load_prior_poses_from_opensfm(scan_dir, image_paths)
+            if initial_poses is None:
+                initial_poses, initial_intrinsics = load_prior_poses_from_transforms(scan_dir, image_paths)
+            if initial_poses is None and model is not None:
+                init_engine = "vggt_omega" if getattr(model, "__class__", None).__name__ == "VGGTOmega" else "vggt"
+                print(f"      * [Auto-Detect] Computing coarse initial camera poses via {init_engine.upper()}...")
+                coarse_args = copy.deepcopy(args)
+                coarse_args.use_ba = False
+                coarse_args.align_mode = "none"
+                coarse_rec, _, _ = run_vggt_reconstruction(
+                    init_engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, coarse_args
+                )
+                initial_poses = []
+                name_to_im = {im.name: im for im in coarse_rec.images.values()}
+                for p in image_paths:
+                    bname = os.path.basename(p)
+                    if bname in name_to_im:
+                        im = name_to_im[bname]
+                        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+                        R_w2c = cfw.rotation.matrix()
+                        t_w2c = cfw.translation
+                        R_c2w = R_w2c.T
+                        t_c2w = -R_c2w @ t_w2c
+                        initial_poses.append((R_c2w, t_c2w))
+                    else:
+                        initial_poses.append((np.eye(3), np.array([0.0, 0.0, len(initial_poses) * 0.1])))
+                if coarse_rec.cameras:
+                    cam = list(coarse_rec.cameras.values())[0]
+                    initial_intrinsics = (cam.params[0], cam.params[1], cam.params[2], cam.params[3])
+        elif args.cusfm_init in ["omega", "vggt"] and model is not None:
             init_engine = "vggt_omega" if (args.cusfm_init == "omega" and getattr(model, "__class__", None).__name__ == "VGGTOmega") else "vggt"
             print(f"      * Computing coarse initial camera poses via {init_engine.upper()} (fast feedforward)...")
             coarse_args = copy.deepcopy(args)
