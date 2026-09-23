@@ -21,6 +21,11 @@ import cv2
 import scipy.optimize
 from typing import List, Dict, Optional, Tuple, Callable
 
+try:
+    import wsl_bridge
+except ImportError:
+    wsl_bridge = None
+
 
 def uv_to_bearing(pts: np.ndarray, w: int, h: int) -> np.ndarray:
     """
@@ -294,6 +299,9 @@ class OpenSfMEngine:
             if os.path.isfile(c):
                 return c
 
+        if wsl_bridge and wsl_bridge.is_opensfm_available():
+            return "wsl_opensfm"
+
         return None
 
     def setup_workspace(self, image_paths: List[str]):
@@ -314,6 +322,10 @@ class OpenSfMEngine:
                     except Exception:
                         shutil.copy2(p, dest)
 
+        actual_matcher = self.matcher_type
+        if self.feature_type != "HAHOG" and actual_matcher in ["WORDS", "BOW"]:
+            actual_matcher = "FLANN"
+
         config_data = {
             "use_exif_size": True,
             "feature_type": self.feature_type,
@@ -322,7 +334,7 @@ class OpenSfMEngine:
             "matching_order_neighbors": self.matching_order_neighbors,
             "matching_gps_distance": 150,
             "matching_gps_neighbors": 8,
-            "matcher_type": self.matcher_type,
+            "matcher_type": actual_matcher,
             "bundle_interval": self.bundle_interval,
             "optimize_camera_parameters": self.optimize_camera_parameters,
             "processes": max(1, os.cpu_count() - 2) if os.cpu_count() else 4
@@ -331,9 +343,19 @@ class OpenSfMEngine:
             yaml.dump(config_data, f, default_flow_style=False)
 
         if self.projection_type in ["equirectangular", "spherical"]:
+            w_ovr, h_ovr = 1920, 960
+            if image_paths:
+                try:
+                    s_img = cv2.imread(image_paths[0])
+                    if s_img is not None:
+                        h_ovr, w_ovr = s_img.shape[:2]
+                except Exception:
+                    pass
             overrides = {
                 "all": {
-                    "projection_type": "spherical"
+                    "projection_type": "spherical",
+                    "width": int(w_ovr),
+                    "height": int(h_ovr)
                 }
             }
             with open(os.path.join(self.output_dir, "camera_models_overrides.json"), "w", encoding="utf-8") as f:
@@ -359,13 +381,35 @@ class OpenSfMEngine:
             log("[SPHERICAL SfM] Engaging Native Python S² Structure-from-Motion pipeline...")
             return False
 
+        if self.opensfm_bin == "wsl_opensfm" and wsl_bridge:
+            log("[*] Engaging Native Linux Mapillary OpenSfM via WSL2 Ubuntu (C++ Ceres Solver)...")
+            wsl_out = wsl_bridge.win_to_wsl_path(self.output_dir)
+            stages = [
+                ("extract_metadata", "Reading EXIF, GPS & Spherical GPano Tags"),
+                ("detect_features",  f"Extracting {self.feature_type} Keypoints on Spherical S² Manifold"),
+                ("match_features",   "Pairwise Keypoint Matching with GPS/Bearing Priors"),
+                ("create_tracks",    "Synthesizing Multi-View 3D Feature Tracks"),
+                ("reconstruct",      "Incremental SfM with Ceres Spherical Bundle Adjustment"),
+                ("export_ply",       "Exporting 3D Point Cloud PLY"),
+            ]
+            for idx, (cmd_name, desc) in enumerate(stages):
+                log(f"\n[OpenSfM Stage {idx+1}/{len(stages)}] {desc}...")
+                print(f"[TELEMETRY:STAGE3] batch={idx+1} total={len(stages)} pct={(idx+1)/len(stages)*100:.1f}", flush=True)
+                ret, out = wsl_bridge.run_command_in_wsl(f"{wsl_bridge.WSL_OPENSFM_BIN} {cmd_name} '{wsl_out}'", log_callback=log)
+                if ret != 0 and cmd_name != "export_ply":
+                    log(f"[ERROR] OpenSfM stage '{cmd_name}' failed with return code {ret}.")
+                    return False
+
+            log("\n[SUCCESS] OpenSfM 360° Reconstruction Completed Successfully via WSL2.")
+            return True
+
         stages = [
             ("extract_metadata", "Reading EXIF, GPS & Spherical GPano Tags"),
             ("detect_features",  f"Extracting {self.feature_type} Keypoints on Spherical S² Manifold"),
             ("match_features",   "Pairwise Keypoint Matching with GPS/Bearing Priors"),
             ("create_tracks",    "Synthesizing Multi-View 3D Feature Tracks"),
             ("reconstruct",      "Incremental SfM with Ceres Spherical Bundle Adjustment"),
-            ("export_colmap",    "Exporting to Standard COLMAP (sparse/0/) format")
+            ("export_ply",       "Exporting 3D Point Cloud PLY"),
         ]
 
         for idx, (cmd_name, desc) in enumerate(stages):
@@ -1364,15 +1408,69 @@ def opensfm_to_transforms_json(
         "frames": frames
     }
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_transforms_file)), exist_ok=True)
+    tf_dir = os.path.dirname(os.path.abspath(output_transforms_file))
+    os.makedirs(tf_dir, exist_ok=True)
     with open(output_transforms_file, "w", encoding="utf-8") as tf:
         json.dump(transforms_payload, tf, indent=2)
+
+    # Also generate full standard COLMAP sparse/0/ structure for universal compatibility
+    sparse_dir = os.path.join(tf_dir, "sparse", "0")
+    os.makedirs(sparse_dir, exist_ok=True)
+    try:
+        with open(os.path.join(sparse_dir, "cameras.txt"), "w", encoding="utf-8") as cf:
+            cf.write("# Camera list with one line of data per camera:\n#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+            cf.write(f"1 EQUIRECTANGULAR {int(width)} {int(height)} {int(width)} {int(height)}\n")
+
+        with open(os.path.join(sparse_dir, "images.txt"), "w", encoding="utf-8") as imf:
+            imf.write("# Image list with two lines of data per image:\n#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n#   POINTS2D[] as (X, Y, POINT3D_ID)\n")
+            for idx, (shot_id, shot_data) in enumerate(sorted(shots.items())):
+                r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
+                t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
+                R_w2c, _ = cv2.Rodrigues(r_vec)
+                qw = math.sqrt(max(0.0, 1.0 + R_w2c[0, 0] + R_w2c[1, 1] + R_w2c[2, 2])) / 2.0
+                if qw > 1e-6:
+                    qx = (R_w2c[2, 1] - R_w2c[1, 2]) / (4.0 * qw)
+                    qy = (R_w2c[0, 2] - R_w2c[2, 0]) / (4.0 * qw)
+                    qz = (R_w2c[1, 0] - R_w2c[0, 1]) / (4.0 * qw)
+                else:
+                    qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+                imf.write(f"{idx+1} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} {t_vec[0]:.9f} {t_vec[1]:.9f} {t_vec[2]:.9f} 1 {shot_id}\n\n")
+
+        pts_data = rec.get("points", {})
+        with open(os.path.join(sparse_dir, "points3D.txt"), "w", encoding="utf-8") as pf:
+            pf.write("# 3D point list with one line of data per point:\n#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+            for p_idx, (p_id, p_info) in enumerate(pts_data.items()):
+                coords = p_info.get("coordinates", [0, 0, 0])
+                col = p_info.get("color", [200, 200, 200])
+                pf.write(f"{p_idx+1} {coords[0]:.6f} {coords[1]:.6f} {coords[2]:.6f} {int(col[0])} {int(col[1])} {int(col[2])} 0.1\n")
+    except Exception as e:
+        pass
 
     if ply_source and os.path.isfile(ply_source) and output_ply_dest:
         try:
             shutil.copy2(ply_source, output_ply_dest)
         except Exception:
             pass
+    elif output_ply_dest:
+        points_data = rec.get("points", {})
+        if points_data:
+            pts_list = []
+            rgb_list = []
+            for p_id, p_info in points_data.items():
+                coords = p_info.get("coordinates")
+                if coords and len(coords) == 3:
+                    pts_list.append(coords)
+                    rgb_list.append(p_info.get("color", [200, 200, 200]))
+            if pts_list:
+                pts_arr = np.array(pts_list, dtype=np.float32)
+                rgb_arr = np.array(rgb_list, dtype=np.uint8)
+                write_ply_point_cloud(output_ply_dest, pts_arr, rgb_arr)
+                alt_ply = os.path.join(os.path.dirname(output_ply_dest), "points.ply")
+                if alt_ply != output_ply_dest:
+                    try:
+                        shutil.copy2(output_ply_dest, alt_ply)
+                    except Exception:
+                        pass
 
     return True, f"Generated transforms.json (EQUIRECTANGULAR, {len(frames)} frames) at {output_transforms_file}"
 

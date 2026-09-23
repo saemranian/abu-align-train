@@ -100,6 +100,7 @@ def create_version_snapshot(version_str: str) -> None:
         "dvo360_engine.py",
         "acezero_engine.py",
         "pycusfm_engine.py",
+        "wsl_bridge.py",
         "cache_manager.py",
         "video_extractor.py",
         "panoramic_splitter.py",
@@ -108,6 +109,8 @@ def create_version_snapshot(version_str: str) -> None:
         "VERSION.txt",
         "Abu_Align_and_Train.bat",
         "Abu_Align_and_Train.exe",
+        "Abu_Align.bat",
+        "Abu_Align.exe",
         "launcher.cs"
     ]
     for sf in snapshot_files:
@@ -184,7 +187,9 @@ def recompile_executables(version_str: str) -> None:
 
     exe_targets = [
         os.path.join(ROOT_DIR, "Abu_Align_and_Train.exe"),
+        os.path.join(ROOT_DIR, "Abu_Align.exe"),
         os.path.join(bin_dir, f"Abu_Align_and_Train_v{version_str}.exe"),
+        os.path.join(bin_dir, f"Abu_Align_v{version_str}.exe"),
     ]
 
     for exe_out in exe_targets:

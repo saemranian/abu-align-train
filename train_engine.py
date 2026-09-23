@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.3.7 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.3.8 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -21,6 +21,11 @@ import glob
 import re
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List
+
+try:
+    import wsl_bridge
+except ImportError:
+    wsl_bridge = None
 
 # Ensure stdout and stderr use UTF-8 on Windows with error replacement
 if sys.platform == "win32":
@@ -99,6 +104,8 @@ def get_3dgrut_repo() -> Optional[str]:
 
 
 def get_pfgs360_train_executable() -> Optional[str]:
+    if wsl_bridge and wsl_bridge.is_pfgs360_available():
+        return "wsl_ns_train"
     for p in PFGS360_NS_TRAIN_CANDIDATES:
         if os.path.isfile(p):
             return p
@@ -107,6 +114,8 @@ def get_pfgs360_train_executable() -> Optional[str]:
 
 
 def get_pfgs360_export_executable() -> Optional[str]:
+    if wsl_bridge and wsl_bridge.is_pfgs360_available():
+        return "wsl_ns_export"
     for p in PFGS360_NS_EXPORT_CANDIDATES:
         if os.path.isfile(p):
             return p
@@ -948,6 +957,77 @@ def train_pfgs360(
     log(f"      * Dataset:       {dataset_abs}")
     log(f"      * Output Dir:    {output_dir}")
     log(f"      * Max Steps:     {iterations:,}")
+
+    if ns_train_exe == "wsl_ns_train" and wsl_bridge:
+        log("      * Engaging Native Linux PFGS360 via WSL2 Ubuntu (RTX 4090 GPU Accelerated)...")
+        wsl_data = wsl_bridge.win_to_wsl_path(dataset_abs)
+        wsl_out = wsl_bridge.win_to_wsl_path(output_dir)
+
+        wsl_cmd_parts = [
+            f"{wsl_bridge.WSL_NS_TRAIN}",
+            "pfgs360",
+            "--max-num-iterations", str(iterations),
+            "--output-dir", f"'{wsl_out}'",
+            "--pipeline.model.sh-degree", str(sh_degree),
+            "--pipeline.model.depth-type", depth_type,
+            "--vis", "tensorboard",
+        ]
+        if not spherical_aware:
+            wsl_cmd_parts.extend(["--pipeline.model.spherical-aware", "False"])
+        if not consist_aware:
+            wsl_cmd_parts.extend(["--pipeline.model.consist-aware", "False"])
+        if not inlier_growth:
+            wsl_cmd_parts.extend(["--pipeline.model.inlier-growth", "False"])
+        if not align_depth:
+            wsl_cmd_parts.extend(["--pipeline.model.align-depth", "False"])
+        if not patch_filter:
+            wsl_cmd_parts.extend(["--pipeline.model.patch-filter", "False"])
+        if filter_sky:
+            wsl_cmd_parts.extend(["--pipeline.model.filter-sky", "True"])
+            if sky_depth != 50.0:
+                wsl_cmd_parts.extend(["--pipeline.model.sky-depth", str(sky_depth)])
+        else:
+            wsl_cmd_parts.extend(["--pipeline.model.filter-sky", "False"])
+        if match_views > 0:
+            wsl_cmd_parts.extend(["--pipeline.model.match-views", str(match_views)])
+        if densify_views > 0:
+            wsl_cmd_parts.extend(["--pipeline.model.densify-views", str(densify_views)])
+
+        if active_dp == "nerfstudio-data":
+            wsl_cmd_parts.extend(["nerfstudio-data", "--data", f"'{wsl_data}'", "--auto-scale-poses", "False", "--downscale-factor", "1"])
+        elif active_dp == "opensfm-dataparser":
+            wsl_cmd_parts.extend(["opensfm-dataparser", "--data", f"'{wsl_data}'", "--eval-mode", "all"])
+        elif active_dp == "ob3d-dataparser":
+            wsl_cmd_parts.extend(["ob3d-dataparser", "--data", f"'{wsl_data}'", "--trajectory-type", "Egocentric"])
+        elif active_dp in ["posefree-dataparser", "posefree"]:
+            wsl_cmd_parts.extend(["posefree-dataparser", "--data", f"'{wsl_data}'"])
+        elif active_dp:
+            wsl_cmd_parts.extend([active_dp, "--data", f"'{wsl_data}'"])
+        else:
+            wsl_cmd_parts.extend(["--data", f"'{wsl_data}'"])
+
+        full_wsl_cmd = " ".join(wsl_cmd_parts)
+        log(f"      * Launching WSL command: {full_wsl_cmd}")
+        ret, out = wsl_bridge.run_command_in_wsl(full_wsl_cmd, log_callback=log)
+        if ret != 0:
+            raise RuntimeError(f"WSL2 PFGS360 training failed (exit code {ret})")
+
+        # Automatically export 3DGS .ply point cloud if needed
+        config_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
+        if config_candidates:
+            latest_config = max(config_candidates, key=os.path.getmtime)
+            log(f"      * [PFGS360] Exporting Gaussian Splats to standard 3DGS .ply format...")
+            wsl_cfg = wsl_bridge.win_to_wsl_path(latest_config)
+            export_cmd = f"{wsl_bridge.WSL_NS_EXPORT} gaussian-splat --load-config '{wsl_cfg}' --output-dir '{wsl_out}' --output-filename 'pfgs360_splat.ply'"
+            wsl_bridge.run_command_in_wsl(export_cmd, log_callback=log)
+
+        ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
+                         glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
+        if ply_candidates:
+            best_ply = max(ply_candidates, key=os.path.getmtime)
+            log(f"      * [PFGS360] Training complete! Model exported: {best_ply}")
+            return best_ply
+        return output_dir
 
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"

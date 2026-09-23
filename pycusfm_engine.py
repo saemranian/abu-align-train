@@ -378,9 +378,9 @@ def run_pycusfm_reconstruction(
     wsl_bin = f"{pycusfm_repo}/pycusfm/bin"
     cusfm_cmd = [
         "wsl", "-d", "Ubuntu", "bash", "-l", "-c",
-        f"export PATH=\"{wsl_bin}:$HOME/.local/bin:$PATH\" && "
-        f"export LD_LIBRARY_PATH=\"{wsl_lib}:$LD_LIBRARY_PATH\" && "
-        f"python3 -m pycusfm.cusfm_cli --input_dir '{wsl_input_dir}' "
+        f"export PATH=\"/home/ahmad/miniconda3/envs/abu_linux/bin:{wsl_bin}:/usr/bin:/bin:$PATH\" && "
+        f"export LD_LIBRARY_PATH=\"/home/ahmad/miniconda3/envs/abu_linux/lib:{wsl_lib}:$LD_LIBRARY_PATH\" && "
+        f"/home/ahmad/miniconda3/envs/abu_linux/bin/python -m pycusfm.cusfm_cli --input_dir '{wsl_input_dir}' "
         f"--cusfm_base_dir '{wsl_output_dir}' "
         f"--feature_type '{feature_type}' "
         f"{'--output_rgb' if output_rgb else ''}"
