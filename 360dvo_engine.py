@@ -265,7 +265,7 @@ def tum_trajectory_to_colmap(
             else:
                 qw_w2c, qx_w2c, qy_w2c, qz_w2c = 1.0, 0.0, 0.0, 0.0
 
-            img_name = image_names[idx]
+            img_name = os.path.basename(image_names[idx])
             f.write(f"{idx+1} {qw_w2c:.9f} {qx_w2c:.9f} {qy_w2c:.9f} {qz_w2c:.9f} {t_w2c[0]:.9f} {t_w2c[1]:.9f} {t_w2c[2]:.9f} 1 {img_name}\n")
             f.write("\n")  # Empty points2D line
 
@@ -477,13 +477,14 @@ def tum_trajectory_to_transforms_json(
 
     for idx in range(num_to_write):
         t, t_c2w, q_c2w = poses[idx]
+        img_name = os.path.basename(image_names[idx])
         R_c2w = quaternion_to_rotation_matrix(q_c2w)
-
+        # Convert OpenCV camera convention (X right, Y down, Z fwd) to OpenGL (X right, Y up, Z back)
+        R_c2w_ns = R_c2w @ np.diag([1.0, -1.0, -1.0])
         c2w = np.eye(4, dtype=np.float64)
-        c2w[:3, :3] = R_c2w
+        c2w[:3, :3] = R_c2w_ns
         c2w[:3, 3] = t_c2w
 
-        img_name = image_names[idx]
         frames.append({
             "file_path": f"images/{img_name}",
             "transform_matrix": c2w.tolist()
@@ -655,11 +656,11 @@ def run_360dvo_reconstruction(
         ret, out = wsl_bridge.run_command_in_wsl(wsl_cmd, log_callback=log)
         if ret == 0 and os.path.isfile(trajectory_txt):
             log("[SUCCESS] 360DVO Native GPU Odometry Trajectory computed successfully.")
-            # Convert TUM trajectory to COLMAP and transforms.json
+            img_basenames = [os.path.basename(p) for p in image_paths]
             sparse_0 = os.path.join(output_dir, "sparse", "0")
-            tum_trajectory_to_colmap(trajectory_txt, image_paths, sparse_0, width=w, height=h)
+            tum_trajectory_to_colmap(trajectory_txt, img_basenames, sparse_0, width=w, height=h)
             tf_out = os.path.join(output_dir, "transforms.json")
-            tum_trajectory_to_transforms_json(trajectory_txt, image_paths, tf_out, width=w, height=h)
+            tum_trajectory_to_transforms_json(trajectory_txt, img_basenames, tf_out, width=w, height=h)
 
             dense_3d = np.zeros((0, 3), dtype=np.float32)
             dense_rgb = np.zeros((0, 3), dtype=np.uint8)
