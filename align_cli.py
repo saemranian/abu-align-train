@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.5.7 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.5.8 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -186,7 +186,25 @@ def export_realitycapture_csv(reconstruction, output_dir):
         
         cam = reconstruction.cameras[img.camera_id]
         w, h = cam.width, cam.height
-        fx, fy, cx, cy = cam.params[0], cam.params[1], cam.params[2], cam.params[3]
+        if cam.model_name in ["PINHOLE", "OPENCV", "FULL_OPENCV", "OPENCV_FISHEYE"]:
+            fx = float(cam.params[0])
+            fy = float(cam.params[1])
+            cx = float(cam.params[2])
+            cy = float(cam.params[3])
+        elif cam.model_name in ["SIMPLE_PINHOLE", "SIMPLE_RADIAL", "RADIAL"]:
+            fx = fy = float(cam.params[0])
+            cx = float(cam.params[1])
+            cy = float(cam.params[2])
+        elif cam.model_name == "EQUIRECTANGULAR":
+            fx = fy = float(w)
+            cx = float(w) / 2.0
+            cy = float(h) / 2.0
+        else:
+            fx = float(cam.params[0]) if len(cam.params) > 0 else float(w)
+            fy = float(cam.params[1]) if len(cam.params) > 1 else fx
+            cx = float(cam.params[2]) if len(cam.params) > 2 else float(w) / 2.0
+            cy = float(cam.params[3]) if len(cam.params) > 3 else float(h) / 2.0
+
         f_35mm = fx * (36.0 / max(w, h))
         px_norm = (cx - w / 2.0) / w
         py_norm = (cy - h / 2.0) / h
@@ -205,6 +223,10 @@ def export_realitycapture_csv(reconstruction, output_dir):
             k3 = 0.0
             k4 = 0.0
             rows.append(f"{img.name},{x:.6f},{y:.6f},{alt:.6f},{yaw:.4f},{pitch:.4f},{roll:.4f},{f_35mm:.4f},{px_norm:.6f},{py_norm:.6f},{fmt_val(k1)},{fmt_val(k2)},0,0,{fmt_val(t1)},{fmt_val(t2)}\n")
+        elif cam.model_name == "RADIAL" and len(cam.params) >= 5:
+            k1 = cam.params[3]
+            k2 = cam.params[4]
+            rows.append(f"{img.name},{x:.6f},{y:.6f},{alt:.6f},{yaw:.4f},{pitch:.4f},{roll:.4f},{f_35mm:.4f},{px_norm:.6f},{py_norm:.6f},{fmt_val(k1)},{fmt_val(k2)},0,0,0,0\n")
         else:
             rows.append(f"{img.name},{x:.6f},{y:.6f},{alt:.6f},{yaw:.4f},{pitch:.4f},{roll:.4f},{f_35mm:.4f},{px_norm:.6f},{py_norm:.6f},0,0,0,0,0,0\n")
         
@@ -234,7 +256,25 @@ def export_transforms_json(reconstruction, output_dir, rel_image_dir="images"):
     # Otherwise, omit root w/h so parsers (like Nerfstudio) evaluate per-frame dimensions.
     if is_uniform_resolution:
         w, h = first_cam.width, first_cam.height
-        fx, fy, cx, cy = first_cam.params[0], first_cam.params[1], first_cam.params[2], first_cam.params[3]
+        if first_cam.model_name in ["PINHOLE", "OPENCV", "FULL_OPENCV", "OPENCV_FISHEYE"]:
+            fx = float(first_cam.params[0])
+            fy = float(first_cam.params[1])
+            cx = float(first_cam.params[2])
+            cy = float(first_cam.params[3])
+        elif first_cam.model_name in ["SIMPLE_PINHOLE", "SIMPLE_RADIAL", "RADIAL"]:
+            fx = fy = float(first_cam.params[0])
+            cx = float(first_cam.params[1])
+            cy = float(first_cam.params[2])
+        elif first_cam.model_name == "EQUIRECTANGULAR":
+            fx = fy = float(w)
+            cx = float(w) / 2.0
+            cy = float(h) / 2.0
+        else:
+            fx = float(first_cam.params[0]) if len(first_cam.params) > 0 else float(w)
+            fy = float(first_cam.params[1]) if len(first_cam.params) > 1 else fx
+            cx = float(first_cam.params[2]) if len(first_cam.params) > 2 else float(w) / 2.0
+            cy = float(first_cam.params[3]) if len(first_cam.params) > 3 else float(h) / 2.0
+
         transforms_data["w"] = int(w)
         transforms_data["h"] = int(h)
         transforms_data["fl_x"] = float(fx)
@@ -247,6 +287,9 @@ def export_transforms_json(reconstruction, output_dir, rel_image_dir="images"):
         transforms_data["k2"] = float(first_cam.params[5])
         transforms_data["p1"] = float(first_cam.params[6])
         transforms_data["p2"] = float(first_cam.params[7])
+    elif first_cam.model_name == "RADIAL" and len(first_cam.params) >= 5:
+        transforms_data["k1"] = float(first_cam.params[3])
+        transforms_data["k2"] = float(first_cam.params[4])
     
     for img_id, img in sorted(reconstruction.images.items()):
         cam = reconstruction.cameras[img.camera_id]
@@ -267,14 +310,34 @@ def export_transforms_json(reconstruction, output_dir, rel_image_dir="images"):
         c2w[:3, 3] = C_c
         
         fpath = f"{rel_image_dir}/{img.name}" if rel_image_dir else img.name
+
+        if cam.model_name in ["PINHOLE", "OPENCV", "FULL_OPENCV", "OPENCV_FISHEYE"]:
+            fl_x = float(cam.params[0])
+            fl_y = float(cam.params[1])
+            cx = float(cam.params[2])
+            cy = float(cam.params[3])
+        elif cam.model_name in ["SIMPLE_PINHOLE", "SIMPLE_RADIAL", "RADIAL"]:
+            fl_x = fl_y = float(cam.params[0])
+            cx = float(cam.params[1])
+            cy = float(cam.params[2])
+        elif cam.model_name == "EQUIRECTANGULAR":
+            fl_x = fl_y = float(cam.width)
+            cx = float(cam.width) / 2.0
+            cy = float(cam.height) / 2.0
+        else:
+            fl_x = float(cam.params[0]) if len(cam.params) > 0 else float(cam.width)
+            fl_y = float(cam.params[1]) if len(cam.params) > 1 else fl_x
+            cx = float(cam.params[2]) if len(cam.params) > 2 else float(cam.width) / 2.0
+            cy = float(cam.params[3]) if len(cam.params) > 3 else float(cam.height) / 2.0
+
         frame_dict = {
             "file_path": fpath,
             "w": int(cam.width),
             "h": int(cam.height),
-            "fl_x": float(cam.params[0]),
-            "fl_y": float(cam.params[1] if len(cam.params) > 1 else cam.params[0]),
-            "cx": float(cam.params[2] if len(cam.params) > 2 else cam.width / 2.0),
-            "cy": float(cam.params[3] if len(cam.params) > 3 else cam.height / 2.0),
+            "fl_x": float(fl_x),
+            "fl_y": float(fl_y),
+            "cx": float(cx),
+            "cy": float(cy),
             "transform_matrix": c2w.tolist()
         }
         transforms_data["frames"].append(frame_dict)
@@ -1202,6 +1265,9 @@ def main():
     parser.add_argument("--ace_refine_calib", dest="ace_refine_calib", action="store_true", default=True, help="Optimize camera focal length during ACE0 mapping (default: True)")
     parser.add_argument("--no_ace_refine_calib", dest="ace_refine_calib", action="store_false", help="Keep camera focal length fixed during ACE0 mapping")
     parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter)")
+    parser.add_argument("--ace_final_refit", action="store_true", default=False, help="Run final 25k iteration refit from scratch (academic benchmark mode; default: False for fast SfM)")
+    parser.add_argument("--ace_final_refine", action="store_true", default=False, help="Run an additional mapping round after stopping threshold is met (default: False)")
+    parser.add_argument("--ace_seed_workers", type=int, default=None, help="Parallel worker threads for evaluating candidate seeds (default: auto-detect)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
     parser.add_argument("--cusfm_matcher", type=str, choices=["lightglue", "superglue"], default="lightglue", help="Keypoint matcher for PyCuSFM (default: lightglue)")
     parser.add_argument("--cusfm_init", type=str, choices=["omega", "opensfm", "transforms", "auto", "ace0", "none", "ego"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
@@ -1509,6 +1575,10 @@ def main():
             export_point_cloud=True,
             dense_point_cloud=getattr(args, "ace_dense_pc", False),
             shared_camera=args.shared_camera,
+            final_refit=getattr(args, "ace_final_refit", False),
+            final_refine=getattr(args, "ace_final_refine", False),
+            seed_parallel_workers=getattr(args, "ace_seed_workers", None),
+            progress_callback=print,
         )
         inf_elapsed = time.time() - inf_start
         print()
@@ -1628,21 +1698,7 @@ def main():
             opensfm.setup_workspace(image_paths)
             success = opensfm.run_pipeline()
             if success:
-                import pycolmap
-                colmap_out = os.path.join(opensfm.output_dir, "colmap")
-                if not os.path.isdir(colmap_out):
-                    colmap_out = os.path.join(opensfm.output_dir, "sparse")
-                if os.path.isdir(colmap_out):
-                    reconstruction = pycolmap.Reconstruction(colmap_out)
-                else:
-                    reconstruction = pycolmap.Reconstruction()
-
-                # Automatically export 3dgs_dataset (transforms.json, sparse/0/, points.ply)
-                dataset_3dgs_dir = os.path.join(output_dir, "3dgs_dataset")
-                opensfm.export_to_3dgs_dataset(dataset_3dgs_dir)
-
-                # Load genuine OpenSfM 3D point cloud directly from reconstruction.json or sanitized ply
-                from opensfm_engine import load_opensfm_points_from_json, strip_camera_gizmos_from_ply
+                from opensfm_engine import opensfm_to_pycolmap, load_opensfm_points_from_json, strip_camera_gizmos_from_ply
 
                 rec_json = os.path.join(opensfm.output_dir, "reconstruction.json")
                 if not os.path.isfile(rec_json):
@@ -1650,6 +1706,25 @@ def main():
                 if not os.path.isfile(rec_json):
                     rec_json = os.path.join(opensfm.output_dir, "opensfm_workspace", "reconstruction.json")
 
+                reconstruction = opensfm_to_pycolmap(rec_json)
+                if reconstruction is None or reconstruction.num_reg_images() == 0:
+                    import pycolmap
+                    colmap_out = os.path.join(opensfm.output_dir, "colmap")
+                    if not os.path.isdir(colmap_out):
+                        colmap_out = os.path.join(opensfm.output_dir, "sparse")
+                    if os.path.isdir(colmap_out):
+                        try:
+                            reconstruction = pycolmap.Reconstruction(colmap_out)
+                        except Exception:
+                            reconstruction = None
+                    else:
+                        reconstruction = None
+
+                # Automatically export 3dgs_dataset (transforms.json, sparse/0/, points.ply)
+                dataset_3dgs_dir = os.path.join(output_dir, "3dgs_dataset")
+                opensfm.export_to_3dgs_dataset(dataset_3dgs_dir)
+
+                # Load genuine OpenSfM 3D point cloud directly from reconstruction.json or sanitized ply
                 dense_3d, dense_rgb = load_opensfm_points_from_json(rec_json)
 
                 if len(dense_3d) > 0:
@@ -1744,12 +1819,12 @@ def main():
     sparse_0_dir = os.path.join(dataset_3dgs_dir, "sparse", "0")
     os.makedirs(sparse_0_dir, exist_ok=True)
     
-    if reconstruction is not None:
+    if reconstruction is not None and reconstruction.num_reg_images() > 0:
         try:
             reconstruction.write(sparse_0_dir)
             reconstruction.write_text(sparse_0_dir)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"      * [Warning] Error serializing sparse COLMAP model: {e}")
 
     # Copy raw sparse files if generated directly by engine (e.g. 360DVO or OpenSfM)
     src_sparse = os.path.join(output_dir, "sparse", "0")
@@ -1763,23 +1838,47 @@ def main():
                 except Exception:
                     pass
 
+    # Purge any corrupt 0-camera / empty <= 8-byte binary files
+    for fname in os.listdir(sparse_0_dir):
+        if fname.endswith(".bin"):
+            fpath = os.path.join(sparse_0_dir, fname)
+            if os.path.isfile(fpath) and os.path.getsize(fpath) <= 8:
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+
     # Link/stage images folder
     images_dst = os.path.join(dataset_3dgs_dir, "images")
     if not os.path.exists(images_dst):
-        try:
-            # Try Windows directory junction first
-            subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(scan_dir)], check=True, capture_output=True)
-        except Exception:
-            os.makedirs(images_dst, exist_ok=True)
-            for src_p in image_paths:
-                dst_p = os.path.join(images_dst, os.path.basename(src_p))
-                if not os.path.exists(dst_p):
-                    try:
-                        os.link(src_p, dst_p)
-                    except Exception:
-                        shutil.copy2(src_p, dst_p)
+        # Prefer linking clean engine images if available (e.g. opensfm_workspace/images)
+        osfm_imgs = os.path.join(output_dir, "opensfm_workspace", "images")
+        if os.path.isdir(osfm_imgs):
+            try:
+                subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(osfm_imgs)], check=True, capture_output=True)
+            except Exception:
+                pass
 
-    if reconstruction is not None:
+        if not os.path.exists(images_dst):
+            has_results_subfolder = os.path.isdir(os.path.join(scan_dir, "results"))
+            if not has_results_subfolder:
+                try:
+                    # Windows directory junction
+                    subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(scan_dir)], check=True, capture_output=True)
+                except Exception:
+                    pass
+
+            if not os.path.exists(images_dst):
+                os.makedirs(images_dst, exist_ok=True)
+                for src_p in image_paths:
+                    dst_p = os.path.join(images_dst, os.path.basename(src_p))
+                    if not os.path.exists(dst_p):
+                        try:
+                            os.link(src_p, dst_p)
+                        except Exception:
+                            shutil.copy2(src_p, dst_p)
+
+    if reconstruction is not None and reconstruction.num_reg_images() > 0:
         try:
             export_transforms_json(reconstruction, dataset_3dgs_dir)
         except Exception:
@@ -1792,7 +1891,7 @@ def main():
     # Application Folder 1: COLMAP / Lichtfield
     colmap_dir = os.path.join(output_dir, "COLMAP_Lichtfield")
     os.makedirs(colmap_dir, exist_ok=True)
-    if reconstruction is not None:
+    if reconstruction is not None and reconstruction.num_reg_images() > 0:
         try:
             reconstruction.write(colmap_dir)
             reconstruction.write_text(colmap_dir)
@@ -1809,10 +1908,20 @@ def main():
                 except Exception:
                     pass
 
+    # Purge any corrupt 0-camera / empty <= 8-byte binary files in colmap_dir
+    for fname in os.listdir(colmap_dir):
+        if fname.endswith(".bin"):
+            fpath = os.path.join(colmap_dir, fname)
+            if os.path.isfile(fpath) and os.path.getsize(fpath) <= 8:
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+
     # Application Folder 2: Postshot / RealityCapture
     rc_dir = os.path.join(output_dir, "Postshot_RealityCapture")
     os.makedirs(rc_dir, exist_ok=True)
-    if reconstruction is not None:
+    if reconstruction is not None and reconstruction.num_reg_images() > 0:
         try:
             csv_file = export_realitycapture_csv(reconstruction, rc_dir)
             print(f"      * [Postshot / RealityCapture] Exported camera alignments to: {csv_file}")
@@ -2011,6 +2120,7 @@ def main():
             f"   * ACE0 Mapping Rounds:     {args.ace_iterations} rounds",
             f"   * Pose Refinement Mode:    {args.ace_refinement.upper()}",
             f"   * Initialization Seeds:    {args.ace_try_seeds} candidate seeds",
+            f"   * Fast SfM Reconstruction: {'Active (Skip 25k Refit)' if not getattr(args, 'ace_final_refit', False) else 'Refit Enabled (25k Academic Iter)'}",
             f"   * Focal Calibration:       {'Refine Focal Length (Active)' if getattr(args, 'ace_refine_calib', True) else 'Fixed Initial Heuristic'}",
             f"   * Point Cloud Filter:      {'Dense Unfiltered' if getattr(args, 'ace_dense_pc', False) else 'Filtered Reprojection Points'}",
         ])

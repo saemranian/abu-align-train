@@ -67,6 +67,9 @@ def run_acezero_reconstruction(
     export_point_cloud=True,
     dense_point_cloud=False,
     shared_camera=True,
+    final_refit=False,
+    final_refine=False,
+    seed_parallel_workers=None,
     progress_callback=None,
 ):
     """
@@ -82,6 +85,11 @@ def run_acezero_reconstruction(
     :param export_point_cloud: Whether to generate the 3D scene point cloud.
     :param dense_point_cloud: If True, skips reprojection filtering for maximum point density.
     :param shared_camera: Whether all views share a single camera intrinsic parameter set.
+    :param final_refit: Whether to run a 25k iteration blind refit from scratch after registration.
+                       Defaults to False for fast, stable photogrammetry and avoids focal collapse.
+    :param final_refine: Whether to execute an additional mapping round after 100% registration.
+    :param seed_parallel_workers: Number of concurrent workers for candidate seed evaluation.
+                                  Defaults to auto-detect (2-3 workers on high-VRAM GPUs like RTX 4090).
     :param progress_callback: Optional callable(str) for real-time console updates.
 
     :return: (pycolmap.Reconstruction, np.ndarray (points_3d), np.ndarray (points_rgb))
@@ -97,10 +105,27 @@ def run_acezero_reconstruction(
         else:
             print(msg)
 
+    if seed_parallel_workers is None or seed_parallel_workers <= 0:
+        seed_parallel_workers = 2
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                if vram_gb >= 20.0:
+                    seed_parallel_workers = 3
+                elif vram_gb >= 12.0:
+                    seed_parallel_workers = 2
+                else:
+                    seed_parallel_workers = 1
+        except Exception:
+            seed_parallel_workers = 2
+
     log(f"      * Initializing ACE0 Engine (Niantic Labs Scene Coordinate Regression)...")
-    log(f"      * ACE0 Root:     {ACEZERO_DIR}")
-    log(f"      * Photos Count:  {len(image_paths)}")
-    log(f"      * Work Dir:      {work_dir}")
+    log(f"      * ACE0 Root:           {ACEZERO_DIR}")
+    log(f"      * Photos Count:        {len(image_paths)}")
+    log(f"      * Seed Parallelism:    {seed_parallel_workers} workers")
+    log(f"      * Fast SfM (No Refit): {not final_refit}")
+    log(f"      * Work Dir:            {work_dir}")
 
     # Stage images: if images exceed 1920px (e.g. 60.2MP raw exports), pre-scale once
     # to avoid massive CPU RAM pressure (57GB) and slow I/O decoding on every epoch.
@@ -142,6 +167,41 @@ def run_acezero_reconstruction(
     input_target = str(stage_dir)
     ace_zero_script = find_acezero_script("ace_zero.py")
 
+    import re
+    def handle_ace_line(raw_line, prefix="[ACE0-WSL]"):
+        line_str = raw_line.strip()
+        if not line_str:
+            return
+        log(f"      {prefix} {line_str}")
+
+        # Live structured telemetry emission for GUI & CLI tracking
+        if "Processing seed " in line_str:
+            m = re.search(r"Processing seed\s+(\d+)", line_str)
+            if m:
+                s_idx = int(m.group(1))
+                log(f"[TELEMETRY:STAGE2] status=evaluating_seed seed={s_idx+1} total={try_seeds}")
+        elif "Early-stopping seed" in line_str or "Selected best seed" in line_str:
+            log(f"[TELEMETRY:STAGE2] status=seed_selected")
+        elif "Iteration:" in line_str and "|" in line_str:
+            m = re.search(r"Iteration:\s*(\d+)\s*\|\s*(\d+).*Loss:\s*([\d\.]+).*inliers.*:\s*([\d\.]+)%", line_str)
+            if m:
+                cur_it = int(m.group(1))
+                tot_it = int(m.group(2))
+                loss_v = float(m.group(3))
+                inl_v = float(m.group(4))
+                pct = (cur_it / max(1, tot_it)) * 100.0
+                log(f"[TELEMETRY:STAGE3] pct={pct:.1f} iter={cur_it} total={tot_it} loss={loss_v} inliers={inl_v}")
+        elif "Current Focal Length:" in line_str:
+            m = re.search(r"Current Focal Length:\s*([\d\.]+)", line_str)
+            if m:
+                f_val = float(m.group(1))
+                log(f"[TELEMETRY:ACE_OPTICS] focal={f_val:.1f}")
+        elif "Successfully registered" in line_str and "mapping images" in line_str:
+            m = re.search(r"Successfully registered\s*([\d\.]+)%", line_str)
+            if m:
+                reg_p = float(m.group(1))
+                log(f"[TELEMETRY:STAGE4] pct={reg_p:.1f} status=registered")
+
     use_wsl = wsl_bridge is not None and wsl_bridge.is_abu_linux_env_ready()
     if use_wsl:
         log("      [*] Engaging Native Linux Niantic ACE0 via WSL2 Ubuntu (GCC + OpenMP C++ DSAC*)...")
@@ -163,11 +223,13 @@ def run_acezero_reconstruction(
             f"--export_point_cloud {export_point_cloud} "
             f"--dense_point_cloud {dense_point_cloud} "
             f"--try_seeds {try_seeds} "
-            f"--seed_parallel_workers 1 "
+            f"--seed_parallel_workers {seed_parallel_workers} "
+            f"--final_refit {final_refit} "
+            f"--final_refine {final_refine} "
             f"--render_visualization False"
         )
         log(f"      * Executing ACE0 via WSL2 Ubuntu...")
-        ret_code, _ = wsl_bridge.run_command_in_wsl(bash_cmd, log_callback=lambda l: log(f"      [ACE0-WSL] {l}"))
+        ret_code, _ = wsl_bridge.run_command_in_wsl(bash_cmd, log_callback=lambda l: handle_ace_line(l, "[ACE0-WSL]"))
         if ret_code != 0:
             raise RuntimeError(f"ACE0 mapping process exited with error code {ret_code} in WSL2 Ubuntu")
     else:
@@ -186,7 +248,9 @@ def run_acezero_reconstruction(
             "--export_point_cloud", str(export_point_cloud),
             "--dense_point_cloud", str(dense_point_cloud),
             "--try_seeds", str(try_seeds),
-            "--seed_parallel_workers", "1",
+            "--seed_parallel_workers", str(seed_parallel_workers),
+            "--final_refit", str(final_refit),
+            "--final_refine", str(final_refine),
             "--render_visualization", "False",
         ]
 
@@ -205,13 +269,12 @@ def run_acezero_reconstruction(
             if not line and proc.poll() is not None:
                 break
             if line:
-                stripped = line.rstrip()
-                if stripped:
-                    log(f"      [ACE0] {stripped}")
+                handle_ace_line(line, "[ACE0]")
 
         ret_code = proc.wait()
         if ret_code != 0:
             raise RuntimeError(f"ACE0 mapping process exited with error code {ret_code}")
+
 
     log(f"      * ACE0 mapping completed in: {time.time()-start_time:.2f}s")
 

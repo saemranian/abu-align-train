@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.5.7
+Abu Align & Train Version 0.0.5.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.5.7 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.5.8 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -285,6 +285,8 @@ class AbuAlignApp:
         self.ace_seeds_var = tk.StringVar(value="3")
         self.ace_calib_var = tk.BooleanVar(value=True)
         self.ace_dense_var = tk.BooleanVar(value=True)
+        self.ace_refit_var = tk.BooleanVar(value=False)
+        self.ace_workers_var = tk.StringVar(value="2")
 
         # PyCuSFM Specific Options
         self.cusfm_feat_var = tk.StringVar(value="aliked")
@@ -618,9 +620,14 @@ class AbuAlignApp:
         seeds_row = tk.Frame(ace_col3, bg=self.panel_bg)
         seeds_row.pack(anchor="w", pady=(2, 4))
         tk.Label(seeds_row, text="Init Seeds:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
-        seeds_cb = ttk.Combobox(seeds_row, textvariable=self.ace_seeds_var, values=["1", "3", "5"], state="readonly", width=4)
-        seeds_cb.pack(side=tk.LEFT, padx=4)
-        ToolTip(seeds_cb, "Initialization Seeds:\nNumber of relative pose seeds evaluated during mapping.\n3 seeds provides high robustness against local minima in unordered photos.")
+        seeds_cb = ttk.Combobox(seeds_row, textvariable=self.ace_seeds_var, values=["1", "3", "5"], state="readonly", width=3)
+        seeds_cb.pack(side=tk.LEFT, padx=(2, 6))
+        ToolTip(seeds_cb, "Initialization Seeds:\nNumber of candidate seeds evaluated during mapping.\n3 seeds provides high robustness against local minima in unordered photos.")
+
+        tk.Label(seeds_row, text="Workers:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        workers_cb = ttk.Combobox(seeds_row, textvariable=self.ace_workers_var, values=["1", "2", "3"], state="readonly", width=3)
+        workers_cb.pack(side=tk.LEFT, padx=2)
+        ToolTip(workers_cb, "Parallel Seed Workers:\nNumber of parallel workers evaluating candidate seeds concurrently.\nOn RTX 4090 (24GB VRAM), 2-3 workers run simultaneously, cutting seed search time by 2-3x.")
 
         ace_calib_chk = tk.Checkbutton(ace_col3, text="Refine Focal Length Calib", variable=self.ace_calib_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         ace_calib_chk.pack(anchor="w")
@@ -629,6 +636,10 @@ class AbuAlignApp:
         ace_dense_chk = tk.Checkbutton(ace_col3, text="Export Dense Point Cloud", variable=self.ace_dense_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         ace_dense_chk.pack(anchor="w")
         ToolTip(ace_dense_chk, "Export Dense Point Cloud:\nEvaluates ACE0 MLP predictions over all valid pixels to produce a dense 3D point cloud seed for 3DGS training.")
+
+        ace_refit_chk = tk.Checkbutton(ace_col3, text="Academic 25k Refit Mode", variable=self.ace_refit_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ace_refit_chk.pack(anchor="w")
+        ToolTip(ace_refit_chk, "Academic 25k Refit Mode [Leave Unchecked for Fast SfM]:\n• Unchecked [Recommended Default]: Stops immediately once 100% of photos are registered (~4 min total), preserving pristine camera focal lengths.\n• Checked [Academic Benchmark]: Forces a 25,000-iteration retrain from scratch used in 7-Scenes relocalization papers. Can take 15-20+ min and destabilize focal length on small datasets.")
 
         # =========================================================================
         # 3. NVIDIA PyCuSFM Subpanel (cuSFM CUDA Framework)
@@ -3232,6 +3243,13 @@ class AbuAlignApp:
                 cmd.append("--no_ace_refine_calib")
             if self.ace_dense_var.get():
                 cmd.append("--ace_dense_pc")
+            if self.ace_refit_var.get():
+                cmd.append("--ace_final_refit")
+            try:
+                w_val = int(str(self.ace_workers_var.get()).strip())
+                cmd.extend(["--ace_seed_workers", str(w_val)])
+            except Exception:
+                pass
         elif align_engine == "pycusfm":
             cmd.extend([
                 "--cusfm_features", self.cusfm_feat_var.get(),
@@ -3587,7 +3605,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.5.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.5.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3702,8 +3720,73 @@ class AbuAlignApp:
                     msg_s = msg.strip()
                     if any(k in msg for k in ["Stage 1", "Found", "Scanning", "images found"]):
                         self._set_stage(0)
-                    elif any(k in msg for k in ["Stage 2", "Loading model", "Initializing GPU"]):
+                    elif any(k in msg for k in ["Stage 2", "Loading model", "Initializing GPU", "Initializing Neural Network", "Initializing ACE0 Engine", "ZoeDepth model ready", "Downloading ZoeDepth"]):
                         self._set_stage(1)
+                        if "ACE0" in msg or "ZoeDepth" in msg:
+                            self.telemetry_lbl.config(text="Stage 2/6: Initializing ACE0 & ZoeDepth Models...", fg=self.accent_blue)
+                    elif msg_s.startswith("[TELEMETRY:STAGE2]") or "Processing seed" in msg or "Trying seeds:" in msg:
+                        self._set_stage(2)
+                        if msg_s.startswith("[TELEMETRY:STAGE2]"):
+                            try:
+                                parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                                s = parts.get("seed", "?")
+                                tot = parts.get("total", "?")
+                                self.telemetry_lbl.config(text=f"Stage 3/6: ACE0 Seed Search [{s}/{tot}] (ZoeDepth Prior)...", fg="#38bdf8")
+                            except Exception:
+                                pass
+                        else:
+                            seed_m = re.search(r"Processing seed\s+(\d+)", msg)
+                            if seed_m:
+                                self.telemetry_lbl.config(text=f"Stage 3/6: ACE0 Evaluating Candidate Seed #{seed_m.group(1)}...", fg="#38bdf8")
+                            else:
+                                self.telemetry_lbl.config(text="Stage 3/6: ACE0 Candidate Seed Evaluation...", fg="#38bdf8")
+                    elif msg_s.startswith("[TELEMETRY:STAGE3]") or ("Iteration:" in msg and "|" in msg and ("ace_trainer" in msg or "ACE0" in msg or "Epoch" in msg)):
+                        self._set_stage(3)
+                        try:
+                            if msg_s.startswith("[TELEMETRY:STAGE3]"):
+                                parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                                pct = float(parts.get("pct", 0))
+                                cur_it = parts.get("iter", "?")
+                                tot_it = parts.get("total", "?")
+                                loss_v = parts.get("loss", "?")
+                                inl_v = parts.get("inliers", "?")
+                            else:
+                                it_m = re.search(r"Iteration:\s*(\d+)\s*\|\s*(\d+).*Loss:\s*([\d\.]+).*inliers.*:\s*([\d\.]+)%", msg)
+                                if it_m:
+                                    cur_it = int(it_m.group(1))
+                                    tot_it = int(it_m.group(2))
+                                    loss_v = it_m.group(3)
+                                    inl_v = it_m.group(4)
+                                    pct = (cur_it / max(1, tot_it)) * 100.0
+                                else:
+                                    pct, cur_it, tot_it, loss_v, inl_v = 0, "?", "?", "?", "?"
+                            self.progress_bar["value"] = pct
+                            self.pct_lbl.config(text=f"{pct:5.1f}%")
+                            focal_str = f" | Focal: {getattr(self, '_last_ace_focal', '')}px" if hasattr(self, '_last_ace_focal') else ""
+                            self.telemetry_lbl.config(text=f"Stage 4/6: ACE0 Scene MLP [{cur_it}/{tot_it}] ({pct:.1f}%) | Loss: {loss_v} | Inliers: {inl_v}%{focal_str}", fg=self.accent_blue)
+                        except Exception:
+                            pass
+                    elif msg_s.startswith("[TELEMETRY:ACE_OPTICS]") or "Current Focal Length:" in msg:
+                        f_m = re.search(r"(?:Current Focal Length:|focal=)\s*([\d\.]+)", msg)
+                        if f_m:
+                            self._last_ace_focal = f_m.group(1)
+                    elif msg_s.startswith("[TELEMETRY:STAGE4]") or ("Successfully registered" in msg and "mapping images" in msg):
+                        self._set_stage(4)
+                        try:
+                            if msg_s.startswith("[TELEMETRY:STAGE4]"):
+                                parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                                reg_pct = float(parts.get("pct", 100.0))
+                            else:
+                                reg_m = re.search(r"Successfully registered\s*([\d\.]+)%", msg)
+                                reg_pct = float(reg_m.group(1)) if reg_m else 100.0
+                            self.progress_bar["value"] = reg_pct
+                            self.pct_lbl.config(text=f"{reg_pct:5.1f}%")
+                            self.telemetry_lbl.config(text=f"Stage 5/6: ACE0 Camera Registration [{reg_pct:.1f}% Views Aligned]", fg="#a855f7")
+                        except Exception:
+                            pass
+                    elif msg_s.startswith("[TELEMETRY:STAGE5]") or any(k in msg for k in ["Stage 4", "Generating 3D points", "Predicting dense point", "Building pycolmap"]) or ("Loaded" in msg and "3D scene coordinates" in msg):
+                        self._set_stage(4)
+                        self.telemetry_lbl.config(text="Stage 5/6: Building COLMAP Reconstruction & Point Cloud...", fg="#a855f7")
                     elif msg_s.startswith("[TELEMETRY:STAGE3]") or "Stage 3" in msg:
                         self._set_stage(2)
                         try:
@@ -3720,8 +3803,6 @@ class AbuAlignApp:
                                 self.telemetry_lbl.config(text=f"Stage 3/5: Neural Batch Inference [{b}/{tot}] ({pct:.1f}%)", fg=self.accent_blue)
                         except Exception:
                             pass
-                    elif any(k in msg for k in ["Stage 4", "Generating 3D points", "Predicting dense point"]):
-                        self._set_stage(3)
                     elif msg_s.startswith("[TELEMETRY:STAGE5]") or "Stage 5" in msg:
                         self._set_stage(4)
                         try:
@@ -4043,7 +4124,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.5.7 - {title}")
+        doc_win.title(f"Abu Align v0.0.5.8 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4321,7 +4402,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.5.7\n"
+            "Abu Align & Train - Version 0.0.5.8\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

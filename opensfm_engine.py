@@ -331,6 +331,142 @@ def load_opensfm_points_from_json(rec_json_path: str) -> Tuple[np.ndarray, np.nd
     return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
 
 
+def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
+    """
+    Constructs a fully populated, valid pycolmap.Reconstruction from OpenSfM reconstruction.json.
+    Correctly converts camera models (PINHOLE, RADIAL, EQUIRECTANGULAR, OPENCV_FISHEYE),
+    rotation vectors to world-to-cam quaternions, and incorporates 3D tie points.
+    """
+    if not os.path.isfile(rec_json_path):
+        return None
+
+    try:
+        import pycolmap
+    except ImportError:
+        print("[OpenSfM Bridge] pycolmap not installed; skipping pycolmap.Reconstruction building.")
+        return None
+
+    try:
+        with open(rec_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) > 0:
+            data = data[0]
+        elif not isinstance(data, dict):
+            return None
+    except Exception as e:
+        print(f"[OpenSfM Bridge] Error reading {rec_json_path}: {e}")
+        return None
+
+    rec = pycolmap.Reconstruction()
+
+    # 1. Cameras
+    cameras_dict = data.get("cameras", {})
+    cam_id_map = {}
+    for c_idx, (c_name, c_data) in enumerate(cameras_dict.items()):
+        cam_id = c_idx + 1
+        cam_id_map[c_name] = cam_id
+        w = int(c_data.get("width", 1920))
+        h = int(c_data.get("height", 1080))
+        proj = c_data.get("projection_type", "perspective").lower()
+        focal_norm = float(c_data.get("focal", 0.85))
+        focal_px = focal_norm * max(w, h)
+        cx = w / 2.0
+        cy = h / 2.0
+        k1 = float(c_data.get("k1", 0.0))
+        k2 = float(c_data.get("k2", 0.0))
+
+        if proj in ["equirectangular", "spherical"]:
+            cam = pycolmap.Camera(
+                model="EQUIRECTANGULAR",
+                width=w,
+                height=h,
+                params=[],
+                camera_id=cam_id
+            )
+        elif proj in ["fisheye"]:
+            cam = pycolmap.Camera(
+                model="OPENCV_FISHEYE",
+                width=w,
+                height=h,
+                params=[focal_px, focal_px, cx, cy, k1, k2, 0.0, 0.0],
+                camera_id=cam_id
+            )
+        else:
+            if abs(k1) > 1e-6 or abs(k2) > 1e-6:
+                cam = pycolmap.Camera(
+                    model="RADIAL",
+                    width=w,
+                    height=h,
+                    params=[focal_px, cx, cy, k1, k2],
+                    camera_id=cam_id
+                )
+            else:
+                cam = pycolmap.Camera(
+                    model="PINHOLE",
+                    width=w,
+                    height=h,
+                    params=[focal_px, focal_px, cx, cy],
+                    camera_id=cam_id
+                )
+
+        if hasattr(rec, "add_camera_with_trivial_rig"):
+            rec.add_camera_with_trivial_rig(cam)
+        else:
+            rec.add_camera(cam)
+
+    if not rec.cameras:
+        cam = pycolmap.Camera(model="PINHOLE", width=1920, height=1080, params=[1500.0, 1500.0, 960.0, 540.0], camera_id=1)
+        if hasattr(rec, "add_camera_with_trivial_rig"):
+            rec.add_camera_with_trivial_rig(cam)
+        else:
+            rec.add_camera(cam)
+
+    # 2. Shots / Images
+    shots = data.get("shots", {})
+    img_id_seq = 1
+    for shot_id, shot_data in sorted(shots.items()):
+        cam_name = shot_data.get("camera", list(cameras_dict.keys())[0] if cameras_dict else "1")
+        cam_id = cam_id_map.get(cam_name, 1)
+
+        r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
+        t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
+
+        R_w2c, _ = cv2.Rodrigues(r_vec)
+        qw = math.sqrt(max(0.0, 1.0 + R_w2c[0, 0] + R_w2c[1, 1] + R_w2c[2, 2])) / 2.0
+        if qw > 1e-6:
+            qx = (R_w2c[2, 1] - R_w2c[1, 2]) / (4.0 * qw)
+            qy = (R_w2c[0, 2] - R_w2c[2, 0]) / (4.0 * qw)
+            qz = (R_w2c[1, 0] - R_w2c[0, 1]) / (4.0 * qw)
+        else:
+            try:
+                from scipy.spatial.transform import Rotation as SciPyRot
+                scipy_q = SciPyRot.from_matrix(R_w2c).as_quat()
+                qx, qy, qz, qw = scipy_q[0], scipy_q[1], scipy_q[2], scipy_q[3]
+            except Exception:
+                qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+
+        rigid = pycolmap.Rigid3d(pycolmap.Rotation3d(np.array([qw, qx, qy, qz])), t_vec)
+        py_img = pycolmap.Image(name=shot_id, camera_id=cam_id, image_id=img_id_seq)
+        if hasattr(rec, "add_image_with_trivial_frame"):
+            rec.add_image_with_trivial_frame(py_img, rigid)
+        else:
+            py_img.cam_from_world = rigid
+            py_img.registered = True
+            rec.add_image(py_img)
+        img_id_seq += 1
+
+    # 3. Points3D
+    points_dict = data.get("points", {})
+    for pid, p_info in points_dict.items():
+        coords = p_info.get("coordinates")
+        if coords and len(coords) == 3:
+            xyz = np.asarray(coords, dtype=np.float64)
+            rgb = np.asarray(p_info.get("color", [200, 200, 200]), dtype=np.uint8)
+            rec.add_point3D(xyz, pycolmap.Track(), rgb)
+
+    return rec
+
+
 class OpenSfMEngine:
     """
     Manages OpenSfM configuration, execution, telemetry, and COLMAP export.
@@ -562,29 +698,63 @@ class OpenSfMEngine:
 
     def export_to_3dgs_dataset(self, target_3dgs_dir: str) -> bool:
         """Transfers OpenSfM exported COLMAP files into Abu Align's universal 3dgs_dataset/ directory."""
-        colmap_source = os.path.join(self.output_dir, "colmap")
-        if not os.path.isdir(colmap_source):
-            for alt in [os.path.join(self.output_dir, "undistorted"), os.path.join(self.output_dir, "sparse")]:
-                if os.path.isdir(alt):
-                    colmap_source = alt
-                    break
-
         sparse_target = os.path.join(target_3dgs_dir, "sparse", "0")
         os.makedirs(sparse_target, exist_ok=True)
 
-        if os.path.isdir(colmap_source):
-            for fname in os.listdir(colmap_source):
-                if fname.endswith((".bin", ".txt")):
-                    shutil.copy2(os.path.join(colmap_source, fname), os.path.join(sparse_target, fname))
+        rec_json_candidates = [
+            os.path.join(self.output_dir, "reconstruction.json"),
+            os.path.join(self.output_dir, "opensfm_workspace", "reconstruction.json"),
+            os.path.join(os.path.dirname(self.output_dir), "opensfm_workspace", "reconstruction.json")
+        ]
+        rec_json = None
+        for rj in rec_json_candidates:
+            if os.path.isfile(rj):
+                rec_json = rj
+                break
+
+        # If reconstruction.json is available, construct genuine pycolmap.Reconstruction
+        # and serialize standard COLMAP binary and text files
+        py_rec = opensfm_to_pycolmap(rec_json) if rec_json else None
+        if py_rec is not None and py_rec.num_reg_images() > 0:
+            try:
+                py_rec.write(sparse_target)
+                py_rec.write_text(sparse_target)
+            except Exception as e:
+                print(f"[OpenSfM Bridge] pycolmap serialization error: {e}")
+        else:
+            colmap_source = os.path.join(self.output_dir, "colmap")
+            if not os.path.isdir(colmap_source):
+                for alt in [os.path.join(self.output_dir, "undistorted"), os.path.join(self.output_dir, "sparse"), os.path.join(self.output_dir, "colmap_export")]:
+                    if os.path.isdir(alt):
+                        colmap_source = alt
+                        break
+
+            if os.path.isdir(colmap_source):
+                for fname in os.listdir(colmap_source):
+                    if fname.endswith((".bin", ".txt")):
+                        shutil.copy2(os.path.join(colmap_source, fname), os.path.join(sparse_target, fname))
+
+        # Purge any corrupt 0-camera or empty <= 8-byte .bin files
+        for fname in os.listdir(sparse_target):
+            if fname.endswith(".bin"):
+                fpath = os.path.join(sparse_target, fname)
+                if os.path.isfile(fpath) and os.path.getsize(fpath) <= 8:
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
 
         # Copy or link images
         img_src = os.path.join(self.output_dir, "images")
         img_dst = os.path.join(target_3dgs_dir, "images")
         if os.path.isdir(img_src) and not os.path.exists(img_dst):
             try:
-                os.symlink(img_src, img_dst)
+                subprocess.run(["cmd", "/c", "mklink", "/J", img_dst, os.path.abspath(img_src)], check=True, capture_output=True)
             except Exception:
-                shutil.copytree(img_src, img_dst)
+                try:
+                    os.symlink(img_src, img_dst)
+                except Exception:
+                    shutil.copytree(img_src, img_dst)
 
         # Copy reconstruction point cloud ply if available
         ply_candidates = [
@@ -592,8 +762,7 @@ class OpenSfMEngine:
             os.path.join(self.output_dir, "opensfm_workspace", "reconstruction.ply"),
             os.path.join(os.path.dirname(self.output_dir), "opensfm_workspace", "reconstruction.ply"),
             os.path.join(self.output_dir, "depthmaps", "merged.ply"),
-            os.path.join(self.output_dir, "points3D.ply"),
-            os.path.join(colmap_source, "points3D.ply")
+            os.path.join(self.output_dir, "points3D.ply")
         ]
         found_ply = None
         for ply_file in ply_candidates:
@@ -609,17 +778,6 @@ class OpenSfMEngine:
                 break
 
         # Also preserve OpenSfM reconstruction.json and metadata.json for direct PFGS360 training
-        rec_json_candidates = [
-            os.path.join(self.output_dir, "reconstruction.json"),
-            os.path.join(self.output_dir, "opensfm_workspace", "reconstruction.json"),
-            os.path.join(os.path.dirname(self.output_dir), "opensfm_workspace", "reconstruction.json")
-        ]
-        rec_json = None
-        for rj in rec_json_candidates:
-            if os.path.isfile(rj):
-                rec_json = rj
-                break
-
         if rec_json:
             osfm_target = os.path.join(target_3dgs_dir, "opensfm")
             os.makedirs(osfm_target, exist_ok=True)
@@ -1487,9 +1645,16 @@ def opensfm_to_transforms_json(
 
     cameras = rec.get("cameras", {})
     width, height = 1024, 512
+    proj_type = "perspective"
+    focal_norm = 0.85
+    k1_val, k2_val = 0.0, 0.0
     for cam_id, cam in cameras.items():
-        width = cam.get("width", width)
-        height = cam.get("height", height)
+        width = int(cam.get("width", width))
+        height = int(cam.get("height", height))
+        proj_type = cam.get("projection_type", "perspective").lower()
+        focal_norm = float(cam.get("focal", 0.85))
+        k1_val = float(cam.get("k1", 0.0))
+        k2_val = float(cam.get("k2", 0.0))
         break
 
     frames = []
@@ -1512,12 +1677,34 @@ def opensfm_to_transforms_json(
             "transform_matrix": c2w.tolist()
         })
 
-    transforms_payload = {
-        "camera_model": "EQUIRECTANGULAR",
-        "w": int(width),
-        "h": int(height),
-        "frames": frames
-    }
+    fl_px = focal_norm * max(width, height)
+    cx_px = width / 2.0
+    cy_px = height / 2.0
+
+    if proj_type in ["equirectangular", "spherical"]:
+        transforms_payload = {
+            "camera_model": "EQUIRECTANGULAR",
+            "w": int(width),
+            "h": int(height),
+            "frames": frames
+        }
+    else:
+        transforms_payload = {
+            "camera_model": "OPENCV",
+            "w": int(width),
+            "h": int(height),
+            "fl_x": float(fl_px),
+            "fl_y": float(fl_px),
+            "cx": float(cx_px),
+            "cy": float(cy_px),
+            "k1": float(k1_val),
+            "k2": float(k2_val),
+            "p1": 0.0,
+            "p2": 0.0,
+            "camera_angle_x": float(2.0 * math.atan(width / (2.0 * fl_px))),
+            "camera_angle_y": float(2.0 * math.atan(height / (2.0 * fl_px))),
+            "frames": frames
+        }
 
     tf_dir = os.path.dirname(os.path.abspath(output_transforms_file))
     os.makedirs(tf_dir, exist_ok=True)
@@ -1530,7 +1717,12 @@ def opensfm_to_transforms_json(
     try:
         with open(os.path.join(sparse_dir, "cameras.txt"), "w", encoding="utf-8") as cf:
             cf.write("# Camera list with one line of data per camera:\n#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-            cf.write(f"1 EQUIRECTANGULAR {int(width)} {int(height)} {int(width)} {int(height)}\n")
+            if proj_type in ["equirectangular", "spherical"]:
+                cf.write(f"1 EQUIRECTANGULAR {int(width)} {int(height)}\n")
+            elif abs(k1_val) > 1e-6 or abs(k2_val) > 1e-6:
+                cf.write(f"1 RADIAL {int(width)} {int(height)} {fl_px:.6f} {cx_px:.6f} {cy_px:.6f} {k1_val:.6f} {k2_val:.6f}\n")
+            else:
+                cf.write(f"1 PINHOLE {int(width)} {int(height)} {fl_px:.6f} {fl_px:.6f} {cx_px:.6f} {cy_px:.6f}\n")
 
         with open(os.path.join(sparse_dir, "images.txt"), "w", encoding="utf-8") as imf:
             imf.write("# Image list with two lines of data per image:\n#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n#   POINTS2D[] as (X, Y, POINT3D_ID)\n")
@@ -1544,7 +1736,12 @@ def opensfm_to_transforms_json(
                     qy = (R_w2c[0, 2] - R_w2c[2, 0]) / (4.0 * qw)
                     qz = (R_w2c[1, 0] - R_w2c[0, 1]) / (4.0 * qw)
                 else:
-                    qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+                    try:
+                        from scipy.spatial.transform import Rotation as SciPyRot
+                        scipy_q = SciPyRot.from_matrix(R_w2c).as_quat()
+                        qx, qy, qz, qw = scipy_q[0], scipy_q[1], scipy_q[2], scipy_q[3]
+                    except Exception:
+                        qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
                 imf.write(f"{idx+1} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} {t_vec[0]:.9f} {t_vec[1]:.9f} {t_vec[2]:.9f} 1 {shot_id}\n\n")
 
         pts_data = rec.get("points", {})
