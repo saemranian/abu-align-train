@@ -21,6 +21,11 @@ import torch
 import pycolmap
 import trimesh
 
+try:
+    import wsl_bridge
+except ImportError:
+    wsl_bridge = None
+
 # Locate the ACE0 directory
 CURRENT_DIR = Path(__file__).parent.resolve()
 ACEZERO_DIR_CANDIDATES = [
@@ -97,76 +102,115 @@ def run_acezero_reconstruction(
     log(f"      * Photos Count:  {len(image_paths)}")
     log(f"      * Work Dir:      {work_dir}")
 
-    # Determine input representation for ace_zero.py
-    # If all images reside in one folder, pass the folder or glob directly
-    first_parent = Path(image_paths[0]).parent
-    all_in_same_folder = all(Path(p).parent == first_parent for p in image_paths)
+    # Stage images: if images exceed 1920px (e.g. 60.2MP raw exports), pre-scale once
+    # to avoid massive CPU RAM pressure (57GB) and slow I/O decoding on every epoch.
+    stage_dir = Path(work_dir) / "staged_images"
+    os.makedirs(stage_dir, exist_ok=True)
+    staged_paths = []
+    source_mapping = {}
+    max_stage_dim = 1920
 
-    # If images are a subset (e.g. stride applied) or in different folders,
-    # create a clean temporary symlink / staging folder with keyframe images
-    if not all_in_same_folder or len(image_paths) < len(os.listdir(first_parent)):
-        stage_dir = Path(work_dir) / "staged_images"
-        os.makedirs(stage_dir, exist_ok=True)
-        staged_paths = []
-        for idx, src_path in enumerate(image_paths):
-            ext = Path(src_path).suffix.lower()
-            dst_name = f"{idx:05d}_{Path(src_path).stem}{ext}"
-            dst_path = stage_dir / dst_name
-            if not dst_path.exists():
+    for idx, src_path in enumerate(image_paths):
+        ext = Path(src_path).suffix.lower()
+        dst_name = f"{idx:05d}_{Path(src_path).stem}.jpg"
+        dst_path = stage_dir / dst_name
+        if not dst_path.exists():
+            needs_scale = False
+            try:
+                from PIL import Image
+                with Image.open(src_path) as im:
+                    w, h = im.size
+                    if max(w, h) > max_stage_dim:
+                        needs_scale = True
+                        scale = max_stage_dim / max(w, h)
+                        new_w, new_h = int(w * scale), int(h * scale)
+                        im_resized = im.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                        im_resized.save(dst_path, "JPEG", quality=95)
+            except Exception:
+                needs_scale = False
+
+            if not needs_scale and not dst_path.exists():
                 try:
                     os.link(src_path, dst_path)
                 except Exception:
                     import shutil
                     shutil.copy2(src_path, dst_path)
-            staged_paths.append(str(dst_path))
-        input_target = str(stage_dir)
-        source_mapping = {str(stage_dir / f"{idx:05d}_{Path(src_path).stem}{Path(src_path).suffix.lower()}"): src_path for idx, src_path in enumerate(image_paths)}
-    else:
-        input_target = str(first_parent)
-        source_mapping = {p: p for p in image_paths}
 
+        staged_paths.append(str(dst_path))
+        source_mapping[str(dst_path)] = src_path
+
+    input_target = str(stage_dir)
     ace_zero_script = find_acezero_script("ace_zero.py")
 
-    cmd = [
-        sys.executable,
-        "-u",
-        ace_zero_script,
-        input_target,
-        work_dir,
-        "--iterations_max", str(iterations_max),
-        "--refinement", str(refinement),
-        "--refine_calibration", str(refine_calibration),
-        "--use_external_focal_length", str(external_focal_length),
-        "--image_resolution", str(image_resolution),
-        "--export_point_cloud", str(export_point_cloud),
-        "--dense_point_cloud", str(dense_point_cloud),
-        "--try_seeds", str(try_seeds),
-        "--seed_parallel_workers", "2",
-        "--render_visualization", "False",
-    ]
+    use_wsl = wsl_bridge is not None and wsl_bridge.is_abu_linux_env_ready()
+    if use_wsl:
+        log("      [*] Engaging Native Linux Niantic ACE0 via WSL2 Ubuntu (GCC + OpenMP C++ DSAC*)...")
+        wsl_input = wsl_bridge.win_to_wsl_path(input_target)
+        wsl_work = wsl_bridge.win_to_wsl_path(work_dir)
+        wsl_acezero_dir = wsl_bridge.win_to_wsl_path(str(ACEZERO_DIR))
 
-    log(f"      * Executing ACE0 mapping loop: {' '.join(cmd)}")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        cwd=str(ACEZERO_DIR)
-    )
+        bash_cmd = (
+            f"export PYTHONPATH='{wsl_acezero_dir}:{wsl_acezero_dir}/dsacstar:$PYTHONPATH' && "
+            f"export LD_LIBRARY_PATH='{wsl_bridge.WSL_CONDA_ENV}/lib/python3.10/site-packages/torch/lib:{wsl_bridge.WSL_CONDA_ENV}/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' && "
+            f"cd '{wsl_acezero_dir}' && "
+            f"{wsl_bridge.WSL_PYTHON} -u '{wsl_acezero_dir}/ace_zero.py' '{wsl_input}' '{wsl_work}' "
+            f"--iterations_max {iterations_max} "
+            f"--refinement {refinement} "
+            f"--refine_calibration {refine_calibration} "
+            f"--use_external_focal_length {external_focal_length} "
+            f"--image_resolution {image_resolution} "
+            f"--export_point_cloud {export_point_cloud} "
+            f"--dense_point_cloud {dense_point_cloud} "
+            f"--try_seeds {try_seeds} "
+            f"--seed_parallel_workers 1 "
+            f"--render_visualization False"
+        )
+        log(f"      * Executing ACE0 via WSL2 Ubuntu...")
+        ret_code, _ = wsl_bridge.run_command_in_wsl(bash_cmd, log_callback=lambda l: log(f"      [ACE0-WSL] {l}"))
+        if ret_code != 0:
+            raise RuntimeError(f"ACE0 mapping process exited with error code {ret_code} in WSL2 Ubuntu")
+    else:
+        log("      [*] Engaging Native Windows ACE0 Engine (Fallback)...")
+        cmd = [
+            sys.executable,
+            "-u",
+            ace_zero_script,
+            input_target,
+            work_dir,
+            "--iterations_max", str(iterations_max),
+            "--refinement", str(refinement),
+            "--refine_calibration", str(refine_calibration),
+            "--use_external_focal_length", str(external_focal_length),
+            "--image_resolution", str(image_resolution),
+            "--export_point_cloud", str(export_point_cloud),
+            "--dense_point_cloud", str(dense_point_cloud),
+            "--try_seeds", str(try_seeds),
+            "--seed_parallel_workers", "1",
+            "--render_visualization", "False",
+        ]
 
-    while True:
-        line = proc.stdout.readline()
-        if not line and proc.poll() is not None:
-            break
-        if line:
-            stripped = line.rstrip()
-            if stripped:
-                log(f"      [ACE0] {stripped}")
+        log(f"      * Executing ACE0 mapping loop: {' '.join(cmd)}")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(ACEZERO_DIR)
+        )
 
-    ret_code = proc.wait()
-    if ret_code != 0:
-        raise RuntimeError(f"ACE0 mapping process exited with error code {ret_code}")
+        while True:
+            line = proc.stdout.readline()
+            if not line and proc.poll() is not None:
+                break
+            if line:
+                stripped = line.rstrip()
+                if stripped:
+                    log(f"      [ACE0] {stripped}")
+
+        ret_code = proc.wait()
+        if ret_code != 0:
+            raise RuntimeError(f"ACE0 mapping process exited with error code {ret_code}")
 
     log(f"      * ACE0 mapping completed in: {time.time()-start_time:.2f}s")
 

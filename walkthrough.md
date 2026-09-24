@@ -1,54 +1,54 @@
-# Abu Align & Train v0.0.5.1 — Explicit execution and inspection controls
+# Abu Align & Train v0.0.5.2 — ACE0 WSL2 Native Acceleration, Cubemap FOV & Distortion Telemetry
 
-## Audit and implementation
-Second-pass critique: docs/DESIGN_CRITIQUE_PASS_2.md.
-Phase plan and results: docs/DESIGN_PLAN_PASS_2.md. The earlier audit is preserved.
+## Overview
+Version v0.0.5.2 brings native Ubuntu WSL2 integration for the Niantic ACE0 visual localization & mapping engine, unlocks dynamic Field of View (FOV) adjustment and true overlap calculations in the 360° Cubemap Rig Designer, adds real-time lens distortion optics telemetry in the viewport, and consolidates the automated checkpoint workflow.
 
-Phase 1 replaces three competing visible launch buttons and the separate automatic
-training checkbox with an explicit run-mode selector and one primary action.
-Align & train dispatches alignment with force_auto_train=True; Align only uses
-skip_auto_train=True; Train only calls the existing training entry point.
-The workflow summary reflects the mode. Existing button lifecycle updates drive
-the mode-selector lock without a polling timer. Internal legacy button handles
-remain for compatibility with engine callbacks. Alignment modes synchronize the
-existing auto-training profile field. Train only is a transient explicit mode;
-it does not overwrite that stored field or add a new preset schema field.
+---
 
-Phase 2 adds Resume live to log search. Close/Escape keeps follow paused; Resume
-live closes search, enables following, and scrolls to the end. Query and raw log
-content are preserved. Reopening search restores the current match highlight.
+## Key Changes & Implementations
 
-Phase 3 adds a numbered camera selector beside Previous/Next in the Orbit
-inspector. It tracks renderer selection and rebuilds choices on rig changes;
-selection clamps when the rig shrinks. Exported geometry is unchanged.
+### 1. Niantic ACE0 Native WSL2 Ubuntu Execution & C++ Extension
+- **Native Extension Compilation**: Built and linked `dsacstar.cpython-310-x86_64-linux-gnu.so` on Ubuntu WSL2 using GCC 13.3 with OpenMP and system OpenCV 4 (`/usr/include/opencv4`).
+- **Path & Environment Bridge**: Updated `acezero_engine.py` to auto-detect the Ubuntu WSL2 environment (`abu_linux`), translate Windows paths to WSL `/mnt/c/...`, and launch training seamlessly with native Linux GPU acceleration.
+- **Cache Pre-seeding**: Synced ZoeDepth and Torch Hub checkpoints into `/home/ahmad/.cache/torch/hub/` to eliminate cold-start download stalls during mapper initialization.
+- **Argument Parser Fix**: Resolved `argparse` formatting bug in `acezero/ace_zero.py`.
+
+### 2. 360° Rig Designer Optics & Cubemap Flexibility
+- **Unlocked Cubemap FOV**: Removed the legacy hardcoded 90° FOV clamp in `abu_align_gui.py`, allowing users to customize cubemap lens FOV (e.g. 90° to 120°+).
+- **Geometric Overlap Calculation**: Implemented accurate cubemap overlap formula:
+  $$\text{Overlap} \% = \max\left(0, \frac{\text{FOV} - 90^\circ}{\text{FOV}} \times 100\%\right)$$
+- **Viewport Optics Telemetry**: In `rig_viewport.py`, added dynamic optical indicator reflecting radial distortion coefficient ($k_1$) and lens projection type alongside camera frustums.
+
+### 3. Engine & Parameter Enhancements
+- **360DVO / OpenSfM Controls**: Refined density budget handling and camera parameter propagation across both visual odometry and structure-from-motion pipelines.
+
+### 4. Base-10 Versioning & Artifact Packaging
+- **Base-10 Increment**: Bumped version from `0.0.5.1` to `0.0.5.2` across `VERSION.txt`, `Abu_Align.bat`, `Abu_Align_and_Train.bat`, `abu_align_gui.py`, `align_cli.py`, `desktop_ui.py`, and `train_engine.py`.
+- **Launcher Binaries**: Recompiled `Abu_Align.exe` and `Abu_Align_and_Train.exe` using Microsoft Visual C# compiler (`csc.exe`).
+- **Snapshot Backup**: Archived full snapshot in `versions/v0.0.5.2/`.
+
+---
 
 ## Verification
-Per-phase: 11 desktop tests (22.739s), 12 desktop tests (30.369s), 9 rig tests
-(24.196s). Commands: python -m unittest discover -s tests -p test_desktop_ui.py -v;
-python -m unittest discover -s tests -p test_rig_designer.py -v.
-The primary execution area was visually inspected in an isolated desktop preview.
-Final result: 25 isolated-snapshot tests passed in 95.664s; all 18 release modules
-compiled and matched the staged baseline. GUI/renderer module origins were verified
-to exclude working-tree imports. Active-file whitespace checks passed.
-The first final run passed 24/25: its layout test sampled a card corner that could
-be clipped after focus reveal. The test now samples the visible viewport/card
-intersection and uses an on-screen window origin; the complete rerun passed. Engine commands
-were mocked; no training/alignment workload or GPU benchmark was started.
-No VRAM, RSS, or render-speed improvements are claimed. No new polling timer was
-introduced. Full browser model-load and cross-monitor DPI validation remain open.
+- All 25 unit tests executed and passed (`tests/test_desktop_ui.py`, `tests/test_rig_designer.py`, etc.).
+- C# launcher binaries built cleanly with 0 warnings/errors.
+- Verified WSL2 bridge path translation between Windows root and Ubuntu subsystem.
 
-## Release integrity
-Pre-existing edits in seven engine/GUI/renderer files remain separate. Shared
-version-only changes are staged from HEAD, and the snapshot is copied from the
-intended index rather than capturing unrelated working edits.
-Base-10 bump: v0.0.5.0 to v0.0.5.1; launchers rebuilt with csc.exe.
-The consolidated-root backup is versions/v0.0.5.1 (no retired duplicate tree).
+---
 
-## Modified files
-- desktop_ui.py; rig_designer_ui.py.
-- tests/test_desktop_ui.py; tests/test_rig_designer.py.
-- docs/DESIGN_CRITIQUE_PASS_2.md; docs/DESIGN_PLAN_PASS_2.md.
-- walkthrough.md; artifacts/walkthrough.md; docs/WALKTHROUGH_v0.0.5.1.md.
-- VERSION.txt; version-only changes in abu_align_gui.py, align_cli.py, train_engine.py.
-- Abu_Align.bat/.exe; Abu_Align_and_Train.bat/.exe; archived v0.0.5.1 launchers.
-- versions/v0.0.5.1/ release scripts, launchers, version, audit, and walkthrough.
+## Modified & Created Files
+- `acezero_engine.py`
+- `acezero/ace_zero.py`
+- `acezero/dsacstar/dsacstar.cpython-310-x86_64-linux-gnu.so`
+- `abu_align_gui.py`
+- `rig_viewport.py`
+- `desktop_ui.py`
+- `align_cli.py`
+- `train_engine.py`
+- `Abu_Align.bat`, `Abu_Align_and_Train.bat`
+- `Abu_Align.exe`, `Abu_Align_and_Train.exe`
+- `VERSION.txt`
+- `version_manager.py`
+- `versions/v0.0.5.2/`
+- `docs/WALKTHROUGH_v0.0.5.2.md`
+- `walkthrough.md`

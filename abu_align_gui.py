@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.5.1
+Abu Align & Train Version 0.0.5.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.5.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.5.2 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -314,6 +314,10 @@ class AbuAlignApp:
         self.dvo_scale_var = tk.StringVar(value="3.2")
         self.dvo_viz_var = tk.BooleanVar(value=True)
         self.dvo_weights_var = tk.StringVar(value="")
+        self.dvo_dense_cloud_var = tk.BooleanVar(value=False)
+        self.dvo_patch_lifetime_var = tk.StringVar(value="13 (Default)")
+        self.dvo_final_refine_var = tk.StringVar(value="12 (Standard)")
+        self.dvo_gradient_bias_var = tk.BooleanVar(value=True)
 
         # Cache & Windowing Options
         self.cache_var = tk.BooleanVar(value=True)
@@ -804,23 +808,33 @@ class AbuAlignApp:
         dvo_col1 = tk.Frame(self.panel_align_360dvo, bg=self.panel_bg)
         dvo_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(dvo_col1, text="Patch Graph & Density:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_dvo_p1 = tk.Radiobutton(dvo_col1, text="Fast Realtime (64 Patches)", variable=self.dvo_patches_var, value="64", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_dvo_p1 = tk.Radiobutton(dvo_col1, text="Fast Realtime (64 Patches)", variable=self.dvo_patches_var, value="64", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
         rb_dvo_p1.pack(anchor="w")
-        rb_dvo_p2 = tk.Radiobutton(dvo_col1, text="Standard Odometry (96 Patches)", variable=self.dvo_patches_var, value="96", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_dvo_p2 = tk.Radiobutton(dvo_col1, text="Standard Odometry (96 Patches)", variable=self.dvo_patches_var, value="96", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
         rb_dvo_p2.pack(anchor="w")
-        rb_dvo_p3 = tk.Radiobutton(dvo_col1, text="Dense High-Precision (128 Patches)", variable=self.dvo_patches_var, value="128", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_dvo_p3 = tk.Radiobutton(dvo_col1, text="Dense High-Precision (128 Patches)", variable=self.dvo_patches_var, value="128", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
         rb_dvo_p3.pack(anchor="w")
-        rb_dvo_p4 = tk.Radiobutton(dvo_col1, text="Ultra Dense (256 Patches)", variable=self.dvo_patches_var, value="256", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_dvo_p4 = tk.Radiobutton(dvo_col1, text="Ultra Dense (256 Patches)", variable=self.dvo_patches_var, value="256", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
         rb_dvo_p4.pack(anchor="w")
-        ToolTip(rb_dvo_p1, "64 Patches: Fastest visual odometry loop (~30 FPS). Ideal for real-time tracking.")
+        rb_dvo_p5 = tk.Radiobutton(dvo_col1, text="Extreme Density (384 Patches)", variable=self.dvo_patches_var, value="384", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
+        rb_dvo_p5.pack(anchor="w")
+        rb_dvo_p6 = tk.Radiobutton(dvo_col1, text="Maximum Density (512 Patches)", variable=self.dvo_patches_var, value="512", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
+        rb_dvo_p6.pack(anchor="w")
+        ToolTip(rb_dvo_p1, "64 Patches: Fastest visual odometry loop (~30 FPS). Lightweight tracking for fast previews.")
         ToolTip(rb_dvo_p2, "96 Patches [Recommended]: Balanced trajectory accuracy and factor-graph optimization.")
         ToolTip(rb_dvo_p3, "128 Patches: Maximum tracking density for complex scenes with rapid rotations.")
         ToolTip(rb_dvo_p4, "256 Patches: Ultra-dense spherical patch graph for textureless environments or long loop trajectories.")
+        ToolTip(rb_dvo_p5, "384 Patches: 50% more patch coverage than 256. Ideal for large outdoor panoramas, high-motion 360 videos, or environments with uneven texture.")
+        ToolTip(rb_dvo_p6, "512 Patches: Maximum patch density supported by 360DVO architecture. Tracks up to 512 concurrent surface patches across the equirectangular sphere.")
 
-        # Col B: Factor Graph & ODBA Optimization
+        dvo_dense_chk = tk.Checkbutton(dvo_col1, text="Dense 3x3 Micro-Cloud (9x Points)", variable=self.dvo_dense_cloud_var, font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        dvo_dense_chk.pack(anchor="w", pady=(2, 0))
+        ToolTip(dvo_dense_chk, "Dense 3x3 Micro-Cloud (9x Density Multiplier):\nIn the original 360DVO repo, each tracked patch is a 3x3 grid on the sphere, but 8 out of 9 points were discarded. When checked, unprojects all 9 grid points per patch to generate a 900% denser initial point cloud (up to 700k+ points) with RGB colors for instant high-fidelity 3DGS training initialization.")
+
+        # Col B: Factor Graph & Quality Optimization
         dvo_col2 = tk.Frame(self.panel_align_360dvo, bg=self.panel_bg)
         dvo_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(dvo_col2, text="Factor Graph & ODBA:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        tk.Label(dvo_col2, text="Quality & ODBA Optimization:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
 
         dvo_mask_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
         dvo_mask_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
@@ -840,6 +854,24 @@ class AbuAlignApp:
         ToolTip(lbl_ba, "Omnidirectional Direct Bundle Adjustment (ODBA) keyframe window. Jointly refines recent camera poses on S² manifold.")
         ToolTip(cb_ba, "Omnidirectional Direct Bundle Adjustment (ODBA) keyframe window. Jointly refines recent camera poses on S² manifold.")
 
+        dvo_life_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
+        dvo_life_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_life = tk.Label(dvo_life_frame, text="Patch Lifetime:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_life.pack(side=tk.LEFT)
+        cb_life = ttk.Combobox(dvo_life_frame, textvariable=self.dvo_patch_lifetime_var, values=["10", "13 (Default)", "16 (Extended)", "20 (Maximum)"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_life.pack(side=tk.LEFT)
+        ToolTip(lbl_life, "Keyframe tracking lifetime window (in frames). Controls how long patches stay active in the bundle graph.")
+        ToolTip(cb_life, "Patch Lifetime:\nControls how many consecutive keyframes a patch is tracked before being retired. Higher values improve long-baseline triangulation geometry and reduce trajectory drift in expansive loops.")
+
+        dvo_refine_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
+        dvo_refine_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        lbl_refine = tk.Label(dvo_refine_frame, text="Final Refine:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
+        lbl_refine.pack(side=tk.LEFT)
+        cb_refine = ttk.Combobox(dvo_refine_frame, textvariable=self.dvo_final_refine_var, values=["12 (Standard)", "18 (Deep Refine)", "24 (Production)"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_refine.pack(side=tk.LEFT)
+        ToolTip(lbl_refine, "Number of final global bundle adjustment iterations over all keyframes after tracking concludes.")
+        ToolTip(cb_refine, "Final Refinement Iterations:\nPost-processing bundle adjustment iterations run across all keyframes and 3D tie points. Higher iterations optimize camera poses to sub-pixel accuracy before exporting poses.")
+
         dvo_scale_frame = tk.Frame(dvo_col2, bg=self.panel_bg)
         dvo_scale_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
         lbl_scale = tk.Label(dvo_scale_frame, text="Metric Scale (m):", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=12, anchor="w")
@@ -849,16 +881,20 @@ class AbuAlignApp:
         ToolTip(lbl_scale, "Metric translation multiplier in meters. Calibrates monocular visual odometry bearing disparities to real-world scale.")
         ToolTip(cb_scale, "Metric translation multiplier in meters. Calibrates monocular visual odometry bearing disparities to real-world scale.")
 
-        dvo_viz_chk = tk.Checkbutton(dvo_col2, text="Real-Time 3D Visualizer", variable=self.dvo_viz_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
-        dvo_viz_chk.pack(anchor="w", pady=(2, 0))
-        ToolTip(dvo_viz_chk, "Launch real-time 3D camera trajectory visualizer (Viser / browser) during odometry estimation.")
+        chk_grad = tk.Checkbutton(dvo_col2, text="Gradient-Biased Sampling", variable=self.dvo_gradient_bias_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_grad.pack(anchor="w", pady=(1, 0))
+        ToolTip(chk_grad, "Gradient-Biased Patch Sampling:\nWhen enabled (recommended), samples patches preferentially on high-gradient edges and textured regions, significantly reducing tracking failures on smooth surfaces or skies.")
+
+        dvo_viz_chk = tk.Checkbutton(dvo_col2, text="Real-Time 3D Visualizer (Auto-Pop)", variable=self.dvo_viz_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        dvo_viz_chk.pack(anchor="w", pady=(1, 0))
+        ToolTip(dvo_viz_chk, "Real-Time 3D Visualizer (Viser WebGL):\nAutomatically pops up your default web browser to http://localhost:8080 as soon as the 360DVO visualizer initializes, providing live 3D visualization of camera poses and point cloud.")
 
         # Col C: Universal 3DGS Bridge
         dvo_col3 = tk.Frame(self.panel_align_360dvo, bg=self.panel_bg)
         dvo_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(dvo_col3, text="Universal 3DGS Bridge:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
         tk.Label(dvo_col3, text="⚡ Auto-Exports All 3DGS Formats", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 1))
-        tk.Label(dvo_col3, text="• TUM Odometry (tx, ty, tz, qx, qy, qz, qw)\n• COLMAP cameras.txt, images.txt, points3D.txt\n• Universal transforms.json (EQUIRECTANGULAR)\n• OpenSfM reconstruction.json + metadata.json\n• 100% GPU training in PFGS360 & LichtFeld", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
+        tk.Label(dvo_col3, text="• 9x Dense Micro-Cloud (700k+ pts)\n• TUM Odometry (tx, ty, tz, qx, qy, qz, qw)\n• COLMAP cameras.txt, images.txt, points3D.txt\n• Universal transforms.json (EQUIRECTANGULAR)\n• OpenSfM reconstruction.json + metadata.json\n• 100% GPU training in PFGS360 & LichtFeld", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
 
     def _update_align_panel(self):
         engine = self.engine_var.get()
@@ -2368,6 +2404,7 @@ class AbuAlignApp:
         # Real-time Mathematical Calculation & Canvas Synchronization
         # -----------------------------------------------------------------
         is_updating_math = False
+        last_rig_mode = [mode_var.get()]
 
         def get_current_rig():
             """Returns the list of (name, yaw, pitch, roll, fov) for current settings."""
@@ -2414,8 +2451,9 @@ class AbuAlignApp:
                     cams_lbl.config(text="Cube Faces (Fixed):")
                     cams_scale.config(state=tk.DISABLED)
                     num_cams_var.set(6)
-                    fov_var.set(90.0)
-                    fov_v = 90.0
+                    if last_rig_mode[0] != "cubemap" and (fov_v < 60.0 or fov_v > 135.0):
+                        fov_var.set(90.0)
+                        fov_v = 90.0
                 elif m == "fibonacci":
                     dome_frame.pack_forget()
                     cams_lbl.config(text="Sphere Cams (N):")
@@ -2424,6 +2462,8 @@ class AbuAlignApp:
                     dome_frame.pack_forget()
                     cams_lbl.config(text="Camera Count (N):")
                     cams_scale.config(state=tk.NORMAL)
+
+                last_rig_mode[0] = m
 
                 # Solver logic
                 if m in ("ring", "dome"):
@@ -2442,6 +2482,18 @@ class AbuAlignApp:
                         act_ol = ps.calculate_overlap(nc, fov_v)
                         overlap_var.set(round(act_ol, 1))
                         ol_v = act_ol
+                elif m == "cubemap":
+                    # Cubemap faces are orthogonal (angular step Δθ = 90°)
+                    # Adjacent faces overlap when FOV > 90°: Overlap = max(0, (FOV - 90) / FOV * 100)
+                    if solver == "lock_overlap":
+                        safe_ol = min(ol_v, 45.0)
+                        new_fov = 90.0 / max(0.1, (1.0 - safe_ol / 100.0))
+                        fov_var.set(round(new_fov, 1))
+                        fov_v = new_fov
+                    else:
+                        act_ol = max(0.0, (fov_v - 90.0) / fov_v * 100.0) if fov_v >= 90.0 else 0.0
+                        overlap_var.set(round(act_ol, 1))
+                        ol_v = act_ol
 
                 # Value labels
                 cams_val_lbl.config(text=f"{num_cams_var.get()} cams")
@@ -2451,8 +2503,13 @@ class AbuAlignApp:
                 k1_val = distortion_k1_var.get()
                 if abs(k1_val) < 1e-4:
                     dist_val_lbl.config(text="0.00 (Pinhole)", fg="#38bdf8")
+                    if hasattr(renderer, "optics_text"):
+                        renderer.optics_text = "ideal pinhole optics"
                 else:
                     dist_val_lbl.config(text=f"{k1_val:+.2f}", fg="#f59e0b")
+                    if hasattr(renderer, "optics_text"):
+                        dist_type = "barrel" if k1_val < 0 else "pincushion"
+                        renderer.optics_text = f"radial {dist_type} distortion (k1={k1_val:+.2f})"
 
                 # Aspect ratio & resolution
                 ar_mode = aspect_ratio_var.get()
@@ -3227,6 +3284,26 @@ class AbuAlignApp:
                 scale_val = 3.2
             cmd.extend(["--dvo_scale", str(scale_val)])
 
+            if self.dvo_dense_cloud_var.get():
+                cmd.append("--dvo_dense_cloud")
+
+            try:
+                lifetime_val = int(str(self.dvo_patch_lifetime_var.get()).split()[0].strip())
+            except Exception:
+                lifetime_val = 13
+            cmd.extend(["--dvo_patch_lifetime", str(lifetime_val)])
+
+            try:
+                refine_val = int(str(self.dvo_final_refine_var.get()).split()[0].strip())
+            except Exception:
+                refine_val = 12
+            cmd.extend(["--dvo_final_refine", str(refine_val)])
+
+            if self.dvo_gradient_bias_var.get():
+                cmd.append("--dvo_gradient_bias")
+            else:
+                cmd.append("--no_dvo_gradient_bias")
+
             if self.dvo_viz_var.get():
                 cmd.append("--dvo_viz")
             else:
@@ -3510,7 +3587,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.5.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.5.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3942,7 +4019,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.5.1 - {title}")
+        doc_win.title(f"Abu Align v0.0.5.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4220,7 +4297,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.5.1\n"
+            "Abu Align & Train - Version 0.0.5.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

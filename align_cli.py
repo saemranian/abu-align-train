@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.5.1 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.5.2 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1170,6 +1170,12 @@ def main():
     parser.add_argument("--dvo_scale", type=float, default=3.2, help="Metric scene depth scale multiplier (default: 3.2m) in 360DVO")
     parser.add_argument("--dvo_viz", dest="dvo_viz", action="store_true", default=True, help="Launch live real-time Viser browser visualizer during 360DVO tracking")
     parser.add_argument("--no_dvo_viz", dest="dvo_viz", action="store_false", help="Disable real-time visualizer during 360DVO tracking")
+    parser.add_argument("--dvo_dense_cloud", action="store_true", default=False, help="Unproject all 9 projective depth vertices per patch (9x point cloud density multiplier)")
+    parser.add_argument("--dvo_patch_lifetime", type=int, default=13, help="Keyframe tracking lifetime window for feature patches in 360DVO (default: 13)")
+    parser.add_argument("--dvo_final_refine", type=int, default=12, help="Number of final bundle adjustment iterations at sequence completion (default: 12)")
+    parser.add_argument("--dvo_gradient_bias", dest="dvo_gradient_bias", action="store_true", default=True, help="Bias patch sampling towards high-contrast image gradients/edges (default: True)")
+    parser.add_argument("--no_dvo_gradient_bias", dest="dvo_gradient_bias", action="store_false", help="Use uniform random patch sampling in 360DVO")
+    parser.add_argument("--dvo_keyframe_thresh", type=float, default=15.0, help="Optical flow motion threshold for keyframe culling (default: 15.0)")
     # OpenSfM 360 & Spherical Photogrammetry Options
     parser.add_argument("--projection", type=str, choices=["auto", "equirectangular", "spherical", "perspective", "fisheye"], default="equirectangular", help="Camera projection model for OpenSfM (default: equirectangular for 360 panos)")
     parser.add_argument("--opensfm_feature", type=str, choices=["sift", "hahog", "orb", "akaze"], default="sift", help="Feature extractor for OpenSfM (default: sift)")
@@ -1686,7 +1692,13 @@ def main():
             polar_mask_pct=getattr(args, "dvo_polar_mask", 0.08),
             local_ba_window=getattr(args, "dvo_ba_window", 8),
             metric_scale=getattr(args, "dvo_scale", 3.2),
-            enable_viz=args.dvo_viz
+            enable_viz=args.dvo_viz,
+            port=getattr(args, "port", 8080),
+            dense_cloud=getattr(args, "dvo_dense_cloud", False),
+            patch_lifetime=getattr(args, "dvo_patch_lifetime", 13),
+            final_ba_iters=getattr(args, "dvo_final_refine", 12),
+            gradient_bias=getattr(args, "dvo_gradient_bias", True),
+            keyframe_thresh=getattr(args, "dvo_keyframe_thresh", 15.0)
         )
         inf_elapsed = time.time() - inf_start
         print()
@@ -1998,6 +2010,10 @@ def main():
             f"   * Polar Zenith/Nadir Mask: {getattr(args, 'dvo_polar_mask', 0.08)*100:.1f}% cutoff",
             f"   * ODBA Sliding BA Window:  {getattr(args, 'dvo_ba_window', 8)} keyframes",
             f"   * Metric Scene Scale:      {getattr(args, 'dvo_scale', 3.2):.1f}m multiplier",
+            f"   * Dense 3x3 Micro-Cloud:   {'Active (9x Points)' if getattr(args, 'dvo_dense_cloud', False) else 'Sparse (Patch Centers)'}",
+            f"   * Patch Lifetime:          {getattr(args, 'dvo_patch_lifetime', 13)} frames",
+            f"   * Final Bundle Refinement: {getattr(args, 'dvo_final_refine', 12)} iterations",
+            f"   * Gradient-Biased Sampling:{'Active (Edge-focused)' if getattr(args, 'dvo_gradient_bias', True) else 'Uniform Grid'}",
             f"   * Trajectory Format:       Robotics TUM (timestamp, SE3 pose) + Universal COLMAP/OpenSfM/Transforms",
             f"   * Real-Time Viser View:    {'Enabled' if args.dvo_viz else 'Headless'}",
         ])

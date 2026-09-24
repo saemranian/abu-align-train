@@ -31,6 +31,7 @@ class RigSceneRenderer:
         self.show_all = False
         self.show_labels = True
         self.show_grid = True
+        self.optics_text = "ideal pinhole optics"
         self.positions = []
         self.photo = None
 
@@ -129,7 +130,8 @@ class RigSceneRenderer:
             name, yaw, pitch, roll, fov = rig[self.selected]
             canvas.create_text(22, 22, anchor="nw", text=f"Camera {self.selected + 1:02d}  /  {len(rig):02d}",
                                fill="#e7edef", font=("Segoe UI", 12, "bold"))
-            canvas.create_text(22, 49, anchor="nw", text="Coverage preview · ideal pinhole optics",
+            optics_label = getattr(self, "optics_text", "ideal pinhole optics")
+            canvas.create_text(22, 49, anchor="nw", text=f"Coverage preview · {optics_label}",
                                fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width-44))
         canvas.create_text(22, height - 22, anchor="sw", text="Drag to orbit   ·   Scroll to zoom   ·   Click a camera to inspect",
                            fill="#9caeb7", font=("Segoe UI", 9), width=max(100, width - 105))

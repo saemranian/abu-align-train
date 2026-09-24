@@ -591,17 +591,33 @@ def run_360dvo_reconstruction(
     metric_scale: float = 3.2,
     enable_viz: bool = False,
     port: int = 8080,
+    dense_cloud: bool = False,
+    patch_lifetime: int = 13,
+    final_ba_iters: int = 12,
+    gradient_bias: bool = True,
+    keyframe_thresh: float = 15.0,
     log_callback = None
 ) -> Tuple[object, np.ndarray, np.ndarray]:
     """
     Executes 360DVO Deep Visual Odometry on the input image list.
     Outputs: pycolmap.Reconstruction, dense_3d (np.ndarray), dense_rgb (np.ndarray).
     """
+    has_opened_browser = False
     def log(msg: str):
+        nonlocal has_opened_browser
+        s = str(msg)
+        if enable_viz and not has_opened_browser:
+            if any(tok in s for tok in ["VISER:360DVO", "localhost:", "Server running at", "http://"]):
+                has_opened_browser = True
+                try:
+                    import webbrowser
+                    webbrowser.open(f"http://localhost:{port}")
+                except Exception:
+                    pass
         if log_callback:
-            log_callback(msg)
+            log_callback(s)
         else:
-            print(msg, flush=True)
+            print(s, flush=True)
 
     log("=" * 70)
     log("   360DVO - Deep Visual Odometry for Monocular 360° Cameras (IEEE RA-L 2026)")
@@ -611,6 +627,11 @@ def run_360dvo_reconstruction(
     log(f"   * Polar Mask Cutoff:{polar_mask_pct*100:.1f}% (Zenith & Nadir)")
     log(f"   * ODBA BA Window:   {local_ba_window} keyframes")
     log(f"   * Metric Scale:     {metric_scale:.2f}m")
+    log(f"   * Dense Cloud (9x): {'Enabled (3x3 Sub-Patch Grid)' if dense_cloud else 'Standard Center Points'}")
+    log(f"   * Patch Lifetime:   {patch_lifetime} keyframes")
+    log(f"   * Final Refinement: {final_ba_iters} BA iterations")
+    log(f"   * Gradient Bias:    {'Enabled (Contrast-Aware)' if gradient_bias else 'Uniform Random'}")
+    log(f"   * Visualizer (3D):  {'Active (Viser http://localhost:' + str(port) + ')' if enable_viz else 'Disabled'}")
     log(f"   * Output Workspace: {output_dir}")
     log("=" * 70)
 
@@ -647,12 +668,33 @@ def run_360dvo_reconstruction(
         wsl_img_dir = wsl_bridge.win_to_wsl_path(first_img_dir)
         wsl_out_dir = wsl_bridge.win_to_wsl_path(output_dir)
 
+        viz_arg = f"--viz --port {port}" if enable_viz else ""
+        dense_arg = "--dense_cloud" if dense_cloud else ""
+        grad_arg = "" if gradient_bias else "--no_gradient_bias"
+
         wsl_cmd = (
             f"cd {wsl_bridge.WSL_360DVO_DIR} && "
             f"{wsl_bridge.WSL_PYTHON} abu_360dvo_runner.py "
             f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride {stride} "
-            f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale}"
+            f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale} "
+            f"--patch_lifetime {patch_lifetime} --final_ba_iters {final_ba_iters} --keyframe_thresh {keyframe_thresh} "
+            f"{viz_arg} {dense_arg} {grad_arg}"
         )
+
+        if enable_viz:
+            def _delayed_popup():
+                time.sleep(2.0)
+                nonlocal has_opened_browser
+                if not has_opened_browser:
+                    has_opened_browser = True
+                    try:
+                        import webbrowser
+                        webbrowser.open(f"http://localhost:{port}")
+                    except Exception:
+                        pass
+            import threading
+            threading.Thread(target=_delayed_popup, daemon=True).start()
+
         ret, out = wsl_bridge.run_command_in_wsl(wsl_cmd, log_callback=log)
         if ret == 0 and os.path.isfile(trajectory_txt):
             log("[SUCCESS] 360DVO Native GPU Odometry Trajectory computed successfully.")

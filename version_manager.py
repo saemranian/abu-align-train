@@ -114,7 +114,8 @@ def create_version_snapshot(version_str: str) -> None:
         "Abu_Align_and_Train.exe",
         "Abu_Align.bat",
         "Abu_Align.exe",
-        "launcher.cs"
+        "launcher.cs",
+        "walkthrough.md"
     ]
     for sf in snapshot_files:
         src = os.path.join(ROOT_DIR, sf)
@@ -228,6 +229,7 @@ if __name__ == "__main__":
     parser.add_argument("--current", action="store_true", help="Print current version")
     parser.add_argument("--bump", action="store_true", help="Increment version by 1 with base-10 rollover and sync files")
     parser.add_argument("--set", type=str, default=None, help="Set explicit version (e.g. 0.0.1.3) and sync files")
+    parser.add_argument("--snapshot", action="store_true", help="Create snapshot in versions/ for current version")
 
     args = parser.parse_args()
 
@@ -235,5 +237,9 @@ if __name__ == "__main__":
         bump_and_sync()
     elif args.set:
         set_and_sync(args.set)
+    elif args.snapshot:
+        ver = get_current_version()
+        create_version_snapshot(ver)
+        print(f"[VersionManager] Snapshot created in versions/v{ver}")
     else:
         print(f"v{get_current_version()}")

@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.5.1 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.5.2 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import glob
 import re
+import tempfile
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List
 
@@ -878,6 +879,7 @@ def train_pfgs360(
     sh_degree: int = 3,
     downscale_factor: Optional[str] = "1",
     mode: str = "interactive",
+    use_prior_poses: Optional[bool] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1047,9 +1049,18 @@ def train_pfgs360(
         except Exception:
             pass
 
+    vis_flag = ["--vis", "viewer+tensorboard"] if mode != "headless" else ["--vis", "tensorboard"]
+    ds_flag = ["--downscale-factor", str(downscale_factor)] if downscale_factor and str(downscale_factor).isdigit() and int(downscale_factor) > 1 else []
+    
+    if use_prior_poses is None:
+        use_prior = (active_dp in ["opensfm-dataparser", "nerfstudio-data"])
+    else:
+        use_prior = bool(use_prior_poses)
+
     log(f"      * Initializing PFGS360 Engine (CVPR 2026)...")
     log(f"      * ns-train:      {ns_train_exe}")
     log(f"      * Dataparser:    {dp_mode_label}")
+    log(f"      * Prior Poses:   {'Enabled (100% GPU all-frames training from step 0)' if use_prior else 'Disabled (Sequential growth)'}")
     log(f"      * Depth Prior:   {depth_type.upper()} (Omnidirectional)")
     log(f"      * Match Views:   {f'{match_views} Keyframes (Sliding Window)' if match_views > 0 else 'All Visited Views (O(N²) CPU Matching)'}")
     log(f"      * Densify Views: {f'{densify_views} Keyframes (Sliding Window)' if densify_views > 0 else 'All Keyframes'}")
@@ -1076,6 +1087,7 @@ def train_pfgs360(
             "--output-dir", f"'{wsl_out}'",
             "--pipeline.model.sh-degree", str(sh_degree),
             "--pipeline.model.depth-type", depth_type,
+            "--pipeline.model.use-prior-poses", "True" if use_prior else "False",
         ] + vis_flag + [
             "--viewer.quit-on-train-completion", "True",
         ]
@@ -1170,6 +1182,7 @@ def train_pfgs360(
         "--output-dir", output_dir,
         "--pipeline.model.sh-degree", str(sh_degree),
         "--pipeline.model.depth-type", depth_type,
+        "--pipeline.model.use-prior-poses", "True" if use_prior else "False",
     ] + vis_flag + [
         "--viewer.quit-on-train-completion", "True",
     ]
@@ -1345,6 +1358,7 @@ def run_3dgs_training(
     pfgs_inlier: bool = True,
     pfgs_align_depth: bool = True,
     pfgs_downscale: str = "1",
+    pfgs_use_prior_poses: Optional[bool] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1501,6 +1515,7 @@ def run_3dgs_training(
             sh_degree=sh_degree,
             downscale_factor=pfgs_downscale,
             mode=mode,
+            use_prior_poses=pfgs_use_prior_poses,
             progress_callback=progress_callback
         )
     else:
@@ -1545,6 +1560,8 @@ if __name__ == "__main__":
     parser.add_argument("--no_pfgs_inlier", dest="pfgs_inlier", action="store_false", help="Disable DIA-Densify")
     parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
+    parser.add_argument("--pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_true", default=None, help="Force enable pre-aligned poses in PFGS360 (all frames train from step 0)")
+    parser.add_argument("--no_pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_false", help="Force disable pre-aligned poses in PFGS360 (sequential growth)")
 
     args = parser.parse_args()
 
@@ -1606,6 +1623,7 @@ if __name__ == "__main__":
             pfgs_match_views=args.pfgs_match_views,
             pfgs_densify_views=args.pfgs_densify_views,
             pfgs_downscale=args.pfgs_downscale,
+            pfgs_use_prior_poses=args.pfgs_use_prior_poses,
             progress_callback=print
         )
     except Exception as e:
