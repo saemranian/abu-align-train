@@ -1,29 +1,94 @@
-# Abu Align & Train v0.0.5.3 — ACE0 WSL2 Dependency Self-Healing, PyTorch Orthonormalization Fallback & Argparse Fix
+# Abu Align & Train v0.0.5.7 — Fix OpenSfM Camera Coordinate Axis Gizmos in 3D Point Clouds
 
 ## Overview
-Version v0.0.5.3 resolves a critical regression in the Niantic ACE0 pipeline where mapping failed inside WSL2 Ubuntu due to a missing `roma` rotation matrix package. This release introduces automatic dependency self-healing for the WSL2 environment, a pure PyTorch fallback for camera pose orthonormalization, and fixes an `argparse` format-string crash.
+Version **v0.0.5.7** resolves an issue in the **Mapillary OpenSfM** alignment pipeline where synthetic X (Red), Y (Green), and Z (Blue) camera coordinate axis gizmos were embedded into the exported 3D point clouds (`reconstruction.ply`, `points3D.ply`, `points.ply`), polluting the scene with floating RGB crosses and degrading subsequent 3D Gaussian Splatting (3DGS) training.
 
 ---
 
-## Key Changes & Implementations
+## Origin OpenSfM Repository Investigation
 
-### 1. ACE0 WSL2 Environment & Dependency Self-Healing
-- **WSL Package Installation**: Installed missing `roma` (1.6.1) and `pycolmap` (4.2.0) into the WSL conda environment `/home/ahmad/miniconda3/envs/abu_linux`.
-- **Automated Verification (`ensure_wsl_packages`)**: Added `ensure_wsl_packages()` in `wsl_bridge.py` to inspect required Python packages in the Ubuntu subsystem and auto-install any missing dependencies via pip before launching compute workloads.
-- **Engine Hook**: Integrated dependency verification into `acezero_engine.py` prior to initiating the ACE0 mapping loop.
+### 1. Code Inspection (`opensfm/io.py` & `opensfm/commands/export_ply.py`)
+Inspecting the official Mapillary OpenSfM repository source code:
+- In `opensfm/commands/export_ply.py`:
+  ```python
+  parser.add_argument(
+      "--no-cameras",
+      action="store_true",
+      default=False,
+      help="Do not save camera positions",
+  )
+  ```
+- In `opensfm/io.py` (`reconstruction_to_ply()`):
+  ```python
+  if not no_cameras:
+      for shot in reconstruction.shots.values():
+          o = shot.pose.get_origin()
+          R = shot.pose.get_rotation_matrix()
+          for axis in range(3):
+              c = np.eye(3)[axis] * 255  # Axis 0: [255,0,0], Axis 1: [0,255,0], Axis 2: [0,0,255]
+              for depth in np.linspace(0, 2, 10):
+                  p = o + depth * R[axis]
+                  s = "{} {} {} {} {} {}".format(
+                      p[0], p[1], p[2], int(c[0]), int(c[1]), int(c[2])
+                  )
+                  vertices.append(s)
+  ```
 
-### 2. Pure PyTorch Pose Orthonormalization Fallback
-- **Guarded Import & Safe Execution**: In `refine_poses.py`, wrapped `import roma` in a safe try-except block.
-- **Native PyTorch Implementation**: Added native implementations for Gram-Schmidt (`_special_gramschmidt`) and SVD-based Procrustes (`_special_procrustes`) orthonormalization with full autograd gradient support, ensuring pose refinement functions reliably even in stripped or offline environments.
-- **Synchronized Across Copies**: Applied identical safeguards to both `abu align/acezero/refine_poses.py` and root `acezero/refine_poses.py`.
+### 2. Root Cause
+- When OpenSfM runs `export_ply`, `--no-cameras` is `False` by default.
+- OpenSfM draws 30 synthetic points (10 along +X in pure red, 10 along +Y in pure green, 10 along +Z in pure blue) for **every single camera pose** directly into the vertex buffer of `reconstruction.ply`.
+- In the user's run with 50 registered cameras:
+  - **Authentic 3D Tie Points**: 19,706
+  - **Injected Camera Gizmo Points**: 50 cameras × 30 points = **1,500**
+  - **Total in Point Cloud**: 19,706 + 1,500 = **21,206 vertices** (matching the 3D viewer exactly).
+- When opened in a 3D viewer or used as initial Gaussians in LichtFeld Studio / Splatfacto, these coordinate axes appeared as red, green, and blue rays along the camera trajectory.
 
-### 3. Argparse Format-String Fix in `train_ace.py`
-- **Escaped `%` Literals**: Fixed unescaped percent signs (`70%%`, `10%%`) in help strings of `train_ace.py` which previously triggered a `TypeError: %o format: an integer is required, not dict` when inspecting CLI options under Python 3.10.
+---
+
+## Fixes Implemented in v0.0.5.7
+
+### 1. Enforced `--no-cameras` Flag in OpenSfM Execution (`opensfm_engine.py`)
+Updated the OpenSfM execution stages for both native Windows and WSL2:
+- WSL2: `wsl_bridge.run_command_in_wsl(f"{WSL_OPENSFM_BIN} {cmd_name} --no-cameras '{wsl_out}'")` when `cmd_name == "export_ply"`.
+- Windows: `cmd = [self.opensfm_bin, "export_ply", "--no-cameras", self.output_dir]`.
+This instructs OpenSfM itself never to generate synthetic camera gizmos.
+
+### 2. Prioritized Pure Tie Points from `reconstruction.json` (`align_cli.py` & `opensfm_engine.py`)
+`reconstruction.json` contains only authentic Ceres bundle-adjusted 3D tie points and zero synthetic camera points.
+- In `align_cli.py`, added `load_opensfm_points_from_json()` to load the exact, clean point cloud directly from `reconstruction.json`.
+- In `opensfm_to_transforms_json()`, prioritized writing `points3D.ply` and `points.ply` directly from `reconstruction.json["points"]`.
+
+### 3. Added Automated Camera Gizmo Stripper (`strip_camera_gizmos_from_ply`)
+Implemented a robust filter in `opensfm_engine.py` that strips any pure RGB coordinate axes from PLY files and updates the element vertex header count:
+```python
+def strip_camera_gizmos_from_ply(ply_path: str, output_path: Optional[str] = None) -> bool:
+    # Filters out pure Red (255,0,0), Green (0,255,0), and Blue (0,0,255) axis vertices
+```
+This is automatically run whenever existing PLY files are transferred to `3dgs_dataset/` or root `points3D.ply`.
+
+### 4. Sanitized Existing Run Point Clouds
+Executed `strip_camera_gizmos_from_ply()` on the user's `results/sparse_06_opensfm` dataset:
+- `points3D.ply`: 21,206 -> **19,706 vertices** (1,500 gizmo points stripped)
+- `3dgs_dataset/points.ply`: 21,206 -> **19,706 vertices**
+- `3dgs_dataset/points3D.ply`: 21,206 -> **19,706 vertices**
+- `opensfm_workspace/reconstruction.ply`: 21,206 -> **19,706 vertices**
 
 ---
 
 ## Verification
-- Ran test imports of all core ACE0 modules (`train_ace`, `ace_zero`, `dsacstar`, `ace_trainer`, `refine_poses`) inside WSL2 with return code 0.
-- Verified `train_ace.py --help` and `ace_zero.py --help` execute without formatting errors.
-- Validated PyTorch fallback accuracy against `roma` (error diff: 0.0, autograd backward pass verified).
-- Executed complete unit test suite across desktop UI and presets: 25/25 tests passed.
+- Verified that `reconstruction.json` contains exactly 19,706 authentic points with 0 synthetic axis points.
+- Verified that all sanitized PLY files contain 19,706 vertices with zero pure-RGB camera gizmos remaining.
+- Bumped version to `v0.0.5.7` with synchronized GUI, CLI, batch scripts, and recompiled C# launchers.
+
+---
+
+## Modified Files
+- `opensfm_engine.py`
+- `align_cli.py`
+- `VERSION.txt`
+- `abu_align_gui.py`
+- `desktop_ui.py`
+- `train_engine.py`
+- `launcher.cs`
+- `Abu_Align.bat`
+- `Abu_Align_and_Train.bat`

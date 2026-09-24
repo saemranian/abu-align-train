@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.5.3 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.5.7 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -278,18 +278,78 @@ def train_lichtfeld(
                 log(f"        [LichtFeld] {line_s}")
                 last_report_time = now
 
-    proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"LichtFeld Studio exited with return code {proc.returncode}")
+        # Check for user-requested early Save & Finish
+        if check_save_and_finish_sentinel(output_dir, dataset_dir):
+            log("      * [LichtFeld] Early 'Save & finish' detected! Concluding optimization and exporting 3DGS model...")
+            try:
+                try:
+                    import psutil
+                    p = psutil.Process(proc.pid)
+                    for c in p.children(recursive=True):
+                        try:
+                            c.terminate()
+                        except Exception:
+                            pass
+                    p.terminate()
+                except Exception:
+                    proc.terminate()
+            except Exception:
+                pass
+            break
 
-    # Locate output PLY file
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+
+    is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_dir)
+
+    # Locate output PLY/SPZ file
     ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
                      glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
-    if ply_candidates:
+    spz_candidates = glob.glob(os.path.join(output_dir, "*.spz")) + \
+                     glob.glob(os.path.join(output_dir, "**", "*.spz"), recursive=True)
+
+    if export_spz and spz_candidates:
+        best_model = max(spz_candidates, key=os.path.getmtime)
+        log(f"      * [LichtFeld] Training complete! Exported 3DGS model: {best_model} ({time.time()-start_time:.1f}s)")
+        consume_save_and_finish_sentinel(output_dir, dataset_dir)
+        return best_model
+    elif ply_candidates:
         best_ply = max(ply_candidates, key=os.path.getmtime)
         log(f"      * [LichtFeld] Training complete! Exported 3DGS model: {best_ply} ({time.time()-start_time:.1f}s)")
+        consume_save_and_finish_sentinel(output_dir, dataset_dir)
         return best_ply
 
+    # If no PLY or SPZ found (e.g. user requested early save & finish), convert project.licht or .resume
+    licht_candidates = glob.glob(os.path.join(output_dir, "*.licht")) + \
+                       glob.glob(os.path.join(output_dir, "**", "*.licht"), recursive=True) + \
+                       glob.glob(os.path.join(output_dir, "*.resume")) + \
+                       glob.glob(os.path.join(output_dir, "**", "*.resume"), recursive=True)
+    if licht_candidates:
+        latest_licht = max(licht_candidates, key=os.path.getmtime)
+        target_name = f"lichtfeld_model.{export_fmt}"
+        target_export = os.path.join(output_dir, target_name)
+        log(f"      * [LichtFeld] Converting checkpoint snapshot '{os.path.basename(latest_licht)}' to {export_fmt.upper()} via LichtFeld convert...")
+        conv_cmd = [lfs_exe, "convert", latest_licht, target_export, "-y"]
+        if sh_degree != 3:
+            conv_cmd.extend(["--sh-degree", str(sh_degree)])
+        conv_proc = subprocess.run(conv_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if os.path.isfile(target_export):
+            log(f"      * [LichtFeld] Early Save & Finish complete! Exported 3DGS model: {target_export} ({time.time()-start_time:.1f}s)")
+            consume_save_and_finish_sentinel(output_dir, dataset_dir)
+            return target_export
+        else:
+            log(f"      [Warning] LichtFeld convert returned {conv_proc.returncode}: {conv_proc.stderr}")
+
+    if proc.returncode != 0 and not is_early_finish:
+        raise RuntimeError(f"LichtFeld Studio exited with return code {proc.returncode}")
+
+    consume_save_and_finish_sentinel(output_dir, dataset_dir)
     log(f"      * [LichtFeld] Training finished in {time.time()-start_time:.1f}s.")
     return output_dir
 
@@ -441,7 +501,22 @@ def train_nerfstudio_splatfacto(
                 log(f"        [Nerfstudio] {line_s}")
                 last_report_time = now
 
-    proc.wait()
+        if check_save_and_finish_sentinel(output_dir, dataset_abs):
+            log("      * [Nerfstudio] Early 'Save & finish' detected! Concluding optimization and exporting 3DGS model...")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            break
+
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
     is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_abs)
     if proc.returncode != 0:
         yml_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
@@ -1126,8 +1201,11 @@ def train_pfgs360(
             wsl_cmd_parts.extend(["--data", f"'{wsl_data}'"] + ds_flag)
 
         full_wsl_cmd = " ".join(wsl_cmd_parts)
-        log(f"      * Launching WSL command: {full_wsl_cmd}")
-        ret, out = wsl_bridge.run_command_in_wsl(full_wsl_cmd, log_callback=log)
+        ret, out = wsl_bridge.run_command_in_wsl(
+            full_wsl_cmd,
+            log_callback=log,
+            terminate_check_callback=lambda: check_save_and_finish_sentinel(output_dir, dataset_dir)
+        )
         is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_dir)
         if ret != 0:
             config_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
@@ -1265,7 +1343,22 @@ def train_pfgs360(
         else:
             log(f"        [PFGS360] {clean_line}")
 
-    proc.wait()
+        if check_save_and_finish_sentinel(output_dir, dataset_abs):
+            log("      * [3DGRUT] Early 'Save & finish' detected! Concluding optimization and exporting 3DGS model...")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            break
+
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
     is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_abs)
     if proc.returncode != 0:
         ckpt_files = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)

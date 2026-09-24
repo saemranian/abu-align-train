@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.5.3
+Abu Align & Train Version 0.0.5.7
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.5.3 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.5.7 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -3587,7 +3587,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.5.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.5.7 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3628,6 +3628,14 @@ class AbuAlignApp:
                         self.output_queue.put(line)
                         if "Output Directory:" in line:
                             parts = line.split("Output Directory:")
+                            if len(parts) > 1:
+                                self.latest_output_dir = parts[1].strip()
+                        elif "Target Output:" in line:
+                            parts = line.split("Target Output:")
+                            if len(parts) > 1:
+                                self.latest_output_dir = parts[1].strip()
+                        elif "Output Dir:" in line:
+                            parts = line.split("Output Dir:")
                             if len(parts) > 1:
                                 self.latest_output_dir = parts[1].strip()
 
@@ -3921,8 +3929,24 @@ class AbuAlignApp:
         ]
         if dataset_path and os.path.isdir(dataset_path):
             sentinels.append(os.path.join(dataset_path, ".finish_and_save"))
+            res_dir = os.path.join(dataset_path, "results")
+            if os.path.isdir(res_dir):
+                sentinels.append(os.path.join(res_dir, ".finish_and_save"))
+                try:
+                    for sub in os.listdir(res_dir):
+                        sub_p = os.path.join(res_dir, sub)
+                        if os.path.isdir(sub_p):
+                            sentinels.append(os.path.join(sub_p, ".finish_and_save"))
+                            sub_models = os.path.join(sub_p, "3dgs_models")
+                            if os.path.isdir(sub_models):
+                                sentinels.append(os.path.join(sub_models, ".finish_and_save"))
+                except Exception:
+                    pass
         if self.latest_output_dir and os.path.isdir(self.latest_output_dir):
             sentinels.append(os.path.join(self.latest_output_dir, ".finish_and_save"))
+            parent_dir = os.path.dirname(self.latest_output_dir)
+            if parent_dir and os.path.isdir(parent_dir):
+                sentinels.append(os.path.join(parent_dir, ".finish_and_save"))
 
         for s_path in sentinels:
             try:
@@ -4019,7 +4043,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.5.3 - {title}")
+        doc_win.title(f"Abu Align v0.0.5.7 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4297,7 +4321,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.5.3\n"
+            "Abu Align & Train - Version 0.0.5.7\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

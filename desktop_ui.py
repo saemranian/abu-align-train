@@ -429,7 +429,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.5.3", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.5.7", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
     prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
         activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,

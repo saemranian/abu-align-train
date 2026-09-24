@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.5.3 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.5.7 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1357,12 +1357,11 @@ def main():
     print()
 
     # 360° Multi-Camera Rig Projector & Panoramic Splitter (Phase 3)
-    is_equirectangular = (orig_w == 2 * orig_h)
+    # ONLY perform rig projection / splitting if explicitly requested by user CLI/GUI flags
     needs_splitting = (
         getattr(args, "split_panorama", False)
         or getattr(args, "split_only", False)
         or getattr(args, "cubemap_transcode", False)
-        or (is_equirectangular and args.engine not in ["opensfm", "360dvo", "dvo360", "pfgs360"])
     )
     if needs_splitting:
         split_mode = "cubemap" if (getattr(args, "cubemap_transcode", False) and not getattr(args, "split_panorama", False) and not getattr(args, "split_only", False)) else getattr(args, "split_mode", "ring")
@@ -1373,7 +1372,7 @@ def main():
         split_qual = getattr(args, "split_quality", 95)
 
         cams_info = split_cams if split_mode == "ring" else ("6" if split_mode == "cubemap" else "14")
-        print(f"      * [360 RIG PROJECTOR] 360° Equirectangular dataset detected ({orig_w}x{orig_h}).")
+        print(f"      * [360 RIG PROJECTOR] Multi-camera rig projection requested ({orig_w}x{orig_h}).")
         print(f"      * Projecting into {split_mode.upper()} multi-camera pinhole rig ({cams_info} views/pano, {split_fov}° FOV, {split_res}x{split_res}px)...")
 
         from panoramic_splitter import split_panorama_dataset
@@ -1642,26 +1641,51 @@ def main():
                 dataset_3dgs_dir = os.path.join(output_dir, "3dgs_dataset")
                 opensfm.export_to_3dgs_dataset(dataset_3dgs_dir)
 
-                # Load genuine OpenSfM 3D point cloud
-                rec_ply = os.path.join(opensfm.output_dir, "reconstruction.ply")
-                if not os.path.isfile(rec_ply):
-                    rec_ply = os.path.join(output_dir, "reconstruction.ply")
-                if os.path.isfile(rec_ply) and os.path.getsize(rec_ply) > 1000:
-                    try:
-                        mesh = trimesh.load(rec_ply)
-                        dense_3d = np.asarray(mesh.vertices, dtype=np.float32)
-                        if hasattr(mesh.visual, "vertex_colors") and mesh.visual.vertex_colors is not None and len(mesh.visual.vertex_colors) == len(dense_3d):
-                            dense_rgb = np.asarray(mesh.visual.vertex_colors[:, :3], dtype=np.uint8)
-                        else:
-                            dense_rgb = np.full((len(dense_3d), 3), 200, dtype=np.uint8)
-                        print(f"      * [OpenSfM Point Cloud] Loaded {len(dense_3d):,} authentic 3D tie points from {os.path.basename(rec_ply)}")
-                    except Exception as e:
-                        print(f"      * [OpenSfM Warning] Failed to load {rec_ply}: {e}")
+                # Load genuine OpenSfM 3D point cloud directly from reconstruction.json or sanitized ply
+                from opensfm_engine import load_opensfm_points_from_json, strip_camera_gizmos_from_ply
+
+                rec_json = os.path.join(opensfm.output_dir, "reconstruction.json")
+                if not os.path.isfile(rec_json):
+                    rec_json = os.path.join(output_dir, "reconstruction.json")
+                if not os.path.isfile(rec_json):
+                    rec_json = os.path.join(opensfm.output_dir, "opensfm_workspace", "reconstruction.json")
+
+                dense_3d, dense_rgb = load_opensfm_points_from_json(rec_json)
+
+                if len(dense_3d) > 0:
+                    print(f"      * [OpenSfM Point Cloud] Loaded {len(dense_3d):,} authentic 3D tie points directly from reconstruction.json (camera gizmos excluded)")
+                else:
+                    rec_ply = os.path.join(opensfm.output_dir, "reconstruction.ply")
+                    if not os.path.isfile(rec_ply):
+                        rec_ply = os.path.join(output_dir, "reconstruction.ply")
+                    if os.path.isfile(rec_ply) and os.path.getsize(rec_ply) > 1000:
+                        try:
+                            strip_camera_gizmos_from_ply(rec_ply)
+                            mesh = trimesh.load(rec_ply)
+                            dense_3d = np.asarray(mesh.vertices, dtype=np.float32)
+                            if hasattr(mesh.visual, "vertex_colors") and mesh.visual.vertex_colors is not None and len(mesh.visual.vertex_colors) == len(dense_3d):
+                                dense_rgb = np.asarray(mesh.visual.vertex_colors[:, :3], dtype=np.uint8)
+                            else:
+                                dense_rgb = np.full((len(dense_3d), 3), 200, dtype=np.uint8)
+
+                            # Strip any synthetic camera coordinate gizmo points (pure Red, Green, Blue)
+                            is_gizmo = (
+                                ((dense_rgb[:, 0] == 255) & (dense_rgb[:, 1] == 0) & (dense_rgb[:, 2] == 0)) |
+                                ((dense_rgb[:, 0] == 0) & (dense_rgb[:, 1] == 255) & (dense_rgb[:, 2] == 0)) |
+                                ((dense_rgb[:, 0] == 0) & (dense_rgb[:, 1] == 0) & (dense_rgb[:, 2] == 255))
+                            )
+                            if np.any(is_gizmo):
+                                dense_3d = dense_3d[~is_gizmo]
+                                dense_rgb = dense_rgb[~is_gizmo]
+
+                            print(f"      * [OpenSfM Point Cloud] Loaded {len(dense_3d):,} authentic 3D tie points from {os.path.basename(rec_ply)} (camera gizmos excluded)")
+                        except Exception as e:
+                            print(f"      * [OpenSfM Warning] Failed to load {rec_ply}: {e}")
+                            dense_3d = np.empty((0, 3), dtype=np.float32)
+                            dense_rgb = np.empty((0, 3), dtype=np.uint8)
+                    else:
                         dense_3d = np.empty((0, 3), dtype=np.float32)
                         dense_rgb = np.empty((0, 3), dtype=np.uint8)
-                else:
-                    dense_3d = np.empty((0, 3), dtype=np.float32)
-                    dense_rgb = np.empty((0, 3), dtype=np.uint8)
             else:
                 raise RuntimeError("OpenSfM pipeline execution encountered an error.")
         else:
@@ -1852,10 +1876,13 @@ def main():
                 break
         
         if source_real_ply:
-            shutil.copy2(source_real_ply, os.path.join(dataset_3dgs_dir, "points.ply"))
-            shutil.copy2(source_real_ply, os.path.join(dataset_3dgs_dir, "points3D.ply"))
-            shutil.copy2(source_real_ply, os.path.join(output_dir, "points3D.ply"))
-            print(f"      * [Standard Output] Exported authentic point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
+            from opensfm_engine import strip_camera_gizmos_from_ply
+            p3d_out = os.path.join(output_dir, "points3D.ply")
+            p_out = os.path.join(dataset_3dgs_dir, "points.ply")
+            strip_camera_gizmos_from_ply(source_real_ply, p3d_out)
+            shutil.copy2(p3d_out, p_out)
+            shutil.copy2(p3d_out, os.path.join(dataset_3dgs_dir, "points3D.ply"))
+            print(f"      * [Standard Output] Exported authentic point cloud to: {p3d_out}")
         else:
             shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
             trimesh.PointCloud(dense_3d, colors=dense_rgb).export(os.path.join(output_dir, "points3D.ply"))
@@ -1918,7 +1945,10 @@ def main():
         else:
             report_lines.append(f" Camera Model:         {first_cam.model_name}")
     else:
-        report_lines.append(f" Camera Model:         EQUIRECTANGULAR (Omnidirectional 360°)")
+        if args.engine in ["360dvo", "dvo360", "pfgs360"]:
+            report_lines.append(f" Camera Model:         EQUIRECTANGULAR (Omnidirectional 360°)")
+        else:
+            report_lines.append(f" Camera Model:         PINHOLE / PERSPECTIVE")
 
     # Human-readable labels for selected GUI / CLI settings
     engine_labels = {

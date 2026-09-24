@@ -245,6 +245,92 @@ def write_ply_point_cloud(ply_path: str, points: np.ndarray, colors: np.ndarray)
             f.write(f"{points[i, 0]:.6f} {points[i, 1]:.6f} {points[i, 2]:.6f} {int(colors[i, 0])} {int(colors[i, 1])} {int(colors[i, 2])}\n")
 
 
+def strip_camera_gizmos_from_ply(ply_path: str, output_path: Optional[str] = None) -> bool:
+    """
+    Strips OpenSfM synthetic camera coordinate gizmo points (pure Red/Green/Blue axis rays)
+    from a Stanford PLY file, preserving only authentic 3D tie points.
+    OpenSfM by default embeds 30 points (10 red along X, 10 green along Y, 10 blue along Z)
+    per camera unless --no-cameras is passed.
+    """
+    if not os.path.isfile(ply_path):
+        return False
+    if output_path is None:
+        output_path = ply_path
+
+    try:
+        with open(ply_path, "r", encoding="utf-8", errors="ignore") as f:
+            header_lines = []
+            vertex_lines = []
+            in_header = True
+            for line in f:
+                if in_header:
+                    header_lines.append(line)
+                    if line.strip() == "end_header":
+                        in_header = False
+                else:
+                    parts = line.strip().split()
+                    if len(parts) >= 6:
+                        try:
+                            r = int(float(parts[3]))
+                            g = int(float(parts[4]))
+                            b = int(float(parts[5]))
+                            is_red_axis = (r == 255 and g == 0 and b == 0)
+                            is_green_axis = (r == 0 and g == 255 and b == 0)
+                            is_blue_axis = (r == 0 and g == 0 and b == 255)
+                            if is_red_axis or is_green_axis or is_blue_axis:
+                                continue  # Strip synthetic camera gizmo point
+                        except ValueError:
+                            pass
+                    vertex_lines.append(line)
+
+        # Update header element vertex count
+        new_header = []
+        for h in header_lines:
+            if h.startswith("element vertex"):
+                new_header.append(f"element vertex {len(vertex_lines)}\n")
+            else:
+                new_header.append(h)
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.writelines(new_header)
+            f.writelines(vertex_lines)
+        return True
+    except Exception as e:
+        print(f"[OpenSfM Warning] Failed to strip camera gizmos from {ply_path}: {e}")
+        return False
+
+
+def load_opensfm_points_from_json(rec_json_path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extracts authentic 3D triangulated tie points directly from OpenSfM reconstruction.json,
+    guaranteeing zero synthetic camera axis gizmo points.
+    """
+    if not os.path.isfile(rec_json_path):
+        return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
+
+    try:
+        with open(rec_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) > 0:
+            data = data[0]
+        points_dict = data.get("points", {})
+        pts = []
+        rgb = []
+        for p_info in points_dict.values():
+            coords = p_info.get("coordinates")
+            color = p_info.get("color", [200, 200, 200])
+            if coords and len(coords) == 3:
+                pts.append(coords)
+                rgb.append(color)
+        if pts:
+            return np.array(pts, dtype=np.float32), np.array(rgb, dtype=np.uint8)
+    except Exception as e:
+        print(f"[OpenSfM Warning] Failed to parse points from {rec_json_path}: {e}")
+
+    return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
+
+
 class OpenSfMEngine:
     """
     Manages OpenSfM configuration, execution, telemetry, and COLMAP export.
@@ -392,12 +478,13 @@ class OpenSfMEngine:
                 ("match_features",   "Pairwise Keypoint Matching with GPS/Bearing Priors"),
                 ("create_tracks",    "Synthesizing Multi-View 3D Feature Tracks"),
                 ("reconstruct",      "Incremental SfM with Ceres Spherical Bundle Adjustment"),
-                ("export_ply",       "Exporting 3D Point Cloud PLY"),
+                ("export_ply",       "Exporting 3D Point Cloud PLY (Excluding Camera Gizmos)"),
             ]
             for idx, (cmd_name, desc) in enumerate(stages):
                 log(f"\n[OpenSfM Stage {idx+1}/{len(stages)}] {desc}...")
                 print(f"[TELEMETRY:STAGE3] batch={idx+1} total={len(stages)} pct={(idx+1)/len(stages)*100:.1f}", flush=True)
-                ret, out = wsl_bridge.run_command_in_wsl(f"{wsl_bridge.WSL_OPENSFM_BIN} {cmd_name} '{wsl_out}'", log_callback=log)
+                cmd_args = f"{cmd_name} --no-cameras" if cmd_name == "export_ply" else cmd_name
+                ret, out = wsl_bridge.run_command_in_wsl(f"{wsl_bridge.WSL_OPENSFM_BIN} {cmd_args} '{wsl_out}'", log_callback=log)
                 if ret != 0 and cmd_name != "export_ply":
                     log(f"[ERROR] OpenSfM stage '{cmd_name}' failed with return code {ret}.")
                     return False
@@ -411,14 +498,17 @@ class OpenSfMEngine:
             ("match_features",   "Pairwise Keypoint Matching with GPS/Bearing Priors"),
             ("create_tracks",    "Synthesizing Multi-View 3D Feature Tracks"),
             ("reconstruct",      "Incremental SfM with Ceres Spherical Bundle Adjustment"),
-            ("export_ply",       "Exporting 3D Point Cloud PLY"),
+            ("export_ply",       "Exporting 3D Point Cloud PLY (Excluding Camera Gizmos)"),
         ]
 
         for idx, (cmd_name, desc) in enumerate(stages):
             log(f"\n[OpenSfM Stage {idx+1}/{len(stages)}] {desc}...")
             print(f"[TELEMETRY:STAGE3] batch={idx+1} total={len(stages)} pct={(idx+1)/len(stages)*100:.1f}", flush=True)
 
-            cmd = [self.opensfm_bin, cmd_name, self.output_dir]
+            cmd = [self.opensfm_bin, cmd_name]
+            if cmd_name == "export_ply":
+                cmd.append("--no-cameras")
+            cmd.append(self.output_dir)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -508,9 +598,14 @@ class OpenSfMEngine:
         found_ply = None
         for ply_file in ply_candidates:
             if os.path.isfile(ply_file) and os.path.getsize(ply_file) > 1000:
-                shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points.ply"))
-                shutil.copy2(ply_file, os.path.join(target_3dgs_dir, "points3D.ply"))
-                found_ply = ply_file
+                p_dst1 = os.path.join(target_3dgs_dir, "points.ply")
+                p_dst2 = os.path.join(target_3dgs_dir, "points3D.ply")
+                strip_camera_gizmos_from_ply(ply_file, p_dst1)
+                try:
+                    shutil.copy2(p_dst1, p_dst2)
+                except Exception:
+                    pass
+                found_ply = p_dst1
                 break
 
         # Also preserve OpenSfM reconstruction.json and metadata.json for direct PFGS360 training
@@ -1462,31 +1557,33 @@ def opensfm_to_transforms_json(
     except Exception as e:
         pass
 
-    if ply_source and os.path.isfile(ply_source) and output_ply_dest:
-        try:
-            shutil.copy2(ply_source, output_ply_dest)
-        except Exception:
-            pass
-    elif output_ply_dest:
-        points_data = rec.get("points", {})
-        if points_data:
-            pts_list = []
-            rgb_list = []
-            for p_id, p_info in points_data.items():
-                coords = p_info.get("coordinates")
-                if coords and len(coords) == 3:
-                    pts_list.append(coords)
-                    rgb_list.append(p_info.get("color", [200, 200, 200]))
-            if pts_list:
-                pts_arr = np.array(pts_list, dtype=np.float32)
-                rgb_arr = np.array(rgb_list, dtype=np.uint8)
-                write_ply_point_cloud(output_ply_dest, pts_arr, rgb_arr)
-                alt_ply = os.path.join(os.path.dirname(output_ply_dest), "points.ply")
-                if alt_ply != output_ply_dest:
-                    try:
-                        shutil.copy2(output_ply_dest, alt_ply)
-                    except Exception:
-                        pass
+    points_data = rec.get("points", {})
+    if points_data and output_ply_dest:
+        pts_list = []
+        rgb_list = []
+        for p_id, p_info in points_data.items():
+            coords = p_info.get("coordinates")
+            if coords and len(coords) == 3:
+                pts_list.append(coords)
+                rgb_list.append(p_info.get("color", [200, 200, 200]))
+        if pts_list:
+            pts_arr = np.array(pts_list, dtype=np.float32)
+            rgb_arr = np.array(rgb_list, dtype=np.uint8)
+            write_ply_point_cloud(output_ply_dest, pts_arr, rgb_arr)
+            alt_ply = os.path.join(os.path.dirname(output_ply_dest), "points.ply")
+            if alt_ply != output_ply_dest:
+                try:
+                    shutil.copy2(output_ply_dest, alt_ply)
+                except Exception:
+                    pass
+    elif ply_source and os.path.isfile(ply_source) and output_ply_dest:
+        strip_camera_gizmos_from_ply(ply_source, output_ply_dest)
+        alt_ply = os.path.join(os.path.dirname(output_ply_dest), "points.ply")
+        if alt_ply != output_ply_dest:
+            try:
+                shutil.copy2(output_ply_dest, alt_ply)
+            except Exception:
+                pass
 
     return True, f"Generated transforms.json (EQUIRECTANGULAR, {len(frames)} frames) at {output_transforms_file}"
 

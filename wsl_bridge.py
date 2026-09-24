@@ -73,11 +73,19 @@ def ensure_wsl_packages(packages: List[str], log_callback: Optional[Callable[[st
         return False
     missing = []
     for pkg in packages:
-        # Get import module name (e.g. 'roma==1.4.1' -> 'roma')
-        import_name = pkg.split("==")[0].split(">=")[0].split("<=")[0].strip()
+        # Support pinned versions (e.g. 'timm==0.6.7')
+        if "==" in pkg:
+            import_name, req_ver = [x.strip() for x in pkg.split("==")]
+            check_script = (
+                f"import {import_name}, importlib.metadata; "
+                f"assert importlib.metadata.version('{import_name}') == '{req_ver}'"
+            )
+        else:
+            import_name = pkg.split(">=")[0].split("<=")[0].strip()
+            check_script = f"import {import_name}"
         try:
             res = subprocess.run(
-                ["wsl", "-d", WSL_DISTRO, WSL_PYTHON, "-c", f"import {import_name}"],
+                ["wsl", "-d", WSL_DISTRO, WSL_PYTHON, "-c", check_script],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -153,7 +161,8 @@ def run_command_in_wsl(
     bash_cmd: str,
     log_callback: Optional[Callable[[str], None]] = None,
     cwd: Optional[str] = None,
-    extra_env: Optional[Dict[str, str]] = None
+    extra_env: Optional[Dict[str, str]] = None,
+    terminate_check_callback: Optional[Callable[[], bool]] = None
 ) -> Tuple[int, str]:
     """
     Executes a bash command string inside WSL2 Ubuntu within the abu_linux environment.
@@ -203,8 +212,22 @@ def run_command_in_wsl(
             cleaned = line.rstrip()
             output_lines.append(cleaned)
             log(cleaned)
+            if terminate_check_callback and terminate_check_callback():
+                log("      [*] [WSL Bridge] Early termination requested. Stopping WSL command...")
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
 
-        proc.wait()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
         return proc.returncode, "\n".join(output_lines)
     except Exception as e:
         err_msg = f"[WSL Bridge Error] Failed to execute command: {e}"
