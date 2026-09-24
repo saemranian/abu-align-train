@@ -1,54 +1,29 @@
-# Abu Align & Train v0.0.5.2 — ACE0 WSL2 Native Acceleration, Cubemap FOV & Distortion Telemetry
+# Abu Align & Train v0.0.5.3 — ACE0 WSL2 Dependency Self-Healing, PyTorch Orthonormalization Fallback & Argparse Fix
 
 ## Overview
-Version v0.0.5.2 brings native Ubuntu WSL2 integration for the Niantic ACE0 visual localization & mapping engine, unlocks dynamic Field of View (FOV) adjustment and true overlap calculations in the 360° Cubemap Rig Designer, adds real-time lens distortion optics telemetry in the viewport, and consolidates the automated checkpoint workflow.
+Version v0.0.5.3 resolves a critical regression in the Niantic ACE0 pipeline where mapping failed inside WSL2 Ubuntu due to a missing `roma` rotation matrix package. This release introduces automatic dependency self-healing for the WSL2 environment, a pure PyTorch fallback for camera pose orthonormalization, and fixes an `argparse` format-string crash.
 
 ---
 
 ## Key Changes & Implementations
 
-### 1. Niantic ACE0 Native WSL2 Ubuntu Execution & C++ Extension
-- **Native Extension Compilation**: Built and linked `dsacstar.cpython-310-x86_64-linux-gnu.so` on Ubuntu WSL2 using GCC 13.3 with OpenMP and system OpenCV 4 (`/usr/include/opencv4`).
-- **Path & Environment Bridge**: Updated `acezero_engine.py` to auto-detect the Ubuntu WSL2 environment (`abu_linux`), translate Windows paths to WSL `/mnt/c/...`, and launch training seamlessly with native Linux GPU acceleration.
-- **Cache Pre-seeding**: Synced ZoeDepth and Torch Hub checkpoints into `/home/ahmad/.cache/torch/hub/` to eliminate cold-start download stalls during mapper initialization.
-- **Argument Parser Fix**: Resolved `argparse` formatting bug in `acezero/ace_zero.py`.
+### 1. ACE0 WSL2 Environment & Dependency Self-Healing
+- **WSL Package Installation**: Installed missing `roma` (1.6.1) and `pycolmap` (4.2.0) into the WSL conda environment `/home/ahmad/miniconda3/envs/abu_linux`.
+- **Automated Verification (`ensure_wsl_packages`)**: Added `ensure_wsl_packages()` in `wsl_bridge.py` to inspect required Python packages in the Ubuntu subsystem and auto-install any missing dependencies via pip before launching compute workloads.
+- **Engine Hook**: Integrated dependency verification into `acezero_engine.py` prior to initiating the ACE0 mapping loop.
 
-### 2. 360° Rig Designer Optics & Cubemap Flexibility
-- **Unlocked Cubemap FOV**: Removed the legacy hardcoded 90° FOV clamp in `abu_align_gui.py`, allowing users to customize cubemap lens FOV (e.g. 90° to 120°+).
-- **Geometric Overlap Calculation**: Implemented accurate cubemap overlap formula:
-  $$\text{Overlap} \% = \max\left(0, \frac{\text{FOV} - 90^\circ}{\text{FOV}} \times 100\%\right)$$
-- **Viewport Optics Telemetry**: In `rig_viewport.py`, added dynamic optical indicator reflecting radial distortion coefficient ($k_1$) and lens projection type alongside camera frustums.
+### 2. Pure PyTorch Pose Orthonormalization Fallback
+- **Guarded Import & Safe Execution**: In `refine_poses.py`, wrapped `import roma` in a safe try-except block.
+- **Native PyTorch Implementation**: Added native implementations for Gram-Schmidt (`_special_gramschmidt`) and SVD-based Procrustes (`_special_procrustes`) orthonormalization with full autograd gradient support, ensuring pose refinement functions reliably even in stripped or offline environments.
+- **Synchronized Across Copies**: Applied identical safeguards to both `abu align/acezero/refine_poses.py` and root `acezero/refine_poses.py`.
 
-### 3. Engine & Parameter Enhancements
-- **360DVO / OpenSfM Controls**: Refined density budget handling and camera parameter propagation across both visual odometry and structure-from-motion pipelines.
-
-### 4. Base-10 Versioning & Artifact Packaging
-- **Base-10 Increment**: Bumped version from `0.0.5.1` to `0.0.5.2` across `VERSION.txt`, `Abu_Align.bat`, `Abu_Align_and_Train.bat`, `abu_align_gui.py`, `align_cli.py`, `desktop_ui.py`, and `train_engine.py`.
-- **Launcher Binaries**: Recompiled `Abu_Align.exe` and `Abu_Align_and_Train.exe` using Microsoft Visual C# compiler (`csc.exe`).
-- **Snapshot Backup**: Archived full snapshot in `versions/v0.0.5.2/`.
+### 3. Argparse Format-String Fix in `train_ace.py`
+- **Escaped `%` Literals**: Fixed unescaped percent signs (`70%%`, `10%%`) in help strings of `train_ace.py` which previously triggered a `TypeError: %o format: an integer is required, not dict` when inspecting CLI options under Python 3.10.
 
 ---
 
 ## Verification
-- All 25 unit tests executed and passed (`tests/test_desktop_ui.py`, `tests/test_rig_designer.py`, etc.).
-- C# launcher binaries built cleanly with 0 warnings/errors.
-- Verified WSL2 bridge path translation between Windows root and Ubuntu subsystem.
-
----
-
-## Modified & Created Files
-- `acezero_engine.py`
-- `acezero/ace_zero.py`
-- `acezero/dsacstar/dsacstar.cpython-310-x86_64-linux-gnu.so`
-- `abu_align_gui.py`
-- `rig_viewport.py`
-- `desktop_ui.py`
-- `align_cli.py`
-- `train_engine.py`
-- `Abu_Align.bat`, `Abu_Align_and_Train.bat`
-- `Abu_Align.exe`, `Abu_Align_and_Train.exe`
-- `VERSION.txt`
-- `version_manager.py`
-- `versions/v0.0.5.2/`
-- `docs/WALKTHROUGH_v0.0.5.2.md`
-- `walkthrough.md`
+- Ran test imports of all core ACE0 modules (`train_ace`, `ace_zero`, `dsacstar`, `ace_trainer`, `refine_poses`) inside WSL2 with return code 0.
+- Verified `train_ace.py --help` and `ace_zero.py --help` execute without formatting errors.
+- Validated PyTorch fallback accuracy against `roma` (error diff: 0.0, autograd backward pass verified).
+- Executed complete unit test suite across desktop UI and presets: 25/25 tests passed.

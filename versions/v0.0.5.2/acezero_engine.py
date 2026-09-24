@@ -145,6 +145,7 @@ def run_acezero_reconstruction(
     use_wsl = wsl_bridge is not None and wsl_bridge.is_abu_linux_env_ready()
     if use_wsl:
         log("      [*] Engaging Native Linux Niantic ACE0 via WSL2 Ubuntu (GCC + OpenMP C++ DSAC*)...")
+        wsl_bridge.ensure_wsl_packages(["roma", "pycolmap", "timm"], log_callback=log)
         wsl_input = wsl_bridge.win_to_wsl_path(input_target)
         wsl_work = wsl_bridge.win_to_wsl_path(work_dir)
         wsl_acezero_dir = wsl_bridge.win_to_wsl_path(str(ACEZERO_DIR))

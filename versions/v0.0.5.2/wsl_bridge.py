@@ -64,6 +64,66 @@ def is_abu_linux_env_ready() -> bool:
         return False
 
 
+def ensure_wsl_packages(packages: List[str], log_callback: Optional[Callable[[str], None]] = None) -> bool:
+    """
+    Checks if specified Python packages are importable in WSL abu_linux,
+    and automatically installs any missing ones via pip.
+    """
+    if not is_abu_linux_env_ready():
+        return False
+    missing = []
+    for pkg in packages:
+        # Get import module name (e.g. 'roma==1.4.1' -> 'roma')
+        import_name = pkg.split("==")[0].split(">=")[0].split("<=")[0].strip()
+        try:
+            res = subprocess.run(
+                ["wsl", "-d", WSL_DISTRO, WSL_PYTHON, "-c", f"import {import_name}"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if res.returncode != 0:
+                missing.append(pkg)
+        except Exception:
+            missing.append(pkg)
+
+    if not missing:
+        return True
+
+    for pkg in missing:
+        msg = f"      [*] WSL Bridge: Installing missing environment dependency: {pkg}..."
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+        try:
+            res = subprocess.run(
+                ["wsl", "-d", WSL_DISTRO, f"{WSL_CONDA_ENV}/bin/pip", "install", pkg],
+                capture_output=True,
+                text=True,
+                timeout=180
+            )
+            if res.returncode == 0:
+                succ = f"      [+] WSL Bridge: Successfully installed {pkg}."
+                if log_callback:
+                    log_callback(succ)
+                else:
+                    print(succ)
+            else:
+                err = f"      [!] WSL Bridge: Warning: pip install {pkg} exited with code {res.returncode}"
+                if log_callback:
+                    log_callback(err)
+                else:
+                    print(err)
+        except Exception as e:
+            err = f"      [!] WSL Bridge: Failed to install {pkg}: {e}"
+            if log_callback:
+                log_callback(err)
+            else:
+                print(err)
+    return True
+
+
 def win_to_wsl_path(win_path: str) -> str:
     """
     Converts a Windows path to a WSL path.
