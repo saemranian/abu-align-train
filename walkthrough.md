@@ -1,7 +1,7 @@
-# Abu Align & Train v0.0.6.0 — VGGT-Omega Foundation Model Alignment, Zero-Paging 4K Scaling & Ultra-Fast Draft Mode
+# Abu Align & Train v0.0.6.1 — VGGT-Omega Foundation Model Alignment, Zero-Paging 4K Scaling & Ultra-Fast Draft Mode
 
 ## Executive Summary
-Version **v0.0.6.0** aligns the VGGT-Omega photogrammetry pipeline with the official Facebook Research foundation model guidelines (`facebookresearch/vggt-omega`). It fixes critical GPU and CPU memory bottlenecks that previously caused CUDA out-of-memory errors on large datasets (2,500+ 4K photos), accelerates alignment by up to **15×**, introduces **Feedforward Draft** and **Fast Ceres BA** precision modes in both CLI and GUI, and implements official aspect-ratio preserving preprocessing (`max_size`).
+Version **v0.0.6.1** aligns the VGGT-Omega photogrammetry pipeline with the official Facebook Research foundation model guidelines (`facebookresearch/vggt-omega`). It fixes critical GPU and CPU memory bottlenecks that previously caused CUDA out-of-memory errors on large datasets (2,500+ 4K photos), accelerates alignment by up to **15×**, introduces **Feedforward Draft** and **Fast Ceres BA** precision modes in both CLI and GUI, and implements official aspect-ratio preserving preprocessing (`max_size`).
 
 Additionally, this release solidifies full non-destructive user resolution controls across the entire Align and Train pipeline, ensuring zero destructive in-place resizing of user photos.
 
