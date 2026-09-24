@@ -188,21 +188,23 @@ def _forward_on_query(
 
     # Extract the color at the keypoint locations
     query_points_long = query_points.squeeze(0).round().long()
-    pred_color = images[query_index][:, query_points_long[:, 1], query_points_long[:, 0]]
+    qy = query_points_long[:, 1].clamp(0, height - 1)
+    qx = query_points_long[:, 0].clamp(0, width - 1)
+    pred_color = images[query_index][:, qy, qx]
     pred_color = (pred_color.permute(1, 0).cpu().numpy() * 255).astype(np.uint8)
 
     # Query the confidence and points_3d at the keypoint locations
     if (conf is not None) and (points_3d is not None):
-        assert height == width
-        assert conf.shape[-2] == conf.shape[-1]
-        assert conf.shape[:3] == points_3d.shape[:3]
-        scale = conf.shape[-1] / width
+        conf_h, conf_w = conf.shape[-2], conf.shape[-1]
+        scale_x = float(conf_w) / float(width)
+        scale_y = float(conf_h) / float(height)
 
-        query_points_scaled = (query_points.squeeze(0) * scale).round().long()
-        query_points_scaled = query_points_scaled.cpu().numpy()
+        pts = query_points.squeeze(0)
+        qx_scaled = (pts[:, 0] * scale_x).round().long().clamp(0, conf_w - 1).cpu().numpy()
+        qy_scaled = (pts[:, 1] * scale_y).round().long().clamp(0, conf_h - 1).cpu().numpy()
 
-        pred_conf = conf[query_index][query_points_scaled[:, 1], query_points_scaled[:, 0]]
-        pred_point_3d = points_3d[query_index][query_points_scaled[:, 1], query_points_scaled[:, 0]]
+        pred_conf = conf[query_index][qy_scaled, qx_scaled]
+        pred_point_3d = points_3d[query_index][qy_scaled, qx_scaled]
 
         # heuristic to remove low confidence points
         # should I export this as an input parameter?

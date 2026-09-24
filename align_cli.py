@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.1 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.2 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -973,13 +973,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 except Exception as te:
                     print(f"      * [Smart Cache Warning] Failed to save tracking cache: {te}")
 
-        scale = img_load_res / vggt_res
         intrinsic_ba = copy.deepcopy(intrinsic)
-        intrinsic_ba[:, :2, :] *= scale
         track_mask = pred_vis_scores > track_vis_thresh
 
         # Scale reprojection error threshold dynamically with canvas resolution
-        scale_res = img_load_res / 512.0
+        scale_res = images.shape[-1] / 512.0
         effective_reproj_thresh = reproj_err_thresh * scale_res
 
         cam_model_type = "OPENCV" if (args.lens_model == "brown" and not is_fast) else "PINHOLE"
@@ -988,13 +986,14 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         # Adaptive min inliers per frame based on track distribution to prevent dropping non-contiguous frames
         min_inliers = max(8, min(24, int(track_mask.sum(1).min()))) if track_mask.ndim > 1 else 16
         image_shapes = original_coords[:, -2:].cpu().numpy() if isinstance(original_coords, torch.Tensor) else original_coords[:, -2:]
+        cam_image_size = np.array([images.shape[-1], images.shape[-2]])
 
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
             points_3d_ba,
             extrinsic,
             intrinsic_ba,
             pred_tracks,
-            np.array(images.shape[-2:]),
+            cam_image_size,
             masks=track_mask,
             max_reproj_error=effective_reproj_thresh,
             min_inlier_per_frame=min_inliers,
@@ -1012,7 +1011,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 extrinsic,
                 intrinsic_ba,
                 pred_tracks,
-                np.array(images.shape[-2:]),
+                cam_image_size,
                 masks=track_mask,
                 max_reproj_error=effective_reproj_thresh * 2.0,
                 min_inlier_per_frame=6,
@@ -1077,7 +1076,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             # Direct re-unprojection from refined cameras guarantees 100% mathematical consistency without Umeyama drift
             refined_extrinsic = []
             refined_intrinsic = []
-            scale_to_vggt = vggt_res / img_load_res
+            scale_to_vggt = 1.0
             for fidx in range(num_frames):
                 img_id = fidx + 1
                 if img_id in reconstruction.images:
@@ -1089,7 +1088,6 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     ext_mat = np.hstack([R_ref, t_ref.reshape(3, 1)])
                     
                     int_mat = copy.deepcopy(cam.calibration_matrix())
-                    int_mat[:2, :] *= scale_to_vggt
                     int_mat[2, 2] = 1.0
                 else:
                     ext_mat = extrinsic[fidx]
@@ -1101,7 +1099,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
             points_3d = safe_unproject(depth_map, refined_extrinsic, refined_intrinsic)
 
-            reconstruction_res = img_load_res
+            reconstruction_res = vggt_res
         else:
             print("      * [FALLBACK] Insufficient multi-view tracks for Ceres BA; initializing robust feedforward geometry.")
             use_ba = False
@@ -1359,10 +1357,14 @@ def main():
     parser.add_argument("--ace_iterations", "--ace_iter", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", "--ace_refine", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
-    parser.add_argument("--ace_try_seeds", "--ace_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3)")
+    parser.add_argument("--ace_try_seeds", "--ace_seeds", type=int, default=1, help="Number of candidate seeds to evaluate for ACE0 (default: 1 for fast SfM; 3-5 for complex scenes)")
+    parser.add_argument("--ace_seed_iters", type=int, default=3000, help="Training iterations per candidate seed in ACE0 (default: 3000)")
+    parser.add_argument("--ace_cooldown_iters", type=int, default=1500, help="Iterations during learning rate cooldown in ACE0 (default: 1500)")
+    parser.add_argument("--ace_mapping_iters", type=int, default=8000, help="Max iterations per mapping round in ACE0 (default: 8000)")
+    parser.add_argument("--ace_early_exit", type=float, default=0.75, help="Registration ratio threshold (0-1) to early-exit candidate seed search in ACE0 (default: 0.75)")
     parser.add_argument("--ace_refine_calib", dest="ace_refine_calib", action="store_true", default=True, help="Optimize camera focal length during ACE0 mapping (default: True)")
     parser.add_argument("--no_ace_refine_calib", dest="ace_refine_calib", action="store_false", help="Keep camera focal length fixed during ACE0 mapping")
-    parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter)")
+    parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter; default: False for clean surfaces)")
     parser.add_argument("--ace_final_refit", action="store_true", default=False, help="Run final 25k iteration refit from scratch (academic benchmark mode; default: False for fast SfM)")
     parser.add_argument("--ace_final_refine", action="store_true", default=False, help="Run an additional mapping round after stopping threshold is met (default: False)")
     parser.add_argument("--ace_seed_workers", type=int, default=None, help="Parallel worker threads for evaluating candidate seeds (default: auto-detect)")
@@ -1679,6 +1681,10 @@ def main():
             final_refit=getattr(args, "ace_final_refit", False),
             final_refine=getattr(args, "ace_final_refine", False),
             seed_parallel_workers=getattr(args, "ace_seed_workers", None),
+            seed_iterations=getattr(args, "ace_seed_iters", 3000),
+            cooldown_iterations=getattr(args, "ace_cooldown_iters", 1500),
+            mapping_iterations=getattr(args, "ace_mapping_iters", 8000),
+            seed_threshold_early_exit=getattr(args, "ace_early_exit", 0.75),
             stage_res=getattr(args, "ace_stage_res", "native"),
             progress_callback=print,
         )
@@ -2077,7 +2083,7 @@ def main():
     trimesh.PointCloud(dense_3d_rc, colors=dense_rgb).export(ply_path)
     print(f"      * [Postshot / RealityCapture] Exported {len(dense_3d_rc):,} colored points to: {ply_path}")
     
-    # Guarantee point cloud in 3dgs_dataset/ and root output_dir:
+    # Guarantee point cloud in 3dgs_dataset/, colmap_dir, and root output_dir:
     try:
         # If genuine engine ply exists (e.g. OpenSfM), preserve exact vertices
         source_real_ply = None
@@ -2086,20 +2092,27 @@ def main():
                 source_real_ply = cand
                 break
         
+        p3d_out = os.path.join(output_dir, "points3D.ply")
         if source_real_ply:
             from opensfm_engine import strip_camera_gizmos_from_ply
-            p3d_out = os.path.join(output_dir, "points3D.ply")
-            p_out = os.path.join(dataset_3dgs_dir, "points.ply")
             strip_camera_gizmos_from_ply(source_real_ply, p3d_out)
-            shutil.copy2(p3d_out, p_out)
-            shutil.copy2(p3d_out, os.path.join(dataset_3dgs_dir, "points3D.ply"))
             print(f"      * [Standard Output] Exported authentic point cloud to: {p3d_out}")
         else:
-            shutil.copy2(ply_path, os.path.join(dataset_3dgs_dir, "points.ply"))
-            trimesh.PointCloud(dense_3d, colors=dense_rgb).export(os.path.join(output_dir, "points3D.ply"))
-            print(f"      * [Standard Output] Exported root point cloud to: {os.path.join(output_dir, 'points3D.ply')}")
-    except Exception:
-        pass
+            # CRITICAL: Always export authentic unrotated COLMAP camera coordinates (dense_3d) for 3DGS & COLMAP!
+            # Never copy M_world (RealityCapture Z-up) to 3dgs_dataset, COLMAP_Lichtfield, or root output.
+            trimesh.PointCloud(dense_3d, colors=dense_rgb).export(p3d_out)
+            print(f"      * [Standard Output] Exported root point cloud to: {p3d_out}")
+
+        # Distribute authentic COLMAP point cloud to 3dgs_dataset, root, and colmap directories
+        if os.path.isfile(p3d_out) and os.path.getsize(p3d_out) > 0:
+            shutil.copy2(p3d_out, os.path.join(output_dir, "points.ply"))
+            shutil.copy2(p3d_out, os.path.join(dataset_3dgs_dir, "points.ply"))
+            shutil.copy2(p3d_out, os.path.join(dataset_3dgs_dir, "points3D.ply"))
+            if os.path.isdir(colmap_dir):
+                shutil.copy2(p3d_out, os.path.join(colmap_dir, "points.ply"))
+                shutil.copy2(p3d_out, os.path.join(colmap_dir, "points3D.ply"))
+    except Exception as e:
+        print(f"      * [WARNING] Could not export standard point clouds: {e}")
 
     print(f"      * Exported in:   {time.time()-export_start:.2f}s")
     print()

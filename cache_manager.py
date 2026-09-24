@@ -89,22 +89,35 @@ def save_neural_cache(
     target_dir = os.path.join(cache_dir, cache_key)
     os.makedirs(target_dir, exist_ok=True)
 
+    def to_tensor(x, out_dtype=None):
+        if x is None:
+            return None
+        if isinstance(x, np.ndarray):
+            t = torch.from_numpy(x)
+        elif isinstance(x, torch.Tensor):
+            t = x.detach().cpu()
+        else:
+            t = torch.tensor(x)
+        if out_dtype is not None:
+            t = t.to(out_dtype)
+        return t
+
     t0 = time.time()
     # Save poses & intrinsics (CPU tensors)
-    torch.save(extrinsic.detach().cpu().float(), os.path.join(target_dir, "extrinsic.pt"))
-    torch.save(intrinsic.detach().cpu().float(), os.path.join(target_dir, "intrinsic.pt"))
-    torch.save(original_coords.detach().cpu(), os.path.join(target_dir, "original_coords.pt"))
+    torch.save(to_tensor(extrinsic, torch.float32), os.path.join(target_dir, "extrinsic.pt"))
+    torch.save(to_tensor(intrinsic, torch.float32), os.path.join(target_dir, "intrinsic.pt"))
+    torch.save(to_tensor(original_coords), os.path.join(target_dir, "original_coords.pt"))
 
     # Save 3D points, depth map, and confidence in half-precision to save disk bandwidth
-    torch.save(points_3d.detach().cpu().half(), os.path.join(target_dir, "points_3d_fp16.pt"))
-    torch.save(depth_conf.detach().cpu().half(), os.path.join(target_dir, "depth_conf_fp16.pt"))
+    torch.save(to_tensor(points_3d, torch.float16), os.path.join(target_dir, "points_3d_fp16.pt"))
+    torch.save(to_tensor(depth_conf, torch.float16), os.path.join(target_dir, "depth_conf_fp16.pt"))
     if depth_map is not None:
-        torch.save(depth_map.detach().cpu().half(), os.path.join(target_dir, "depth_map_fp16.pt"))
+        torch.save(to_tensor(depth_map, torch.float16), os.path.join(target_dir, "depth_map_fp16.pt"))
 
     if points_rgb is not None:
         np.save(os.path.join(target_dir, "points_rgb.npy"), points_rgb)
     if images is not None:
-        torch.save((images.detach().cpu() * 255).byte(), os.path.join(target_dir, "images_u8.pt"))
+        torch.save((to_tensor(images, torch.float32) * 255).byte(), os.path.join(target_dir, "images_u8.pt"))
 
     # Write metadata
     meta = metadata or {}

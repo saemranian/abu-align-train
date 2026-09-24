@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.6.1
+Abu Align & Train Version 0.0.6.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.6.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.6.2 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -283,9 +283,9 @@ class AbuAlignApp:
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
         self.ace_refine_var = tk.StringVar(value="mlp")
-        self.ace_seeds_var = tk.StringVar(value="3")
+        self.ace_seeds_var = tk.StringVar(value="1")
         self.ace_calib_var = tk.BooleanVar(value=True)
-        self.ace_dense_var = tk.BooleanVar(value=True)
+        self.ace_dense_var = tk.BooleanVar(value=False)
         self.ace_refit_var = tk.BooleanVar(value=False)
         self.ace_workers_var = tk.StringVar(value="2")
         self.ace_stage_res_var = tk.StringVar(value="Original Native (Full Res)")
@@ -646,7 +646,7 @@ class AbuAlignApp:
         tk.Label(seeds_row, text="Init Seeds:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
         seeds_cb = ttk.Combobox(seeds_row, textvariable=self.ace_seeds_var, values=["1", "3", "5"], state="readonly", width=3)
         seeds_cb.pack(side=tk.LEFT, padx=(2, 6))
-        ToolTip(seeds_cb, "Initialization Seeds:\nNumber of candidate seeds evaluated during mapping.\n3 seeds provides high robustness against local minima in unordered photos.")
+        ToolTip(seeds_cb, "Initialization Seeds:\nNumber of candidate seeds evaluated during mapping.\n• 1 Seed [Recommended Default]: Ultra-fast SfM initialization (~30s). Optimal for standard continuous captures.\n• 3-5 Seeds: For unordered, unstructured photo collections with multiple disjoint view angles.")
 
         tk.Label(seeds_row, text="Workers:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
         workers_cb = ttk.Combobox(seeds_row, textvariable=self.ace_workers_var, values=["1", "2", "3"], state="readonly", width=3)
@@ -664,9 +664,9 @@ class AbuAlignApp:
         ace_calib_chk.pack(anchor="w")
         ToolTip(ace_calib_chk, "Refine Focal Length Calibration:\nOptimizes camera focal length during mapping rounds.\nCrucial when image EXIF focal length is missing or uncalibrated.")
 
-        ace_dense_chk = tk.Checkbutton(ace_col3, text="Export Dense Point Cloud", variable=self.ace_dense_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        ace_dense_chk = tk.Checkbutton(ace_col3, text="Unfiltered Dense Cloud", variable=self.ace_dense_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         ace_dense_chk.pack(anchor="w")
-        ToolTip(ace_dense_chk, "Export Dense Point Cloud:\nEvaluates ACE0 MLP predictions over all valid pixels to produce a dense 3D point cloud seed for 3DGS training.")
+        ToolTip(ace_dense_chk, "Unfiltered Dense Cloud (Noisy):\n• Unchecked [Recommended Default]: Strict 1-3px reprojection error and surface gradient filtering. Produces clean, crisp surface points.\n• Checked: Bypasses reprojection filtering. Recommended ONLY for ultra-dense scans (>2000 photos). On standard scans, produces noisy floating points.")
 
         ace_refit_chk = tk.Checkbutton(ace_col3, text="Academic 25k Refit Mode", variable=self.ace_refit_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         ace_refit_chk.pack(anchor="w")
@@ -3660,7 +3660,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.6.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.6.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4179,7 +4179,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.6.1 - {title}")
+        doc_win.title(f"Abu Align v0.0.6.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4457,7 +4457,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.6.1\n"
+            "Abu Align & Train - Version 0.0.6.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

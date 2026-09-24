@@ -60,7 +60,7 @@ def run_acezero_reconstruction(
     output_dir,
     iterations_max=30,
     refinement="mlp",
-    try_seeds=3,
+    try_seeds=1,
     external_focal_length=-1.0,
     refine_calibration=True,
     image_resolution=480,
@@ -70,6 +70,10 @@ def run_acezero_reconstruction(
     final_refit=False,
     final_refine=False,
     seed_parallel_workers=None,
+    seed_iterations=3000,
+    cooldown_iterations=1500,
+    mapping_iterations=8000,
+    seed_threshold_early_exit=0.75,
     stage_res="native",
     progress_callback=None,
 ):
@@ -80,17 +84,22 @@ def run_acezero_reconstruction(
     :param output_dir: Destination directory for alignment results.
     :param iterations_max: Maximum rounds of alternating mapping and relocalization.
     :param refinement: Camera pose refinement strategy ('mlp', 'naive', 'none').
+    :param try_seeds: Number of candidate seeds evaluated (1 is fast & optimal for standard scans; 3-5 for complex).
     :param external_focal_length: Initial focal length guess (-1 to auto-estimate from image diagonal).
     :param refine_calibration: Whether to optimize focal length during mapping.
     :param image_resolution: Resolution for feature extraction / scene coordinate regression.
     :param export_point_cloud: Whether to generate the 3D scene point cloud.
-    :param dense_point_cloud: If True, skips reprojection filtering for maximum point density.
+    :param dense_point_cloud: If True, skips reprojection filtering (only for ultra-dense datasets >2000 photos).
+                              If False (default), applies strict 1-3px reprojection filtering for clean surfaces.
     :param shared_camera: Whether all views share a single camera intrinsic parameter set.
     :param final_refit: Whether to run a 25k iteration blind refit from scratch after registration.
                        Defaults to False for fast, stable photogrammetry and avoids focal collapse.
     :param final_refine: Whether to execute an additional mapping round after 100% registration.
     :param seed_parallel_workers: Number of concurrent workers for candidate seed evaluation.
-                                  Defaults to auto-detect (2-3 workers on high-VRAM GPUs like RTX 4090).
+    :param seed_iterations: Training iterations per candidate seed (default: 3000 for fast convergence).
+    :param cooldown_iterations: Training iterations during learning rate cooldown (default: 1500).
+    :param mapping_iterations: Maximum training iterations per mapping round (default: 8000).
+    :param seed_threshold_early_exit: Registration ratio (0-1) to early-exit candidate seed search (default: 0.75).
     :param stage_res: Staging resolution for ACE0 ('native' for 100% full res, '2k' for 1920px max, '1k' for 1024px max).
     :param progress_callback: Optional callable(str) for real-time console updates.
 
@@ -125,7 +134,10 @@ def run_acezero_reconstruction(
     log(f"      * Initializing ACE0 Engine (Niantic Labs Scene Coordinate Regression)...")
     log(f"      * ACE0 Root:           {ACEZERO_DIR}")
     log(f"      * Photos Count:        {len(image_paths)}")
-    log(f"      * Seed Parallelism:    {seed_parallel_workers} workers")
+    log(f"      * Seeds:               {try_seeds} (Early-exit threshold: {seed_threshold_early_exit*100:.0f}%)")
+    log(f"      * Seed Iterations:     {seed_iterations} (Fast init)")
+    log(f"      * Mapping Iterations:  {mapping_iterations} (Cooldown: {cooldown_iterations})")
+    log(f"      * Point Cloud Filter:  {'Unfiltered (Dense)' if dense_point_cloud else 'Strict Reprojection Filtered (Crisp)'}")
     log(f"      * Fast SfM (No Refit): {not final_refit}")
     log(f"      * Work Dir:            {work_dir}")
 
@@ -245,6 +257,10 @@ def run_acezero_reconstruction(
             f"--dense_point_cloud {dense_point_cloud} "
             f"--try_seeds {try_seeds} "
             f"--seed_parallel_workers {seed_parallel_workers} "
+            f"--seed_iterations {seed_iterations} "
+            f"--seed_threshold_early_exit {seed_threshold_early_exit} "
+            f"--cooldown_iterations {cooldown_iterations} "
+            f"--mapping_iterations {mapping_iterations} "
             f"--final_refit {final_refit} "
             f"--final_refine {final_refine} "
             f"--render_visualization False"
@@ -270,6 +286,10 @@ def run_acezero_reconstruction(
             "--dense_point_cloud", str(dense_point_cloud),
             "--try_seeds", str(try_seeds),
             "--seed_parallel_workers", str(seed_parallel_workers),
+            "--seed_iterations", str(seed_iterations),
+            "--seed_threshold_early_exit", str(seed_threshold_early_exit),
+            "--cooldown_iterations", str(cooldown_iterations),
+            "--mapping_iterations", str(mapping_iterations),
             "--final_refit", str(final_refit),
             "--final_refine", str(final_refine),
             "--render_visualization", "False",
