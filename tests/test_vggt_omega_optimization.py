@@ -190,6 +190,77 @@ class TestVGGTOmegaOptimization(unittest.TestCase):
         self.assertEqual(len(recons_unshared.cameras), N)
         self.assertEqual(len(recons_unshared.images), N)
 
+    def test_save_neural_cache_numpy_arrays(self):
+        """Verify save_neural_cache accepts NumPy arrays without .detach() AttributeError."""
+        from cache_manager import save_neural_cache, load_neural_cache
+
+        N, H, W = 2, 288, 512
+        extrinsic = np.eye(4, dtype=np.float32)[None, :3, :].repeat(N, axis=0)
+        intrinsic = np.eye(3, dtype=np.float32)[None, :, :].repeat(N, axis=0)
+        original_coords = np.zeros((N, 6), dtype=np.float32)
+        points_3d = np.random.randn(N, H, W, 3).astype(np.float32)
+        depth_conf = np.random.uniform(0.5, 3.0, size=(N, H, W)).astype(np.float32)
+        depth_map = np.random.uniform(1.0, 10.0, size=(N, H, W)).astype(np.float32)
+        points_rgb = np.random.randint(0, 256, size=(N, H, W, 3), dtype=np.uint8)
+        images = np.random.uniform(0.0, 1.0, size=(N, 3, H, W)).astype(np.float32)
+
+        cache_key = "test_numpy_cache"
+        target_dir = os.path.join(self.temp_dir.name, cache_key)
+
+        # Must succeed without raising AttributeError: 'numpy.ndarray' object has no attribute 'detach'
+        save_neural_cache(
+            cache_dir=self.temp_dir.name,
+            cache_key=cache_key,
+            extrinsic=extrinsic,
+            intrinsic=intrinsic,
+            original_coords=original_coords,
+            points_3d=points_3d,
+            depth_conf=depth_conf,
+            depth_map=depth_map,
+            points_rgb=points_rgb,
+            images=images,
+            metadata={"test": True}
+        )
+
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "extrinsic.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "intrinsic.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "original_coords.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "points_3d_fp16.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "depth_conf_fp16.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "depth_map_fp16.pt")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "points_rgb.npy")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "images_u8.pt")))
+
+        # Test loading it back
+        cached = load_neural_cache(self.temp_dir.name, cache_key, device="cpu")
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["extrinsic"].shape, (N, 3, 4))
+        self.assertEqual(cached["intrinsic"].shape, (N, 3, 3))
+        self.assertEqual(cached["points_3d"].shape, (N, H, W, 3))
+
+    def test_non_square_tracking_coordinate_scaling(self):
+        """Verify non-square aspect ratio keypoint scaling and boundary clamping in track_predict."""
+        import torch
+        # Test rectangular frame (H=288, W=512) with model confidence map (conf_h=288, conf_w=512)
+        H, W = 288, 512
+        conf_h, conf_w = 288, 512
+        query_points = torch.tensor([[[0.0, 0.0], [511.4, 287.6], [600.0, 400.0]]], dtype=torch.float32)
+
+        scale_x = float(conf_w) / float(W)
+        scale_y = float(conf_h) / float(H)
+
+        pts = query_points.squeeze(0)
+        qx_scaled = (pts[:, 0] * scale_x).round().long().clamp(0, conf_w - 1).cpu().numpy()
+        qy_scaled = (pts[:, 1] * scale_y).round().long().clamp(0, conf_h - 1).cpu().numpy()
+
+        self.assertEqual(qx_scaled[0], 0)
+        self.assertEqual(qy_scaled[0], 0)
+        self.assertEqual(qx_scaled[1], 511)
+        self.assertEqual(qy_scaled[1], 288 - 1)
+        # Clamped out of bounds:
+        self.assertEqual(qx_scaled[2], 511)
+        self.assertEqual(qy_scaled[2], 287)
+
 
 if __name__ == "__main__":
     unittest.main()
