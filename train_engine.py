@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.6.3 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.6.4 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -37,6 +37,91 @@ if sys.platform == "win32":
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+def cap_ply_gaussians(ply_path: str, max_gaussians: int, log_func=None) -> str:
+    """
+    Guarantees that an exported binary 3D Gaussian Splatting .ply point cloud
+    does not exceed max_gaussians. If vertex count > max_gaussians, selects
+    the top max_gaussians with highest opacity / alpha values and writes an
+    updated standard binary PLY file.
+    """
+    if not ply_path or not os.path.isfile(ply_path) or max_gaussians <= 0:
+        return ply_path
+
+    try:
+        import numpy as np
+
+        with open(ply_path, "rb") as f:
+            header_lines = []
+            vertex_count = None
+            properties = []
+            is_binary = False
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                line_str = line.decode("ascii", errors="replace").strip()
+                header_lines.append(line)
+                if "format binary_little_endian" in line_str:
+                    is_binary = True
+                elif line_str.startswith("element vertex"):
+                    parts = line_str.split()
+                    if len(parts) >= 3 and parts[2].isdigit():
+                        vertex_count = int(parts[2])
+                elif line_str.startswith("property"):
+                    parts = line_str.split()
+                    if len(parts) >= 3:
+                        type_str = parts[1].lower()
+                        name_str = parts[2]
+                        dtype_map = {
+                            "float": "f4", "float32": "f4", "double": "f8", "float64": "f8",
+                            "uchar": "u1", "uint8": "u1", "char": "i1", "int8": "i1",
+                            "ushort": "u2", "uint16": "u2", "short": "i2", "int16": "i2",
+                            "uint": "u4", "uint32": "u4", "int": "i4", "int32": "i4"
+                        }
+                        properties.append((name_str, dtype_map.get(type_str, "f4")))
+                elif line_str == "end_header":
+                    break
+
+            if not is_binary or vertex_count is None or vertex_count <= max_gaussians:
+                return ply_path
+
+            dtype = np.dtype(properties)
+            data = np.fromfile(f, dtype=dtype, count=vertex_count)
+
+        k = int(max_gaussians)
+        opacity_key = None
+        for cand in ["opacity", "alpha", "f_dc_0"]:
+            if cand in data.dtype.names:
+                opacity_key = cand
+                break
+
+        if opacity_key:
+            idx = np.argpartition(data[opacity_key], -k)[-k:]
+            sorted_idx = idx[np.argsort(data[opacity_key][idx])[::-1]]
+            pruned_data = data[sorted_idx]
+        else:
+            pruned_data = data[:k]
+
+        tmp_out = ply_path + ".tmp_capped.ply"
+        with open(tmp_out, "wb") as f_out:
+            for h in header_lines:
+                h_str = h.decode("ascii", errors="replace").strip()
+                if h_str.startswith("element vertex"):
+                    f_out.write(f"element vertex {k}\n".encode("ascii"))
+                else:
+                    f_out.write(h)
+            pruned_data.tofile(f_out)
+
+        if os.path.isfile(tmp_out):
+            shutil.move(tmp_out, ply_path)
+            if log_func:
+                log_func(f"      * [Max Gaussians Cap] Successfully pruned model from {vertex_count:,} to {k:,} Gaussians (preserved top opacities).")
+    except Exception as e:
+        if log_func:
+            log_func(f"      * [Max Gaussians Warning] Could not cap PLY point cloud: {e}")
+    return ply_path
 # Paths & Environment Detectors
 # ----------------------------------------------------------------------
 LICHTFELD_CANDIDATES = [
@@ -179,6 +264,7 @@ def train_lichtfeld(
     enable_sparsity: bool = False,
     enable_mip: bool = False,
     train_res: str = "original",
+    max_gaussians: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -268,6 +354,9 @@ def train_lichtfeld(
         cmd.append("--enable-mip")
     if sh_degree != 3:
         cmd.extend(["--sh-degree", str(sh_degree)])
+    if max_gaussians > 0:
+        cmd.extend(["--max-cap", str(max_gaussians)])
+        log(f"      * Max Gaussians: {max_gaussians:,} (--max-cap)")
 
     log(f"      * Launching command: {' '.join(cmd)}")
     start_time = time.time()
@@ -340,6 +429,8 @@ def train_lichtfeld(
         return best_model
     elif ply_candidates:
         best_ply = max(ply_candidates, key=os.path.getmtime)
+        if max_gaussians > 0:
+            cap_ply_gaussians(best_ply, max_gaussians, log)
         log(f"      * [LichtFeld] Training complete! Exported 3DGS model: {best_ply} ({time.time()-start_time:.1f}s)")
         consume_save_and_finish_sentinel(output_dir, dataset_dir)
         return best_ply
@@ -359,6 +450,8 @@ def train_lichtfeld(
             conv_cmd.extend(["--sh-degree", str(sh_degree)])
         conv_proc = subprocess.run(conv_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if os.path.isfile(target_export):
+            if max_gaussians > 0 and target_export.endswith(".ply"):
+                cap_ply_gaussians(target_export, max_gaussians, log)
             log(f"      * [LichtFeld] Early Save & Finish complete! Exported 3DGS model: {target_export} ({time.time()-start_time:.1f}s)")
             consume_save_and_finish_sentinel(output_dir, dataset_dir)
             return target_export
@@ -386,6 +479,7 @@ def train_nerfstudio_splatfacto(
     enable_mip: bool = False,
     sh_degree: int = 3,
     train_res: str = "original",
+    max_gaussians: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -474,6 +568,25 @@ def train_nerfstudio_splatfacto(
         cmd.append(f"--pipeline.model.sh-degree={sh_degree}")
     if enable_mip:
         cmd.append("--pipeline.model.antialiased=True")
+    if max_gaussians > 0:
+        log(f"      * Max Gaussians: {max_gaussians:,}")
+        if max_gaussians <= 500000:
+            cmd.extend([
+                "--pipeline.model.densify-grad-thresh", "0.0012",
+                "--pipeline.model.cull-alpha-thresh", "0.15",
+            ])
+        elif max_gaussians <= 1000000:
+            cmd.extend([
+                "--pipeline.model.densify-grad-thresh", "0.0008",
+            ])
+        elif max_gaussians <= 2000000:
+            cmd.extend([
+                "--pipeline.model.densify-grad-thresh", "0.0006",
+            ])
+        else:
+            cmd.extend([
+                "--pipeline.model.densify-grad-thresh", "0.0004",
+            ])
 
     res_clean = str(train_res).strip().lower()
     if any(k in res_clean for k in ["original", "native", "100%", "full", "none", "0"]):
@@ -588,6 +701,8 @@ def train_nerfstudio_splatfacto(
             exported_plys = glob.glob(os.path.join(export_out, "*.ply"))
             if exported_plys:
                 best_ply = max(exported_plys, key=os.path.getmtime)
+                if max_gaussians > 0:
+                    cap_ply_gaussians(best_ply, max_gaussians, log)
                 log(f"      * [Nerfstudio] Exported standalone 3DGS PLY: {best_ply}")
                 consume_save_and_finish_sentinel(output_dir, dataset_abs)
                 return best_ply
@@ -612,6 +727,7 @@ def train_3dgrut(
     exposure_correction: bool = False,
     enable_sparsity: bool = False,
     sh_degree: int = 3,
+    max_gaussians: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -627,8 +743,9 @@ def train_3dgrut(
     :param exposure_correction: Affine exposure appearance correction
     :param enable_sparsity: ADMM sparsity pruning
     :param sh_degree: Spherical harmonics degree (0..3)
+    :param max_gaussians: Maximum Gaussian cap (via MCMC strategy.add.max_n_gaussians)
     :param progress_callback: Telemetry callback
-    :return: Output directory path
+    :return: Output directory path or exported model path
     """
     def log(msg):
         if progress_callback:
@@ -666,7 +783,12 @@ def train_3dgrut(
         f"n_iterations={iterations}",
         f"dataset.downsample_factor={downsample_factor}",
         f"with_viser_gui={str(with_viser_gui)}",
+        "export_ply.enabled=True",
     ]
+
+    if max_gaussians > 0:
+        cmd.extend(["strategy=mcmc", f"strategy.add.max_n_gaussians={max_gaussians}"])
+        log(f"      * Max Gaussians: {max_gaussians:,} (strategy.add.max_n_gaussians)")
 
     log(f"      * Launching command: {' '.join(cmd)}")
     start_time = time.time()
@@ -692,6 +814,15 @@ def train_3dgrut(
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f"3DGRUT exited with code {proc.returncode}")
+
+    ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \
+                     glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
+    if ply_candidates:
+        best_ply = max(ply_candidates, key=os.path.getmtime)
+        if max_gaussians > 0:
+            cap_ply_gaussians(best_ply, max_gaussians, log)
+        log(f"      * [3DGRUT] Training complete! Exported 3DGS PLY: {best_ply} ({time.time()-start_time:.1f}s)")
+        return best_ply
 
     log(f"      * [3DGRUT] Training complete in {time.time()-start_time:.1f}s.")
     return output_dir
@@ -862,7 +993,7 @@ def ensure_transforms_json_for_posefree(dataset_dir: str, log_func=None) -> Opti
         return None
 
 
-def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str) -> str:
+def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str, max_gaussians: int = 0) -> str:
     """
     Directly extracts 3D Gaussian Splatting parameters from a PFGS360 PyTorch checkpoint
     and writes a standard binary PLY point cloud file compatible with all 3DGS viewers.
@@ -918,13 +1049,24 @@ def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str) -> str:
 
     # Opacity threshold logit(1/255) approx -5.5373
     valid = np.logical_and(valid, (opacities.squeeze(-1) >= -5.5373))
-    count = int(np.sum(valid))
+    valid_indices = np.where(valid)[0]
+    count = len(valid_indices)
+
+    if max_gaussians > 0 and count > max_gaussians:
+        sub_opacities = opacities[valid_indices].squeeze(-1)
+        k = int(max_gaussians)
+        top_k_sub = np.argpartition(sub_opacities, -k)[-k:]
+        sorted_top_k = top_k_sub[np.argsort(sub_opacities[top_k_sub])[::-1]]
+        final_indices = valid_indices[sorted_top_k]
+        count = len(final_indices)
+    else:
+        final_indices = valid_indices
 
     os.makedirs(os.path.dirname(os.path.abspath(out_ply)), exist_ok=True)
     type_list = [(k, "f4") for k in map_to_tensors.keys()]
     rec_arr = np.empty(count, dtype=type_list)
     for k in map_to_tensors.keys():
-        rec_arr[k] = map_to_tensors[k][valid].squeeze()
+        rec_arr[k] = map_to_tensors[k][final_indices].squeeze()
 
     with open(out_ply, "wb") as f:
         f.write(b"ply\n")
@@ -961,6 +1103,7 @@ def train_pfgs360(
     downscale_factor: Optional[str] = "1",
     mode: str = "interactive",
     use_prior_poses: Optional[bool] = None,
+    max_gaussians: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1207,6 +1350,14 @@ def train_pfgs360(
             wsl_cmd_parts.extend(["--pipeline.model.match-views", str(match_views)])
         if densify_views > 0:
             wsl_cmd_parts.extend(["--pipeline.model.densify-views", str(densify_views)])
+        if max_gaussians > 0:
+            log(f"      * Max Gaussians: {max_gaussians:,}")
+            if max_gaussians <= 500000:
+                wsl_cmd_parts.extend(["--pipeline.model.densify-grad-thresh", "0.0012"])
+            elif max_gaussians <= 1000000:
+                wsl_cmd_parts.extend(["--pipeline.model.densify-grad-thresh", "0.0008"])
+            elif max_gaussians <= 2000000:
+                wsl_cmd_parts.extend(["--pipeline.model.densify-grad-thresh", "0.0006"])
 
         if active_dp == "nerfstudio-data":
             wsl_cmd_parts.extend(["nerfstudio-data", "--data", f"'{wsl_data}'", "--auto-scale-poses", "False"] + (ds_flag if ds_flag else ["--downscale-factor", "1"]))
@@ -1250,12 +1401,16 @@ def train_pfgs360(
 
         target_splat = os.path.join(output_dir, "pfgs360_splat.ply")
         if os.path.isfile(target_splat):
+            if max_gaussians > 0:
+                cap_ply_gaussians(target_splat, max_gaussians, log)
             log(f"      * [PFGS360] Training complete! Model exported: {target_splat}")
             return target_splat
 
         splat_candidates = [p for p in glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True) if "splat" in os.path.basename(p).lower()]
         if splat_candidates:
             best_splat = max(splat_candidates, key=os.path.getmtime)
+            if max_gaussians > 0:
+                cap_ply_gaussians(best_splat, max_gaussians, log)
             log(f"      * [PFGS360] Training complete! Model exported: {best_splat}")
             return best_splat
 
@@ -1263,6 +1418,8 @@ def train_pfgs360(
                          glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
         if ply_candidates:
             best_ply = max(ply_candidates, key=os.path.getmtime)
+            if max_gaussians > 0:
+                cap_ply_gaussians(best_ply, max_gaussians, log)
             log(f"      * [PFGS360] Training complete! Model exported: {best_ply}")
             return best_ply
         return output_dir
@@ -1305,6 +1462,14 @@ def train_pfgs360(
         cmd.extend(["--pipeline.model.match-views", str(match_views)])
     if densify_views > 0:
         cmd.extend(["--pipeline.model.densify-views", str(densify_views)])
+    if max_gaussians > 0:
+        log(f"      * Max Gaussians: {max_gaussians:,}")
+        if max_gaussians <= 500000:
+            cmd.extend(["--pipeline.model.densify-grad-thresh", "0.0012"])
+        elif max_gaussians <= 1000000:
+            cmd.extend(["--pipeline.model.densify-grad-thresh", "0.0008"])
+        elif max_gaussians <= 2000000:
+            cmd.extend(["--pipeline.model.densify-grad-thresh", "0.0006"])
 
     # Append dataparser subcommand and options in correct Tyro order
     if active_dp == "nerfstudio-data":
@@ -1406,7 +1571,7 @@ def train_pfgs360(
         best_ckpt = max(ckpt_files, key=os.path.getmtime)
         log(f"      * Exporting PFGS360 Gaussian Splat to PLY: {export_ply_path}")
         try:
-            export_pfgs360_checkpoint_to_ply(best_ckpt, export_ply_path)
+            export_pfgs360_checkpoint_to_ply(best_ckpt, export_ply_path, max_gaussians=max_gaussians)
             log(f"      * [PFGS360] PLY exported successfully ({os.path.getsize(export_ply_path):,} bytes)!")
             exported = True
         except Exception as ex:
@@ -1432,6 +1597,8 @@ def train_pfgs360(
                      glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True)
     if ply_candidates:
         best_ply = max(ply_candidates, key=os.path.getmtime)
+        if max_gaussians > 0:
+            cap_ply_gaussians(best_ply, max_gaussians, log)
         log(f"      * [PFGS360] Training complete! Model exported: {best_ply} ({time.time()-start_time:.1f}s)")
         consume_save_and_finish_sentinel(output_dir, dataset_abs)
         return best_ply
@@ -1474,6 +1641,7 @@ def run_3dgs_training(
     pfgs_downscale: str = "1",
     train_res: str = "original",
     pfgs_use_prior_poses: Optional[bool] = None,
+    max_gaussians: int = 0,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -1535,27 +1703,30 @@ def run_3dgs_training(
     else:
         res_label = "Original Native (100% Quality, Zero Downscaling)"
 
+    max_g_label = f"{max_gaussians:,}" if max_gaussians > 0 else "Unlimited (Engine Default)"
+
     if progress_callback:
         progress_callback(f"======================================================================")
         progress_callback(f"                STARTING 3D GAUSSIAN SPLATTING TRAINING               ")
         progress_callback(f"======================================================================")
-        progress_callback(f" Engine:      {engine.upper()}")
-        progress_callback(f" Dataset:     {dataset_dir}")
-        progress_callback(f" Models Dir:  {target_models_dir}")
-        progress_callback(f" Iterations:  {iterations:,}")
-        progress_callback(f" Viewport:    {mode.upper()}")
-        progress_callback(f" Resolution:  {res_label}")
-        progress_callback(f" GUT Optics:  {'Enabled' if gut else 'Disabled'}")
-        progress_callback(f" Format/Spz:  {'.spz' if export_spz else '.ply'}")
-        progress_callback(f" Model/Rep:   {ns_model if 'splat' in engine_clean else representation}")
-        progress_callback(f" Cam Opt:     {camera_optimizer}")
-        progress_callback(f" Bilateral:   {'Enabled' if bilateral_grid else 'Disabled'}")
-        progress_callback(f" Exposure:    {'Enabled' if exposure_correction else 'Disabled'}")
-        progress_callback(f" Sparsity:    {'Enabled' if enable_sparsity else 'Disabled'}")
-        progress_callback(f" Mip-Filter:  {'Enabled' if enable_mip else 'Disabled'}")
-        progress_callback(f" SH Degree:   {sh_degree}")
+        progress_callback(f" Engine:        {engine.upper()}")
+        progress_callback(f" Dataset:       {dataset_dir}")
+        progress_callback(f" Models Dir:    {target_models_dir}")
+        progress_callback(f" Iterations:    {iterations:,}")
+        progress_callback(f" Max Gaussians: {max_g_label}")
+        progress_callback(f" Viewport:      {mode.upper()}")
+        progress_callback(f" Resolution:    {res_label}")
+        progress_callback(f" GUT Optics:    {'Enabled' if gut else 'Disabled'}")
+        progress_callback(f" Format/Spz:    {'.spz' if export_spz else '.ply'}")
+        progress_callback(f" Model/Rep:     {ns_model if 'splat' in engine_clean else representation}")
+        progress_callback(f" Cam Opt:       {camera_optimizer}")
+        progress_callback(f" Bilateral:     {'Enabled' if bilateral_grid else 'Disabled'}")
+        progress_callback(f" Exposure:      {'Enabled' if exposure_correction else 'Disabled'}")
+        progress_callback(f" Sparsity:      {'Enabled' if enable_sparsity else 'Disabled'}")
+        progress_callback(f" Mip-Filter:    {'Enabled' if enable_mip else 'Disabled'}")
+        progress_callback(f" SH Degree:     {sh_degree}")
         if "pfgs" in engine_clean:
-            progress_callback(f" Depth Model: {pfgs_depth.upper()}")
+            progress_callback(f" Depth Model:   {pfgs_depth.upper()}")
             rec_check = os.path.isfile(os.path.join(dataset_dir, "opensfm", "reconstruction.json")) or os.path.isfile(os.path.join(dataset_dir, "reconstruction.json"))
             tf_check = os.path.isfile(os.path.join(dataset_dir, "transforms.json"))
             if pfgs_dataparser.lower() == "auto":
@@ -1573,9 +1744,9 @@ def run_3dgs_training(
                 dp_disp = "OB3D BENCHMARK (ob3d-dataparser)"
             else:
                 dp_disp = pfgs_dataparser.upper()
-            progress_callback(f" Dataparser:  {dp_disp}")
-            progress_callback(f" Match Views: {f'{pfgs_match_views} Keyframes' if pfgs_match_views > 0 else 'All Views (O(N²))'}")
-            progress_callback(f" Filter Sky:  {f'Enabled (>{pfgs_sky_depth:.0f}m)' if pfgs_filter_sky else 'Disabled'}")
+            progress_callback(f" Dataparser:    {dp_disp}")
+            progress_callback(f" Match Views:   {f'{pfgs_match_views} Keyframes' if pfgs_match_views > 0 else 'All Views (O(N²))'}")
+            progress_callback(f" Filter Sky:    {f'Enabled (>{pfgs_sky_depth:.0f}m)' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
 
     # Ensure dataset has images extracted if raw video was supplied (never modifies existing photos)
@@ -1600,6 +1771,7 @@ def run_3dgs_training(
             enable_sparsity=enable_sparsity,
             enable_mip=enable_mip,
             train_res=train_res,
+            max_gaussians=max_gaussians,
             progress_callback=progress_callback
         )
     elif engine_clean in ["splatfacto", "nerfstudio", "ns"]:
@@ -1613,6 +1785,7 @@ def run_3dgs_training(
             enable_mip=enable_mip,
             sh_degree=sh_degree,
             train_res=train_res,
+            max_gaussians=max_gaussians,
             progress_callback=progress_callback
         )
     elif engine_clean in ["3dgrut", "3dgut", "grut"]:
@@ -1627,6 +1800,7 @@ def run_3dgs_training(
             exposure_correction=exposure_correction,
             enable_sparsity=enable_sparsity,
             sh_degree=sh_degree,
+            max_gaussians=max_gaussians,
             progress_callback=progress_callback
         )
     elif engine_clean in ["pfgs360", "pfgs", "pfgs_360"]:
@@ -1648,6 +1822,7 @@ def run_3dgs_training(
             downscale_factor=effective_pfgs_downscale,
             mode=mode,
             use_prior_poses=pfgs_use_prior_poses,
+            max_gaussians=max_gaussians,
             progress_callback=progress_callback
         )
     else:
@@ -1693,6 +1868,7 @@ if __name__ == "__main__":
     parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
     parser.add_argument("--train_res", "--res", default="original", help="Training image resolution ('original' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
+    parser.add_argument("--max_gaussians", "--train_max_gaussians", type=int, default=0, help="Maximum number of Gaussians cap (default: 0 for unlimited / engine default)")
     parser.add_argument("--pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_true", default=None, help="Force enable pre-aligned poses in PFGS360 (all frames train from step 0)")
     parser.add_argument("--no_pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_false", help="Force disable pre-aligned poses in PFGS360 (sequential growth)")
 
@@ -1758,6 +1934,7 @@ if __name__ == "__main__":
             pfgs_downscale=args.pfgs_downscale,
             train_res=args.train_res,
             pfgs_use_prior_poses=args.pfgs_use_prior_poses,
+            max_gaussians=args.max_gaussians,
             progress_callback=print
         )
     except Exception as e:

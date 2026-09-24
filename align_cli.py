@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.3 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.4 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1402,6 +1402,7 @@ def main():
     parser.add_argument("--train", action="store_true", help="Automatically train 3D Gaussian Splatting model after alignment finishes")
     parser.add_argument("--train_engine", type=str, choices=["lichtfeld", "splatfacto", "3dgrut", "pfgs360"], default="lichtfeld", help="3DGS training engine (default: lichtfeld)")
     parser.add_argument("--train_iterations", type=int, default=30000, help="Number of 3DGS training iterations (default: 30000; quick test: 7000)")
+    parser.add_argument("--train_max_gaussians", "--max_gaussians", type=int, default=0, help="Maximum number of Gaussians cap for 3DGS training (default: 0 for unlimited / engine default)")
     parser.add_argument("--train_mode", type=str, choices=["interactive", "headless"], default="interactive", help="Training view mode: 'interactive' (live visualizer) or 'headless' (background)")
     parser.add_argument("--gut", action="store_true", help="Enable Gaussian Unscented Transform (GUT) for enhanced non-linear optics")
     parser.add_argument("--export_spz", action="store_true", default=False, help="Export compressed .spz format in LichtFeld Studio")
@@ -2287,6 +2288,8 @@ def main():
     report_lines.append(f"   * Auto-Train Status:       {auto_train_label}")
     report_lines.append(f"   * Training Engine:         {train_engine_label}")
     report_lines.append(f"   * Training Iterations:     {args.train_iterations:,}")
+    max_g_val = getattr(args, "train_max_gaussians", 0) or 0
+    report_lines.append(f"   * Max Gaussians Cap:       {f'{max_g_val:,}' if max_g_val > 0 else 'Unlimited (Engine Default)'}")
 
     train_eng_clean = str(args.train_engine).lower()
     if "lichtfeld" in train_eng_clean:
@@ -2391,12 +2394,14 @@ def main():
                 pfgs_align_depth=getattr(args, "pfgs_align_depth", True),
                 pfgs_downscale=getattr(args, "pfgs_downscale", "1"),
                 train_res=getattr(args, "train_res", "original"),
+                max_gaussians=getattr(args, "train_max_gaussians", 0),
                 progress_callback=print,
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:
+                max_g_str = f"{getattr(args, 'train_max_gaussians', 0):,}" if getattr(args, "train_max_gaussians", 0) > 0 else "Unlimited"
                 with open(report_file, "a", encoding="utf-8") as rf:
-                    rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n======================================================================\n")
+                    rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n   * Max Gaussians:     {max_g_str}\n======================================================================\n")
             except Exception:
                 pass
         except Exception as e:

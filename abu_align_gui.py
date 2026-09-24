@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.6.3
+Abu Align & Train Version 0.0.6.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.6.3 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.6.4 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -339,6 +339,7 @@ class AbuAlignApp:
         self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
         self.train_target_run_var = tk.StringVar(value="Latest Run (Auto-Detect)")
         self.train_res_var = tk.StringVar(value="Original Native (100% Full Res)")
+        self.train_max_gaussians_var = tk.StringVar(value="Unlimited (Engine Default)")
 
         # LichtFeld Studio Specific Options
         self.lf_mode_var = tk.StringVar(value="interactive")
@@ -3115,6 +3116,25 @@ class AbuAlignApp:
             return "4k"
         return "original"
 
+    def _parse_train_max_gaussians(self):
+        val = str(self.train_max_gaussians_var.get()).lower()
+        if "unlimited" in val or "default" in val or "none" in val or val.strip() == "0":
+            return 0
+        if "500,000" in val or "500k" in val:
+            return 500000
+        elif "1,000,000" in val or "1m" in val:
+            return 1000000
+        elif "2,000,000" in val or "2m" in val:
+            return 2000000
+        elif "3,000,000" in val or "3m" in val:
+            return 3000000
+        elif "5,000,000" in val or "5m" in val:
+            return 5000000
+        digits = re.findall(r"\d+", val.replace(",", ""))
+        if digits:
+            return int(digits[0])
+        return 0
+
     def _parse_ace_stage_res(self):
         val = str(self.ace_stage_res_var.get()).lower()
         if "2k" in val or "1920" in val:
@@ -3389,6 +3409,9 @@ class AbuAlignApp:
             "--train_iterations", str(self._parse_train_iterations()),
             "--train_res", self._parse_train_res(),
         ])
+        max_g = self._parse_train_max_gaussians()
+        if max_g > 0:
+            cmd.extend(["--train_max_gaussians", str(max_g)])
 
         if train_engine == "lichtfeld":
             cmd.extend([
@@ -3586,6 +3609,9 @@ class AbuAlignApp:
             "--iterations", str(self._parse_train_iterations()),
             "--train_res", self._parse_train_res(),
         ]
+        max_g = self._parse_train_max_gaussians()
+        if max_g > 0:
+            cmd.extend(["--max_gaussians", str(max_g)])
 
         if train_engine == "lichtfeld":
             cmd.extend([
@@ -3660,7 +3686,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.6.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.6.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4179,7 +4205,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.6.3 - {title}")
+        doc_win.title(f"Abu Align v0.0.6.4 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4457,7 +4483,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.6.3\n"
+            "Abu Align & Train - Version 0.0.6.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
