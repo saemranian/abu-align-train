@@ -246,6 +246,14 @@ def batch_np_matrix_to_pycolmap_wo_track(
     for vidx in range(P):
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), points_rgb[vidx])
 
+    # Pre-group point indices by frame for O(P) performance instead of O(N*P) linear scans
+    frame_indices = points_xyf[:, 2].astype(np.int32)
+    points_by_frame = [[] for _ in range(N)]
+    for pt_idx in range(P):
+        f_id = frame_indices[pt_idx]
+        if 0 <= f_id < N:
+            points_by_frame[f_id].append(pt_idx)
+
     camera = None
     # frame idx
     for fidx in range(N):
@@ -254,7 +262,7 @@ def batch_np_matrix_to_pycolmap_wo_track(
             pycolmap_intri = _build_pycolmap_intri(fidx, intrinsics, camera_type)
 
             camera = pycolmap.Camera(
-                model=camera_type, width=image_size[0], height=image_size[1], params=pycolmap_intri, camera_id=fidx + 1
+                model=camera_type, width=image_size[0], height=image_size[1], params=pycolmap_intri, camera_id=fidx + 1 if not shared_camera else 1
             )
 
             # add camera
@@ -272,10 +280,7 @@ def batch_np_matrix_to_pycolmap_wo_track(
 
         point2D_idx = 0
 
-        points_belong_to_fidx = points_xyf[:, 2].astype(np.int32) == fidx
-        points_belong_to_fidx = np.nonzero(points_belong_to_fidx)[0]
-
-        for point3D_batch_idx in points_belong_to_fidx:
+        for point3D_batch_idx in points_by_frame[fidx]:
             point3D_id = point3D_batch_idx + 1
             point2D_xyf = points_xyf[point3D_batch_idx]
             point2D_xy = point2D_xyf[:2]

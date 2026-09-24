@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.5.9
+Abu Align & Train Version 0.0.6.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.5.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.6.0 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -278,6 +278,7 @@ class AbuAlignApp:
         self.density_var = tk.StringVar(value="high")
         self.align_var = tk.StringVar(value="ultra")
         self.lens_var = tk.StringVar(value="brown")
+        self.vggt_preprocess_var = tk.StringVar(value="max_size")
 
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
@@ -287,6 +288,7 @@ class AbuAlignApp:
         self.ace_dense_var = tk.BooleanVar(value=True)
         self.ace_refit_var = tk.BooleanVar(value=False)
         self.ace_workers_var = tk.StringVar(value="2")
+        self.ace_stage_res_var = tk.StringVar(value="Original Native (Full Res)")
 
         # PyCuSFM Specific Options
         self.cusfm_feat_var = tk.StringVar(value="aliked")
@@ -336,6 +338,7 @@ class AbuAlignApp:
         self.train_engine_var = tk.StringVar(value="lichtfeld")
         self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
         self.train_target_run_var = tk.StringVar(value="Latest Run (Auto-Detect)")
+        self.train_res_var = tk.StringVar(value="Original Native (100% Full Res)")
 
         # LichtFeld Studio Specific Options
         self.lf_mode_var = tk.StringVar(value="interactive")
@@ -420,8 +423,12 @@ class AbuAlignApp:
                 or profile["schema_version"] != 1):
             raise ValueError("Unsupported preset format. Expected schema version 1.")
         settings = profile.get("settings")
-        if not isinstance(settings, dict) or set(settings) != set(self._preset_vars):
-            raise ValueError("This preset has missing or unknown configuration fields.")
+        if not isinstance(settings, dict):
+            raise ValueError("This preset has missing settings.")
+        for k in set(self._preset_vars) - set(settings):
+            settings[k] = self._preset_vars[k].get()
+        if set(settings) != set(self._preset_vars):
+            raise ValueError("This preset has unknown configuration fields.")
         # Derive allowed choices from the actual controls to avoid a second option list.
         choices = {}
         def collect(widget):
@@ -558,15 +565,18 @@ class AbuAlignApp:
         v_col2 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
         v_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(v_col2, text="Camera Alignment Accuracy:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
-        rb_a1 = tk.Radiobutton(v_col2, text="Feedforward (Fast, ~25s)", variable=self.align_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a1 = tk.Radiobutton(v_col2, text="Feedforward Draft (~15s, Low VRAM)", variable=self.align_var, value="none", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_a1.pack(anchor="w")
-        rb_a2 = tk.Radiobutton(v_col2, text="Standard Ceres BA (~1m)", variable=self.align_var, value="standard", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a2 = tk.Radiobutton(v_col2, text="Fast Ceres BA (~30s)", variable=self.align_var, value="fast", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_a2.pack(anchor="w")
-        rb_a3 = tk.Radiobutton(v_col2, text="Ultra Sub-Pixel BA (Cauchy+Polish)", variable=self.align_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a3 = tk.Radiobutton(v_col2, text="Standard Ceres BA (~1m)", variable=self.align_var, value="standard", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         rb_a3.pack(anchor="w")
-        ToolTip(rb_a1, "Feedforward (~25s):\nPure deep-learning prediction directly from VGGT model forward pass.\nNo non-linear bundle adjustment (~2-4px reprojection error).")
-        ToolTip(rb_a2, "Standard Ceres BA (~1m):\nALIKED neural feature tracks refined by Ceres Levenberg-Marquardt optimizer.")
-        ToolTip(rb_a3, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]:\nSolves 3,072 multi-view tracks with Cauchy robust loss to reject outliers,\nfollowed by outlier pruning and a 2nd Polish pass reaching 0.35 px error.")
+        rb_a4 = tk.Radiobutton(v_col2, text="Ultra Sub-Pixel BA (Cauchy+Polish)", variable=self.align_var, value="ultra", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_a4.pack(anchor="w")
+        ToolTip(rb_a1, "Feedforward Draft (~15s):\nPure deep-learning prediction directly from VGGT-Omega foundation model forward pass.\nZero CoTracker tracking, zero Ceres BA. Lowest possible VRAM consumption.\nRecommended for large datasets (e.g. 2,500+ photos).")
+        ToolTip(rb_a2, "Fast Ceres BA (~30s):\nLightweight 3-query Ceres Levenberg-Marquardt bundle adjustment (25 iterations, pinhole).\nQuick refinement of focal length and camera trajectory without heavy multi-pass overhead.")
+        ToolTip(rb_a3, "Standard Ceres BA (~1m):\nALIKED neural feature tracks refined by Ceres Levenberg-Marquardt optimizer.")
+        ToolTip(rb_a4, "Ultra Sub-Pixel BA (Cauchy + Polish) [Recommended]:\nSolves 3,072 multi-view tracks with Cauchy robust loss to reject outliers,\nfollowed by outlier pruning and a 2nd Polish pass reaching 0.35 px error.")
 
         # Col C: Lens Distortion Calibration
         v_col3 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
@@ -578,6 +588,20 @@ class AbuAlignApp:
         rb_l2.pack(anchor="w")
         ToolTip(rb_l1, "Pinhole Model:\nIdeal rectilinear geometry with zero distortion (k1=0, k2=0, t1=0, t2=0).\nNative to VGGT training prior. Recommended for pre-undistorted images.")
         ToolTip(rb_l2, "Brown Calibration (k1-k2, t1-t2) [Recommended]:\nJointly solves physical radial (k1, k2) and tangential (t1, t2) lens curvature in Ceres.\nEssential for wide-angle and smartphone photoscans.")
+
+        # Col D: Aspect Ratio Preprocessing
+        v_col4 = tk.Frame(self.panel_align_vggt, bg=self.panel_bg)
+        v_col4.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(v_col4, text="Aspect Preprocess Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        rb_p1 = tk.Radiobutton(v_col4, text="Max-Size (Lowest VRAM, 4K)", variable=self.vggt_preprocess_var, value="max_size", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_p1.pack(anchor="w")
+        rb_p2 = tk.Radiobutton(v_col4, text="Balanced (Native Aspect)", variable=self.vggt_preprocess_var, value="balanced", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_p2.pack(anchor="w")
+        rb_p3 = tk.Radiobutton(v_col4, text="Square Pad (Legacy)", variable=self.vggt_preprocess_var, value="square", bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        rb_p3.pack(anchor="w")
+        ToolTip(rb_p1, "Max-Size (Lowest VRAM, 4K Friendly) [Recommended]:\nOfficial VGGT-Omega aspect-ratio preserving preprocessing.\nDownscales longest dimension without black letterbox padding.\nSaves 50% attention tokens on 16:9 photos (512 vs 1024 tokens) and runs ~2.5x faster.")
+        ToolTip(rb_p2, "Balanced (Native Aspect):\nOfficial VGGT-Omega balanced resolution scaling maintaining native photo aspect ratio.")
+        ToolTip(rb_p3, "Square Pad (Legacy):\nLegacy square letterbox padding (512x512). Pads non-square photos with black bars.")
 
         # =========================================================================
         # 2. ACE0 Subpanel (Niantic Labs Scene Coordinate Regression)
@@ -628,6 +652,13 @@ class AbuAlignApp:
         workers_cb = ttk.Combobox(seeds_row, textvariable=self.ace_workers_var, values=["1", "2", "3"], state="readonly", width=3)
         workers_cb.pack(side=tk.LEFT, padx=2)
         ToolTip(workers_cb, "Parallel Seed Workers:\nNumber of parallel workers evaluating candidate seeds concurrently.\nOn RTX 4090 (24GB VRAM), 2-3 workers run simultaneously, cutting seed search time by 2-3x.")
+
+        stage_res_row = tk.Frame(ace_col3, bg=self.panel_bg)
+        stage_res_row.pack(anchor="w", pady=(1, 3))
+        tk.Label(stage_res_row, text="Staging Res:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT)
+        stage_res_cb = ttk.Combobox(stage_res_row, textvariable=self.ace_stage_res_var, values=["Original Native (Full Res)", "2K Downscale (1920px Max)", "1K Downscale (1024px Max)", "4K Downscale (3840px Max)"], state="readonly", width=22)
+        stage_res_cb.pack(side=tk.LEFT, padx=(2, 4))
+        ToolTip(stage_res_cb, "ACE0 Staging Resolution:\n• Original Native (Full Res) [Default]: Zero downscaling. Preserves 100% full-resolution images and true focal lengths.\n• 2K Downscale (1920px Max): Faster feature regression for ultra-high-resolution datasets.\n• 1K Downscale (1024px Max): Maximum speed and lowest VRAM staging.")
 
         ace_calib_chk = tk.Checkbutton(ace_col3, text="Refine Focal Length Calib", variable=self.ace_calib_var, font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         ace_calib_chk.pack(anchor="w")
@@ -3074,6 +3105,26 @@ class AbuAlignApp:
             return str(digits[0])
         return "1"
 
+    def _parse_train_res(self):
+        val = str(self.train_res_var.get()).lower()
+        if "2k" in val or "1920" in val:
+            return "2k"
+        elif "1k" in val or "1024" in val:
+            return "1k"
+        elif "4k" in val or "3840" in val:
+            return "4k"
+        return "original"
+
+    def _parse_ace_stage_res(self):
+        val = str(self.ace_stage_res_var.get()).lower()
+        if "2k" in val or "1920" in val:
+            return "2k"
+        elif "1k" in val or "1024" in val:
+            return "1k"
+        elif "4k" in val or "3840" in val:
+            return "4k"
+        return "native"
+
     def _clear_dataset_cache(self):
         dataset_path = self.dataset_var.get().strip()
         if not os.path.isdir(dataset_path):
@@ -3221,6 +3272,7 @@ class AbuAlignApp:
             cmd.extend([
                 "--align_mode", self.align_var.get(),
                 "--lens_model", self.lens_var.get(),
+                "--vggt_preprocess_mode", self.vggt_preprocess_var.get(),
             ])
             density = self.density_var.get()
             if density == "preview":
@@ -3245,6 +3297,7 @@ class AbuAlignApp:
                 cmd.append("--ace_dense_pc")
             if self.ace_refit_var.get():
                 cmd.append("--ace_final_refit")
+            cmd.extend(["--ace_stage_res", self._parse_ace_stage_res()])
             try:
                 w_val = int(str(self.ace_workers_var.get()).strip())
                 cmd.extend(["--ace_seed_workers", str(w_val)])
@@ -3334,6 +3387,7 @@ class AbuAlignApp:
         cmd.extend([
             "--train_engine", train_engine,
             "--train_iterations", str(self._parse_train_iterations()),
+            "--train_res", self._parse_train_res(),
         ])
 
         if train_engine == "lichtfeld":
@@ -3530,6 +3584,7 @@ class AbuAlignApp:
             "--dataset", effective_dataset,
             "--engine", train_engine,
             "--iterations", str(self._parse_train_iterations()),
+            "--train_res", self._parse_train_res(),
         ]
 
         if train_engine == "lichtfeld":
@@ -3605,7 +3660,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.5.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.6.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4124,7 +4179,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.5.9 - {title}")
+        doc_win.title(f"Abu Align v0.0.6.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4402,7 +4457,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.5.9\n"
+            "Abu Align & Train - Version 0.0.6.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

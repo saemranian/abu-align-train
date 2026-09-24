@@ -429,7 +429,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.5.9", 9, muted=True).pack(side="left", padx=12)
+    label(header, "v0.0.6.0", 9, muted=True).pack(side="left", padx=12)
     button(header, "User guide", app._open_user_guide).pack(side="right")
     prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
         activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,
@@ -636,6 +636,9 @@ def build_workspace(app, tooltip):
     general.pack(fill="x", pady=(0, 16))
     field(general, "Training iterations", app.train_iter_var,
           ["7,000 (Fast Preview)", "15,000 (Balanced / Standard)", "30,000 (Production High-Fidelity)"], width=32)
+    app.train_res_cb = field(general, "Training image resolution", app.train_res_var,
+          ["Original Native (100% Full Res)", "2K Downscale (1920px Max)", "1K Downscale (1024px Max)", "4K Downscale (3840px Max)"], width=28)
+    tooltip(app.train_res_cb, "Training Image Resolution:\n• Original Native (100% Full Res) [Default]: Preserves source photo resolution with zero downscaling.\n• 2K Downscale (1920px Max): Non-destructive runtime resizing for fast VRAM-efficient training.\n• 1K Downscale (1024px Max): Maximum training speed and low VRAM footprint.\n• 4K Downscale (3840px Max): High resolution cap.")
     app.train_target_run_cb = field(general, "Alignment run target", app.train_target_run_var,
           ["Latest Run (Auto-Detect)"], width=26)
     tooltip(app.train_target_run_cb, "Alignment Output Run Target:\nSelect which alignment run in results/ to use for 3DGS training.\n• Latest Run (Auto-Detect): Automatically detects and uses the newest sparse_* alignment.\n• Specific run: Explicitly targets that alignment run.")

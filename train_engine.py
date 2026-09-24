@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.5.9 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.6.0 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -178,6 +178,7 @@ def train_lichtfeld(
     exposure_correction: bool = False,
     enable_sparsity: bool = False,
     enable_mip: bool = False,
+    train_res: str = "original",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -194,6 +195,7 @@ def train_lichtfeld(
     :param exposure_correction: Enable per-photo auto-exposure correction
     :param enable_sparsity: Enable ADMM sparsity pruning
     :param enable_mip: Enable anti-aliased mip-filtering
+    :param train_res: Training resolution / downscale ('original', '2k', '1k', '4k')
     :param progress_callback: Telemetry callback
     :return: Path to trained .ply file
     """
@@ -232,6 +234,23 @@ def train_lichtfeld(
         "-i", str(iterations),
         "--export", export_fmt,
     ]
+
+    res_clean = str(train_res).strip().lower()
+    if any(k in res_clean for k in ["original", "native", "100%", "full", "none", "0"]):
+        cmd.extend(["--resize_factor", "1", "--max-width", "0"])
+        log(f"      * Resolution: Full Original Native (100% Quality, Zero Downscaling)")
+    elif any(k in res_clean for k in ["2k", "1920", "half", "2"]):
+        cmd.extend(["--max-width", "1920"])
+        log(f"      * Resolution: 2K Downscale (1920px Max on-the-fly)")
+    elif any(k in res_clean for k in ["1k", "1024", "quarter", "4"]):
+        cmd.extend(["--max-width", "1024"])
+        log(f"      * Resolution: 1K Downscale (1024px Max on-the-fly)")
+    elif any(k in res_clean for k in ["4k", "3840"]):
+        cmd.extend(["--max-width", "3840"])
+        log(f"      * Resolution: 4K Downscale (3840px Max on-the-fly)")
+    else:
+        cmd.extend(["--resize_factor", "1", "--max-width", "0"])
+        log(f"      * Resolution: Full Original Native (100% Quality, Zero Downscaling)")
 
     if headless:
         cmd.append("--headless")
@@ -366,6 +385,7 @@ def train_nerfstudio_splatfacto(
     bilateral_grid: bool = False,
     enable_mip: bool = False,
     sh_degree: int = 3,
+    train_res: str = "original",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
@@ -379,6 +399,7 @@ def train_nerfstudio_splatfacto(
     :param bilateral_grid: Whether to train with bilateral grid color correction
     :param enable_mip: Whether to enable anti-aliased mip-filtering
     :param sh_degree: Spherical harmonics degree (0..4)
+    :param train_res: Training resolution / downscale ('original', '2k', '1k')
     :param progress_callback: Telemetry callback
     :return: Path to exported Gaussian splat .ply file
     """
@@ -453,6 +474,17 @@ def train_nerfstudio_splatfacto(
         cmd.append(f"--pipeline.model.sh-degree={sh_degree}")
     if enable_mip:
         cmd.append("--pipeline.model.antialiased=True")
+
+    res_clean = str(train_res).strip().lower()
+    if any(k in res_clean for k in ["original", "native", "100%", "full", "none", "0"]):
+        cmd.extend(["nerfstudio-data", "--downscale-factor", "1"])
+        log(f"      * Resolution: Full Original Native (100% Quality, Zero Downscaling)")
+    elif any(k in res_clean for k in ["2k", "1920", "half", "2"]):
+        cmd.extend(["nerfstudio-data", "--downscale-factor", "2"])
+        log(f"      * Resolution: 2K Downscale (2x Downscale Factor)")
+    elif any(k in res_clean for k in ["1k", "1024", "quarter", "4"]):
+        cmd.extend(["nerfstudio-data", "--downscale-factor", "4"])
+        log(f"      * Resolution: 1K Downscale (4x Downscale Factor)")
 
     log(f"      * Launching Nerfstudio Training: {' '.join(cmd)}")
     start_time = time.time()
@@ -681,33 +713,7 @@ def ensure_dataset_has_images(dataset_dir: str, fps: float = 2.0, log_func=None)
     if os.path.isdir(images_dir):
         existing = [f for f in os.listdir(images_dir) if Path(f).suffix.lower() in valid_exts]
         if len(existing) > 0:
-            # Check resolution: if existing images exceed 2K (e.g. 4K/8K), automatically downscale to 2K (1920x960)
-            # This protects GPU VRAM from ViT-L quadratic self-attention exhaustion and prevents system freeze.
-            try:
-                from PIL import Image
-                def nat_sort(s):
-                    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(s))]
-                existing.sort(key=nat_sort)
-                first_img = os.path.join(images_dir, existing[0])
-                with Image.open(first_img) as im:
-                    ew, eh = im.size
-                if ew > 2048 or eh > 1024:
-                    if log_func:
-                        log_func(f"      * [VRAM Shield] Existing frames are {ew}x{eh} (>2K). Resizing to 2K (1920x960) for optimal VRAM hygiene & speed...")
-                    for fn in existing:
-                        fpath = os.path.join(images_dir, fn)
-                        try:
-                            with Image.open(fpath) as im:
-                                if im.size[0] > 2048 or im.size[1] > 1024:
-                                    im_resized = im.resize((1920, 960), Image.Resampling.LANCZOS)
-                                    im_resized.save(fpath, quality=95)
-                        except Exception:
-                            pass
-                    if log_func:
-                        log_func(f"      * [VRAM Shield] Successfully downscaled {len(existing)} frames to 2K (1920x960).")
-            except Exception as ex:
-                if log_func:
-                    log_func(f"      * [VRAM Shield Warning] Frame downscaling check: {ex}")
+            # Preserve existing images with 100% fidelity - zero destructive or silent modification of dataset photos.
             return images_dir
 
     # Check if dataset_dir itself contains images directly
@@ -1125,7 +1131,22 @@ def train_pfgs360(
             pass
 
     vis_flag = ["--vis", "viewer+tensorboard"] if mode != "headless" else ["--vis", "tensorboard"]
-    ds_flag = ["--downscale-factor", str(downscale_factor)] if downscale_factor and str(downscale_factor).isdigit() and int(downscale_factor) > 1 else []
+    ds_str = str(downscale_factor).strip().lower()
+    if ds_str in ["1", "original", "native", "100%", "full"]:
+        ds_flag = ["--downscale-factor", "1"]
+        ds_disp = "Full Original Native (100% Quality, Zero Downscaling)"
+    elif ds_str in ["2", "2k", "half"]:
+        ds_flag = ["--downscale-factor", "2"]
+        ds_disp = "2K Downscale (2x Downscale Factor)"
+    elif ds_str in ["4", "1k", "quarter"]:
+        ds_flag = ["--downscale-factor", "4"]
+        ds_disp = "1K Downscale (4x Downscale Factor)"
+    elif ds_str in ["auto"]:
+        ds_flag = []
+        ds_disp = "Auto (Nerfstudio Default <= 1600px)"
+    else:
+        ds_flag = ["--downscale-factor", "1"]
+        ds_disp = "Full Original Native (100% Quality, Zero Downscaling)"
     
     if use_prior_poses is None:
         use_prior = (active_dp in ["opensfm-dataparser", "nerfstudio-data"])
@@ -1144,7 +1165,7 @@ def train_pfgs360(
     log(f"      * Inlier-Grow:   {'Enabled (DIA-Densify)' if inlier_growth else 'Disabled'}")
     log(f"      * Align-Depth:   {'Enabled' if align_depth else 'Disabled'}")
     log(f"      * Filter Sky:    {f'Enabled (>{sky_depth:.0f}m)' if filter_sky else 'Disabled'}")
-    log(f"      * Downscale:     {f'{ds_flag[1]}x' if ds_flag else 'Auto (<=1600px Max)'}")
+    log(f"      * Resolution:    {ds_disp}")
     log(f"      * Viewer Mode:   {'Headless (100% Dedicated GPU)' if mode == 'headless' else 'Interactive Viser (http://localhost:7007)'}")
     log(f"      * Dataset:       {dataset_abs}")
     log(f"      * Output Dir:    {output_dir}")
@@ -1451,6 +1472,7 @@ def run_3dgs_training(
     pfgs_inlier: bool = True,
     pfgs_align_depth: bool = True,
     pfgs_downscale: str = "1",
+    train_res: str = "original",
     pfgs_use_prior_poses: Optional[bool] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
@@ -1503,6 +1525,16 @@ def run_3dgs_training(
                 progress_callback(f"        -> {discovered_dataset}")
             dataset_dir = discovered_dataset
 
+    res_clean = str(train_res).strip().lower()
+    if res_clean in ["2k", "1920", "half", "2"]:
+        res_label = "2K Downscale (1920px Max)"
+    elif res_clean in ["1k", "1024", "quarter", "4"]:
+        res_label = "1K Downscale (1024px Max)"
+    elif res_clean in ["4k", "3840"]:
+        res_label = "4K Downscale (3840px Max)"
+    else:
+        res_label = "Original Native (100% Quality, Zero Downscaling)"
+
     if progress_callback:
         progress_callback(f"======================================================================")
         progress_callback(f"                STARTING 3D GAUSSIAN SPLATTING TRAINING               ")
@@ -1512,6 +1544,7 @@ def run_3dgs_training(
         progress_callback(f" Models Dir:  {target_models_dir}")
         progress_callback(f" Iterations:  {iterations:,}")
         progress_callback(f" Viewport:    {mode.upper()}")
+        progress_callback(f" Resolution:  {res_label}")
         progress_callback(f" GUT Optics:  {'Enabled' if gut else 'Disabled'}")
         progress_callback(f" Format/Spz:  {'.spz' if export_spz else '.ply'}")
         progress_callback(f" Model/Rep:   {ns_model if 'splat' in engine_clean else representation}")
@@ -1545,8 +1578,12 @@ def run_3dgs_training(
             progress_callback(f" Filter Sky:  {f'Enabled (>{pfgs_sky_depth:.0f}m)' if pfgs_filter_sky else 'Disabled'}")
         progress_callback(f"======================================================================")
 
-    # Ensure dataset has images extracted if raw video was supplied
+    # Ensure dataset has images extracted if raw video was supplied (never modifies existing photos)
     ensure_dataset_has_images(dataset_dir, fps=2.0, log_func=progress_callback)
+
+    effective_pfgs_downscale = pfgs_downscale
+    if pfgs_downscale == "1" and res_clean not in ["original", "native", "100%", "full", "none", "0"]:
+        effective_pfgs_downscale = "2" if "2k" in res_clean else ("4" if "1k" in res_clean else "1")
 
     if engine_clean in ["lichtfeld", "lichtfeld_studio", "lfs"]:
         is_headless = (mode == "headless")
@@ -1562,6 +1599,7 @@ def run_3dgs_training(
             exposure_correction=exposure_correction,
             enable_sparsity=enable_sparsity,
             enable_mip=enable_mip,
+            train_res=train_res,
             progress_callback=progress_callback
         )
     elif engine_clean in ["splatfacto", "nerfstudio", "ns"]:
@@ -1574,6 +1612,7 @@ def run_3dgs_training(
             bilateral_grid=bilateral_grid,
             enable_mip=enable_mip,
             sh_degree=sh_degree,
+            train_res=train_res,
             progress_callback=progress_callback
         )
     elif engine_clean in ["3dgrut", "3dgut", "grut"]:
@@ -1606,7 +1645,7 @@ def run_3dgs_training(
             match_views=pfgs_match_views,
             densify_views=pfgs_densify_views,
             sh_degree=sh_degree,
-            downscale_factor=pfgs_downscale,
+            downscale_factor=effective_pfgs_downscale,
             mode=mode,
             use_prior_poses=pfgs_use_prior_poses,
             progress_callback=progress_callback
@@ -1653,6 +1692,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_pfgs_inlier", dest="pfgs_inlier", action="store_false", help="Disable DIA-Densify")
     parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
+    parser.add_argument("--train_res", "--res", default="original", help="Training image resolution ('original' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
     parser.add_argument("--pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_true", default=None, help="Force enable pre-aligned poses in PFGS360 (all frames train from step 0)")
     parser.add_argument("--no_pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_false", help="Force disable pre-aligned poses in PFGS360 (sequential growth)")
 
@@ -1716,6 +1756,7 @@ if __name__ == "__main__":
             pfgs_match_views=args.pfgs_match_views,
             pfgs_densify_views=args.pfgs_densify_views,
             pfgs_downscale=args.pfgs_downscale,
+            train_res=args.train_res,
             pfgs_use_prior_poses=args.pfgs_use_prior_poses,
             progress_callback=print
         )

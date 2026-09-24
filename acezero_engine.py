@@ -70,6 +70,7 @@ def run_acezero_reconstruction(
     final_refit=False,
     final_refine=False,
     seed_parallel_workers=None,
+    stage_res="native",
     progress_callback=None,
 ):
     """
@@ -90,6 +91,7 @@ def run_acezero_reconstruction(
     :param final_refine: Whether to execute an additional mapping round after 100% registration.
     :param seed_parallel_workers: Number of concurrent workers for candidate seed evaluation.
                                   Defaults to auto-detect (2-3 workers on high-VRAM GPUs like RTX 4090).
+    :param stage_res: Staging resolution for ACE0 ('native' for 100% full res, '2k' for 1920px max, '1k' for 1024px max).
     :param progress_callback: Optional callable(str) for real-time console updates.
 
     :return: (pycolmap.Reconstruction, np.ndarray (points_3d), np.ndarray (points_rgb))
@@ -127,42 +129,61 @@ def run_acezero_reconstruction(
     log(f"      * Fast SfM (No Refit): {not final_refit}")
     log(f"      * Work Dir:            {work_dir}")
 
-    # Stage images: if images exceed 1920px (e.g. 60.2MP raw exports), pre-scale once
-    # to avoid massive CPU RAM pressure (57GB) and slow I/O decoding on every epoch.
+    # Stage images: only pre-scale if explicitly requested by user (default: native original full res)
+    stage_res_str = str(stage_res).strip().lower() if stage_res else "native"
+    if any(k in stage_res_str for k in ["2k", "1920"]):
+        max_stage_dim = 1920
+        log(f"      * Staging Resolution:  2K Downscale (1920px Max)")
+    elif any(k in stage_res_str for k in ["1k", "1024"]):
+        max_stage_dim = 1024
+        log(f"      * Staging Resolution:  1K Downscale (1024px Max)")
+    elif any(k in stage_res_str for k in ["4k", "3840"]):
+        max_stage_dim = 3840
+        log(f"      * Staging Resolution:  4K Downscale (3840px Max)")
+    else:
+        max_stage_dim = None
+        log(f"      * Staging Resolution:  Original Native (Full Res, Zero Downscaling)")
+
     stage_dir = Path(work_dir) / "staged_images"
     os.makedirs(stage_dir, exist_ok=True)
     staged_paths = []
     source_mapping = {}
-    max_stage_dim = 1920
+    scale_factors = {}
 
     for idx, src_path in enumerate(image_paths):
         ext = Path(src_path).suffix.lower()
         dst_name = f"{idx:05d}_{Path(src_path).stem}.jpg"
         dst_path = stage_dir / dst_name
-        if not dst_path.exists():
-            needs_scale = False
+        needs_scale = False
+        scale_val = 1.0
+        if max_stage_dim is not None and max_stage_dim > 0:
             try:
                 from PIL import Image
                 with Image.open(src_path) as im:
                     w, h = im.size
                     if max(w, h) > max_stage_dim:
                         needs_scale = True
-                        scale = max_stage_dim / max(w, h)
-                        new_w, new_h = int(w * scale), int(h * scale)
-                        im_resized = im.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                        im_resized.save(dst_path, "JPEG", quality=95)
+                        scale_val = max_stage_dim / max(w, h)
+                        if not dst_path.exists():
+                            new_w, new_h = int(w * scale_val), int(h * scale_val)
+                            im_resized = im.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                            im_resized.save(dst_path, "JPEG", quality=95)
             except Exception:
                 needs_scale = False
+                scale_val = 1.0
 
-            if not needs_scale and not dst_path.exists():
-                try:
-                    os.link(src_path, dst_path)
-                except Exception:
-                    import shutil
-                    shutil.copy2(src_path, dst_path)
+        if not needs_scale and not dst_path.exists():
+            try:
+                os.link(src_path, dst_path)
+            except Exception:
+                import shutil
+                shutil.copy2(src_path, dst_path)
 
         staged_paths.append(str(dst_path))
         source_mapping[str(dst_path)] = src_path
+        scale_factors[src_path] = scale_val
+        scale_factors[str(Path(src_path).resolve())] = scale_val
+        scale_factors[Path(src_path).name] = scale_val
 
     input_target = str(stage_dir)
     ace_zero_script = find_acezero_script("ace_zero.py")
@@ -343,13 +364,16 @@ def run_acezero_reconstruction(
 
     if shared_camera:
         sample_w, sample_h = next(iter(orig_dims.values()))
+        sample_src = next(iter(image_paths))
+        sample_scale = scale_factors.get(str(Path(sample_src).resolve()), scale_factors.get(sample_src, scale_factors.get(Path(sample_src).name, 1.0)))
+        unscaled_sample_focal = first_focal / sample_scale if sample_scale > 0 else first_focal
         cx, cy = sample_w / 2.0, sample_h / 2.0
         # Shared SIMPLE_PINHOLE (f, cx, cy) or PINHOLE (fx, fy, cx, cy)
         cam = pycolmap.Camera(
             model="PINHOLE",
             width=int(sample_w),
             height=int(sample_h),
-            params=[first_focal, first_focal, cx, cy]
+            params=[unscaled_sample_focal, unscaled_sample_focal, cx, cy]
         )
         cam.camera_id = camera_id_seq
         if hasattr(reconstruction, "add_camera_with_trivial_rig"):
@@ -392,8 +416,12 @@ def run_acezero_reconstruction(
         tx = float(tokens[-5])
         ty = float(tokens[-4])
         tz = float(tokens[-3])
-        focal = float(tokens[-2]) if float(tokens[-2]) > 1e-4 else first_focal
+        raw_focal = float(tokens[-2]) if float(tokens[-2]) > 1e-4 else first_focal
         confidence = float(tokens[-1])
+
+        # Adjust focal length back to full unscaled original image resolution
+        img_scale = scale_factors.get(str(Path(original_source_path).resolve()), scale_factors.get(original_source_path, scale_factors.get(base_name, 1.0)))
+        unscaled_focal = raw_focal / img_scale if img_scale > 0 else raw_focal
 
         if shared_camera:
             cam_id = shared_camera_id
@@ -403,7 +431,7 @@ def run_acezero_reconstruction(
                 model="PINHOLE",
                 width=int(img_w),
                 height=int(img_h),
-                params=[focal, focal, cx, cy]
+                params=[unscaled_focal, unscaled_focal, cx, cy]
             )
             cam.camera_id = camera_id_seq
             if hasattr(reconstruction, "add_camera_with_trivial_rig"):

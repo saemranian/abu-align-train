@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.5.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -349,7 +349,7 @@ def export_transforms_json(reconstruction, output_dir, rel_image_dir="images"):
 
 
 def rename_colmap_recons_and_rescale_camera(
-    reconstruction, image_paths, original_coords, img_size, shift_point2d_to_original_res=False, shared_camera=False
+    reconstruction, image_paths, original_coords, img_size, shift_point2d_to_original_res=False, shared_camera=False, is_square_padded=True
 ):
     """Inlined helper to rename cameras and rescale focal lengths to original photo resolutions."""
     rescaled_cameras = set()
@@ -360,39 +360,100 @@ def rename_colmap_recons_and_rescale_camera(
         pyimage.name = image_paths[pyimageid - 1]
 
         real_image_size = original_coords[pyimageid - 1, -2:]
-        max_dim = max(real_image_size)
-        left = (max_dim - real_image_size[0]) // 2
-        top = (max_dim - real_image_size[1]) // 2
-        resize_ratio = max_dim / img_size
+        if is_square_padded:
+            max_dim = max(real_image_size)
+            left = (max_dim - real_image_size[0]) // 2
+            top = (max_dim - real_image_size[1]) // 2
+            resize_ratio = max_dim / img_size
 
-        if pyimage.camera_id not in rescaled_cameras:
-            pred_params = copy.deepcopy(pycamera.params)
+            if pyimage.camera_id not in rescaled_cameras:
+                pred_params = copy.deepcopy(pycamera.params)
 
-            if pycamera.model_name in ["OPENCV", "FULL_OPENCV"]:
-                pred_params[0] *= resize_ratio  # fx
-                pred_params[1] *= resize_ratio  # fy
-                pred_params[2] = pred_params[2] * resize_ratio - left  # cx
-                pred_params[3] = pred_params[3] * resize_ratio - top   # cy
-            elif pycamera.model_name == "PINHOLE":
-                pred_params[0] *= resize_ratio  # fx
-                pred_params[1] *= resize_ratio  # fy
-                pred_params[2] = pred_params[2] * resize_ratio - left  # cx
-                pred_params[3] = pred_params[3] * resize_ratio - top   # cy
-            else:
-                pred_params = pred_params * resize_ratio
-                pred_params[-2] = real_image_size[0] / 2.0
-                pred_params[-1] = real_image_size[1] / 2.0
+                if pycamera.model_name in ["OPENCV", "FULL_OPENCV", "PINHOLE"]:
+                    pred_params[0] *= resize_ratio  # fx
+                    pred_params[1] *= resize_ratio  # fy
+                    pred_params[2] = pred_params[2] * resize_ratio - left  # cx
+                    pred_params[3] = pred_params[3] * resize_ratio - top   # cy
+                else:
+                    pred_params = pred_params * resize_ratio
+                    pred_params[-2] = real_image_size[0] / 2.0
+                    pred_params[-1] = real_image_size[1] / 2.0
 
-            pycamera.params = pred_params
-            pycamera.width = int(real_image_size[0])
-            pycamera.height = int(real_image_size[1])
-            rescaled_cameras.add(pyimage.camera_id)
+                pycamera.params = pred_params
+                pycamera.width = int(real_image_size[0])
+                pycamera.height = int(real_image_size[1])
+                rescaled_cameras.add(pyimage.camera_id)
 
-        if shift_point2d_to_original_res:
-            for point2D in pyimage.points2D:
-                point2D.xy = point2D.xy * resize_ratio - np.array([left, top])
+            if shift_point2d_to_original_res:
+                for point2D in pyimage.points2D:
+                    point2D.xy = point2D.xy * resize_ratio - np.array([left, top])
+        else:
+            # Native aspect ratio scaling (direct proportional scaling with zero letterbox padding)
+            target_w = float(original_coords[pyimageid - 1, 2])
+            target_h = float(original_coords[pyimageid - 1, 3])
+            scale_x = float(real_image_size[0]) / max(target_w, 1.0)
+            scale_y = float(real_image_size[1]) / max(target_h, 1.0)
+
+            if pyimage.camera_id not in rescaled_cameras:
+                pred_params = copy.deepcopy(pycamera.params)
+                if pycamera.model_name in ["OPENCV", "FULL_OPENCV", "PINHOLE"]:
+                    pred_params[0] *= scale_x  # fx
+                    pred_params[1] *= scale_y  # fy
+                    pred_params[2] *= scale_x  # cx (matches real_w / 2)
+                    pred_params[3] *= scale_y  # cy (matches real_h / 2)
+                else:
+                    pred_params = pred_params * ((scale_x + scale_y) / 2.0)
+                    pred_params[-2] = real_image_size[0] / 2.0
+                    pred_params[-1] = real_image_size[1] / 2.0
+
+                pycamera.params = pred_params
+                pycamera.width = int(real_image_size[0])
+                pycamera.height = int(real_image_size[1])
+                rescaled_cameras.add(pyimage.camera_id)
+
+            if shift_point2d_to_original_res:
+                for point2D in pyimage.points2D:
+                    point2D.xy = point2D.xy * np.array([scale_x, scale_y])
 
     return reconstruction
+
+
+def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512, img_load_res=1024, device="cuda"):
+    """
+    Unified high-performance image preprocessor for VGGT and VGGT-Omega.
+    Returns:
+        imgs_tensor: torch.Tensor on device
+        orig_coords: np.ndarray of shape (N, 6) containing [0, 0, target_w, target_h, orig_w, orig_h]
+        rgb_uint8: np.ndarray of shape (N, H, W, 3) uint8 on CPU
+        is_square: bool
+    """
+    from PIL import Image
+    orig_sizes = []
+    for p in paths:
+        with Image.open(p) as img:
+            orig_sizes.append(img.size)  # (width, height)
+
+    if engine == "vggt_omega" and preprocess_mode in ["max_size", "balanced"]:
+        from vggt_omega.utils.load_fn import load_and_preprocess_images
+        imgs_tensor = load_and_preprocess_images(paths, mode=preprocess_mode, image_resolution=vggt_res).to(device)
+        B, C, H_t, W_t = imgs_tensor.shape
+        orig_coords = np.array([[0.0, 0.0, float(W_t), float(H_t), float(w), float(h)] for (w, h) in orig_sizes], dtype=np.float32)
+        rgb_uint8 = (imgs_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+        return imgs_tensor, orig_coords, rgb_uint8, False
+    else:
+        from vggt.utils.load_fn import load_and_preprocess_images_square
+        tensors = []
+        coords = []
+        for p in paths:
+            st, sc = load_and_preprocess_images_square([p], target_size=img_load_res)
+            tensors.append(st)
+            coords.append(sc)
+        imgs_loaded = torch.cat(tensors, dim=0).to(device)
+        orig_coords = torch.cat(coords, dim=0).cpu().numpy()
+        resized = F.interpolate(imgs_loaded, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
+        rgb_uint8 = (resized.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+        del imgs_loaded
+        return resized, orig_coords, rgb_uint8, True
 
 
 
@@ -417,6 +478,18 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     img_load_res = args.load_res
     inf_start = time.time()
 
+    align_mode_val = getattr(args, "align_mode", None)
+    if align_mode_val is None:
+        align_mode = "standard" if getattr(args, "use_ba", False) else "none"
+    else:
+        align_mode = align_mode_val
+    use_ba = align_mode in ["fast", "standard", "ultra"]
+    is_ultra = align_mode == "ultra"
+    is_fast_ba = align_mode == "fast"
+
+    vggt_preprocess_mode = getattr(args, "vggt_preprocess_mode", "max_size")
+    is_square_padded = (engine != "vggt_omega") or (vggt_preprocess_mode == "square")
+
     from cache_manager import (
         compute_dataset_hash,
         get_cache_root,
@@ -429,7 +502,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
     dataset_root = os.path.dirname(image_paths[0])
     cache_root = get_cache_root(dataset_root, getattr(args, "cache_dir", None))
-    cache_key = compute_dataset_hash(image_paths, engine, img_load_res, args.stride)
+    cache_key = compute_dataset_hash(image_paths, f"{engine}_{vggt_preprocess_mode}", img_load_res, args.stride)
     use_cache = not getattr(args, "no_cache", False)
 
     if getattr(args, "clear_cache", False):
@@ -439,6 +512,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     cached_neural = None
     if use_cache:
         cached_neural = load_neural_cache(cache_root, cache_key, device=device, dtype=dtype)
+
+    points_rgb = None
+    images = None
 
     if cached_neural is not None:
         print("\n" + "="*70)
@@ -458,16 +534,22 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         else:
             depth_map = None
 
-        # If cached images exist, use them; otherwise quickly load image batch for RGB colors
+        # Load RGB points efficiently without GPU bloat
         cached_imgs = cached_neural.get("images")
         if cached_imgs is not None:
             images = cached_imgs
+            points_rgb = (images.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
         else:
-            img_list = []
-            for p in image_paths:
-                st, _ = load_and_preprocess_images_square([p], target_size=img_load_res)
-                img_list.append(st)
-            images = torch.cat(img_list, dim=0).to(device)
+            c_resized, c_coord, c_rgb, _ = load_and_preprocess_vggt_images(
+                image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
+            )
+            points_rgb = c_rgb
+            if use_ba:
+                images = c_resized
+            else:
+                del c_resized
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     elif num_frames > 48 and args.auto_chunk:
         user_chunk = getattr(args, "chunk_size", None)
@@ -508,8 +590,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         all_intrinsics = []
         all_depth_maps = []
         all_depth_confs = []
-        all_images = []
+        all_rgb_uint8 = []
         all_orig_coords = []
+        ba_images_list = []
         prev_chunk_centers = None
         prev_chunk_ext = None
         prev_chunk_int = None
@@ -524,16 +607,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             print(f"   --> Batch [{c_idx+1}/{len(chunk_ranges)}]: Frames {c_start+1} to {c_end} ({c_len} frames)...")
 
             c_paths = image_paths[c_start:c_end]
-            c_tensors = []
-            c_coords = []
-            for p in c_paths:
-                st, sc = load_and_preprocess_images_square([p], target_size=img_load_res)
-                c_tensors.append(st)
-                c_coords.append(sc)
-            c_img = torch.cat(c_tensors, dim=0).to(device)
-            c_coord = torch.cat(c_coords, dim=0).to(device)
-
-            c_resized = F.interpolate(c_img, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
+            c_resized, c_coord, c_rgb, is_square_padded = load_and_preprocess_vggt_images(
+                c_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
+            )
 
             with torch.no_grad():
                 if engine == "vggt_omega":
@@ -574,8 +650,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 all_intrinsics.append(c_int)
                 all_depth_maps.append(c_depth)
                 all_depth_confs.append(c_conf)
-                all_images.append(c_img.cpu())
-                all_orig_coords.append(c_coord.cpu())
+                all_rgb_uint8.append(c_rgb)
+                all_orig_coords.append(c_coord)
+                if use_ba and num_frames <= 200:
+                    ba_images_list.append(c_resized.cpu())
                 prev_chunk_centers = c_centers
                 prev_chunk_ext = c_ext
                 prev_chunk_int = c_int
@@ -655,8 +733,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 all_intrinsics.append(c_int[actual_overlap:])
                 all_depth_maps.append(c_depth[actual_overlap:])
                 all_depth_confs.append(c_conf[actual_overlap:])
-                all_images.append(c_img[actual_overlap:].cpu())
-                all_orig_coords.append(c_coord[actual_overlap:].cpu())
+                all_rgb_uint8.append(c_rgb[actual_overlap:])
+                all_orig_coords.append(c_coord[actual_overlap:])
+                if use_ba and num_frames <= 200:
+                    ba_images_list.append(c_resized[actual_overlap:].cpu())
 
                 prev_chunk_centers = c_centers
                 prev_chunk_ext = c_ext
@@ -665,7 +745,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 prev_chunk_conf = c_conf
                 prev_overlap_start = c_len - actual_overlap
 
-            del c_img, c_coord, c_resized
+            del c_resized, c_coord, c_rgb
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -673,44 +753,41 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         intrinsic = np.concatenate(all_intrinsics, axis=0)
         depth_map = np.concatenate(all_depth_maps, axis=0)
         depth_conf = np.concatenate(all_depth_confs, axis=0)
-        images = torch.cat(all_images, dim=0).to(device)
-        original_coords = torch.cat(all_orig_coords, dim=0).to(device)
+        points_rgb = np.concatenate(all_rgb_uint8, axis=0)
+        original_coords = np.concatenate(all_orig_coords, axis=0)
+        del all_extrinsics, all_intrinsics, all_depth_maps, all_depth_confs, all_rgb_uint8, all_orig_coords
+
+        if use_ba and len(ba_images_list) > 0:
+            images = torch.cat(ba_images_list, dim=0).to(device)
+            del ba_images_list
+        else:
+            images = None
+
         points_3d = safe_unproject(depth_map, extrinsic, intrinsic)
 
     else:
         # Standard Single-Pass Inference for small/medium datasets (<= 48 frames)
-        print("[3/5] Preprocessing & Center-Padding Images...")
+        print(f"[3/5] Preprocessing Images ({vggt_preprocess_mode.upper()} mode)...")
         stage_start = time.time()
-        processed_images = []
-        original_coords = []
-        for idx, path in enumerate(image_paths):
-            print_progress_bar(idx + 1, num_frames, prefix="Loading", stage="Resizing", start_time=stage_start)
-            single_tensor, single_coords = load_and_preprocess_images_square([path], target_size=img_load_res)
-            processed_images.append(single_tensor)
-            original_coords.append(single_coords)
-
-        print()
-        images = torch.cat(processed_images, dim=0).to(device)
-        original_coords = torch.cat(original_coords, dim=0).to(device)
+        images, original_coords, points_rgb, is_square_padded = load_and_preprocess_vggt_images(
+            image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
+        )
         print(f"      * Batch Shape:   {tuple(images.shape)}")
         print()
 
         print(f"[4/5] Running Transformer 3D Inference ({engine.upper()})...")
-        print_progress_bar(1, 3, prefix="Inference", stage=f"Interpolating ({vggt_res}x{vggt_res})", start_time=inf_start)
-        resized_images = F.interpolate(images, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
-
-        print_progress_bar(2, 3, prefix="Inference", stage="Cross-Frame Attention", start_time=inf_start)
+        print_progress_bar(1, 3, prefix="Inference", stage="Forward Pass", start_time=inf_start)
         with torch.no_grad():
             if engine == "vggt_omega":
                 from vggt_omega.utils.pose_enc import encoding_to_camera
                 with torch.inference_mode():
-                    predictions = model(resized_images)
+                    predictions = model(images)
                 extrinsic, intrinsic = encoding_to_camera(predictions["pose_enc"], predictions["images"].shape[-2:])
                 depth_map = predictions["depth"]
                 depth_conf = predictions["depth_conf"]
             else:
                 with torch.cuda.amp.autocast(dtype=dtype):
-                    batch_input = resized_images.unsqueeze(0)
+                    batch_input = images.unsqueeze(0)
                     agg_tokens, ps_idx = model.aggregator(batch_input)
                     pose_enc = model.camera_head(agg_tokens)[-1]
                     extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, batch_input.shape[-2:])
@@ -732,6 +809,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             depth_conf = depth_conf.squeeze(1)
 
         points_3d = safe_unproject(depth_map, extrinsic, intrinsic)
+        if not use_ba:
+            del images
+            images = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     inf_elapsed = time.time() - inf_start
     print()
@@ -771,26 +853,31 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
     conf_thresh = args.conf_thresh
     max_pts = args.max_points
-    image_size = np.array([vggt_res, vggt_res])
     N, H, W, _ = points_3d.shape
+    image_size = np.array([W, H])
 
-    points_rgb = F.interpolate(images, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
-    points_rgb = (points_rgb.cpu().numpy() * 255).astype(np.uint8).transpose(0, 2, 3, 1)
-
-    from vggt.utils.helper import create_pixel_coordinate_grid, randomly_limit_trues
+    # Depth confidence filtering with zero-allocation direct indexing
     conf_mask = depth_conf >= conf_thresh
-    total_valid_pts = int(conf_mask.sum())
+    valid_flat_indices = np.flatnonzero(conf_mask.reshape(-1))
+    total_valid_pts = len(valid_flat_indices)
     print(f"      * Points above confidence threshold (>={conf_thresh:.1f}): {total_valid_pts:,}")
 
     reconstruction_res = vggt_res
 
     if args.align_mode is None:
-        align_mode = "standard" if args.use_ba else "none"
+        align_mode = "standard" if getattr(args, "use_ba", False) else "none"
     else:
         align_mode = args.align_mode
 
-    use_ba = align_mode in ["standard", "ultra"]
+    use_ba = align_mode in ["fast", "standard", "ultra"]
     is_ultra = align_mode == "ultra"
+    is_fast = align_mode == "fast"
+
+    # Zero-Paging Guard: Fallback to feedforward if images tensor was purged for large scans / low VRAM
+    if use_ba and images is None:
+        print("      * [NOTICE] High frame count or low VRAM mode active; using feedforward reconstruction (skipping Ceres BA).")
+        use_ba = False
+        align_mode = "none"
 
     if use_ba:
         # Zero-Paging VRAM Guard: Purge Stage 4 transformer model and cache before CoTracker
@@ -805,7 +892,13 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         v_alloc, _ = get_vram_usage()
         print(f"      * [Zero-Paging VRAM Guard] Cleared neural model from GPU. Active VRAM: {v_alloc:.2f} GB.")
 
-        if num_frames > 48:
+        if is_fast:
+            n_queries = min(num_frames, 3)
+            max_query_pts = 1024
+            step = (num_frames - 1) / max(n_queries - 1, 1)
+            query_frames = sorted(list(set([int(round(i * step)) for i in range(n_queries)])))
+            query_count_str = f"{len(query_frames)} fast queries ({max_query_pts} pts/query)"
+        elif num_frames > 48:
             # Trajectory-wide uniform keyframe distribution for large scans:
             # For massive scans (>200 frames), adaptively cap queries to 8 and keypoints to 1024
             # to prevent CoTracker PCIe paging bottleneck across 700+ frames
@@ -889,12 +982,12 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         scale_res = img_load_res / 512.0
         effective_reproj_thresh = reproj_err_thresh * scale_res
 
-        cam_model_type = "OPENCV" if args.lens_model == "brown" else "PINHOLE"
+        cam_model_type = "OPENCV" if (args.lens_model == "brown" and not is_fast) else "PINHOLE"
         print(f"      * Initializing PyCOLMAP with {cam_model_type} camera model (shared_camera={args.shared_camera}, max_reproj_error={effective_reproj_thresh:.1f}px)...")
         
         # Adaptive min inliers per frame based on track distribution to prevent dropping non-contiguous frames
         min_inliers = max(8, min(24, int(track_mask.sum(1).min()))) if track_mask.ndim > 1 else 16
-        image_shapes = original_coords[:, -2:].cpu().numpy()
+        image_shapes = original_coords[:, -2:].cpu().numpy() if isinstance(original_coords, torch.Tensor) else original_coords[:, -2:]
 
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
             points_3d_ba,
@@ -949,6 +1042,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
             ba_options.ceres.solver_options.function_tolerance = 1e-6
             ba_options.ceres.solver_options.parameter_tolerance = 1e-8
+            ba_options.ceres.solver_options.max_num_iterations = 25 if is_fast else (50 if not is_ultra else 100)
 
             if is_ultra:
                 ba_options.ceres.loss_function_type = pycolmap.LossFunctionType.CAUCHY
@@ -960,7 +1054,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             pycolmap.bundle_adjustment(reconstruction, ba_options)
 
             # Stage 2: Refine physical lens distortion using well-converged camera poses
-            if args.lens_model == "brown":
+            if args.lens_model == "brown" and not is_fast:
                 ba_options.refine_extra_params = True
                 print("      * Optimizing camera alignment (Stage 2: Calibrating Physical Lens Distortion k1-k2, t1-t2)...")
                 pycolmap.bundle_adjustment(reconstruction, ba_options)
@@ -1005,43 +1099,47 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             refined_extrinsic = np.stack(refined_extrinsic, axis=0)
             refined_intrinsic = np.stack(refined_intrinsic, axis=0)
 
-            points_3d = unproject_depth_map_to_point_map(depth_map, refined_extrinsic, refined_intrinsic)
+            points_3d = safe_unproject(depth_map, refined_extrinsic, refined_intrinsic)
 
             reconstruction_res = img_load_res
         else:
             print("      * [FALLBACK] Insufficient multi-view tracks for Ceres BA; initializing robust feedforward geometry.")
-            points_xyf = create_pixel_coordinate_grid(N, H, W)
-            colmap_mask = randomly_limit_trues(conf_mask, min(max_pts, 100000))
-            pts_3d_colmap = points_3d[colmap_mask]
-            pts_xyf_colmap = points_xyf[colmap_mask]
-            pts_rgb_colmap = points_rgb[colmap_mask]
+            use_ba = False
 
-            reconstruction = batch_np_matrix_to_pycolmap_wo_track(
-                pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=False, camera_type="PINHOLE"
-            )
-            reconstruction_res = vggt_res
-    else:
-        points_xyf = create_pixel_coordinate_grid(N, H, W)
-        colmap_mask = randomly_limit_trues(conf_mask, min(max_pts, 100000))
-        pts_3d_colmap = points_3d[colmap_mask]
-        pts_xyf_colmap = points_xyf[colmap_mask]
-        pts_rgb_colmap = points_rgb[colmap_mask]
+    if not use_ba:
+        # Zero-Memory Grid Allocation: Directly map sampled 1D flat indices to (f, y, x)
+        max_colmap_pts = min(max_pts, 100000)
+        if total_valid_pts > max_colmap_pts:
+            selected_flat = np.random.choice(valid_flat_indices, size=max_colmap_pts, replace=False)
+        else:
+            selected_flat = valid_flat_indices
+
+        f_idx = selected_flat // (H * W)
+        rem = selected_flat % (H * W)
+        y_idx = rem // W
+        x_idx = rem % W
+
+        pts_xyf_colmap = np.stack([x_idx.astype(np.float32), y_idx.astype(np.float32), f_idx.astype(np.float32)], axis=-1)
+        pts_3d_colmap = points_3d.reshape(-1, 3)[selected_flat]
+        pts_rgb_colmap = points_rgb.reshape(-1, 3)[selected_flat]
 
         reconstruction = batch_np_matrix_to_pycolmap_wo_track(
-            pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=False, camera_type="PINHOLE"
+            pts_3d_colmap, pts_xyf_colmap, pts_rgb_colmap, extrinsic, intrinsic, image_size, shared_camera=args.shared_camera, camera_type="PINHOLE"
         )
         reconstruction_res = vggt_res
 
     base_names = [os.path.basename(p) for p in image_paths]
+    orig_coords_np = original_coords.cpu().numpy() if isinstance(original_coords, torch.Tensor) else original_coords
     reconstruction = rename_colmap_recons_and_rescale_camera(
-        reconstruction, base_names, original_coords.cpu().numpy(), img_size=reconstruction_res, shift_point2d_to_original_res=True, shared_camera=args.shared_camera if use_ba else False
+        reconstruction, base_names, orig_coords_np, img_size=reconstruction_res, shift_point2d_to_original_res=True, shared_camera=args.shared_camera if use_ba else False, is_square_padded=is_square_padded
     )
 
-    conf_thresh = args.conf_thresh
-    max_pts = args.max_points
-    dense_mask = randomly_limit_trues(conf_mask, max_pts)
-    dense_3d = points_3d[dense_mask]
-    dense_rgb = points_rgb[dense_mask]
+    if total_valid_pts > max_pts:
+        dense_indices = np.random.choice(valid_flat_indices, size=max_pts, replace=False)
+    else:
+        dense_indices = valid_flat_indices
+    dense_3d = points_3d.reshape(-1, 3)[dense_indices]
+    dense_rgb = points_rgb.reshape(-1, 3)[dense_indices]
     return reconstruction, dense_3d, dense_rgb
 
 
@@ -1268,6 +1366,7 @@ def main():
     parser.add_argument("--ace_final_refit", action="store_true", default=False, help="Run final 25k iteration refit from scratch (academic benchmark mode; default: False for fast SfM)")
     parser.add_argument("--ace_final_refine", action="store_true", default=False, help="Run an additional mapping round after stopping threshold is met (default: False)")
     parser.add_argument("--ace_seed_workers", type=int, default=None, help="Parallel worker threads for evaluating candidate seeds (default: auto-detect)")
+    parser.add_argument("--ace_stage_res", default="native", choices=["native", "original", "2k", "1k", "4k"], help="Staging resolution for ACE0 engine ('native' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
     parser.add_argument("--cusfm_matcher", type=str, choices=["lightglue", "superglue"], default="lightglue", help="Keypoint matcher for PyCuSFM (default: lightglue)")
     parser.add_argument("--cusfm_init", type=str, choices=["omega", "opensfm", "transforms", "auto", "ace0", "none", "ego"], default="omega", help="Coarse pose initialization mode for PyCuSFM (default: omega)")
@@ -1283,7 +1382,8 @@ def main():
     parser.add_argument("--chunk_size", type=int, default=None, help="Chunk size for auto-chunking large datasets (default: 96 for VGGT-Omega, 48 for standard)")
     parser.add_argument("--auto_chunk", action="store_true", default=True, help="Automatically chunk large datasets (> 48 photos) to prevent VRAM OOM")
     parser.add_argument("--use_ba", action="store_true", help="Enable multi-view feature tracking and PyCeres Bundle Adjustment")
-    parser.add_argument("--align_mode", type=str, choices=["none", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
+    parser.add_argument("--align_mode", type=str, choices=["none", "fast", "standard", "ultra"], default=None, help="Camera alignment precision: 'none' (fast feedforward), 'fast' (lightweight Ceres BA), 'standard' (Ceres BA), 'ultra' (sub-pixel Ceres BA with Cauchy loss & multi-pass polish)")
+    parser.add_argument("--vggt_preprocess_mode", type=str, choices=["max_size", "balanced", "square"], default="max_size", help="Aspect preprocessing for VGGT-Omega: 'max_size' (preserves aspect ratio, lowest VRAM, 4K friendly), 'balanced', or 'square' (legacy letterbox)")
     parser.add_argument("--lens_model", type=str, choices=["pinhole", "brown"], default="brown", help="Lens distortion model: 'pinhole' (zero distortion) or 'brown' (calibrates physical k1, k2, t1, t2)")
     parser.add_argument("--max_reproj_error", type=float, default=None, help="Max reprojection error for tie point tracks")
     parser.add_argument("--shared_camera", dest="shared_camera", action="store_true", default=True, help="Share camera intrinsics and distortion across all views (recommended for single-camera scans)")
@@ -1328,6 +1428,7 @@ def main():
     parser.add_argument("--pfgs_align_depth", dest="pfgs_align_depth", action="store_true", default=True, help="Align monocular depth with rendered internal depth")
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
     parser.add_argument("--pfgs_downscale", choices=["auto", "1", "2", "4"], default="1", help="Image downscale factor for PFGS360 ('1' for full res, '2' for half, 'auto' for auto <=1600px)")
+    parser.add_argument("--train_res", "--res", default="original", choices=["original", "native", "2k", "1k", "4k"], help="Training image resolution ('original' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
 
     args = parser.parse_args()
 
@@ -1578,6 +1679,7 @@ def main():
             final_refit=getattr(args, "ace_final_refit", False),
             final_refine=getattr(args, "ace_final_refine", False),
             seed_parallel_workers=getattr(args, "ace_seed_workers", None),
+            stage_res=getattr(args, "ace_stage_res", "native"),
             progress_callback=print,
         )
         inf_elapsed = time.time() - inf_start
@@ -2074,8 +2176,8 @@ def main():
     align_engine_label = engine_labels.get(str(args.engine).lower(), str(args.engine))
 
     align_mode_labels = {
-        "none": "Feedforward (Fast, ~25s)",
-        "fast": "Feedforward (Fast, ~25s)",
+        "none": "Feedforward Draft (Fastest, ~15s, Lowest VRAM)",
+        "fast": "Fast Ceres BA (~30s)",
         "standard": "Standard Ceres BA (~1m)",
         "ultra": "Ultra Sub-Pixel BA (Cauchy+Polish)",
     }
@@ -2160,6 +2262,7 @@ def main():
     else:
         report_lines.extend([
             f"   * Camera Alignment Acc.:   {align_mode_label}",
+            f"   * Aspect Preprocess Mode:  {getattr(args, 'vggt_preprocess_mode', 'max_size').upper()}",
             f"   * Point Cloud Density:     {density_label}",
             f"   * Lens Distortion Model:   {lens_model_label}",
             f"   * Auto-Chunking VRAM:      Chunk {args.chunk_size}, Anchor {args.anchor_size}",
@@ -2274,6 +2377,8 @@ def main():
                 pfgs_inlier=getattr(args, "pfgs_inlier", True),
                 pfgs_align_depth=getattr(args, "pfgs_align_depth", True),
                 pfgs_downscale=getattr(args, "pfgs_downscale", "1"),
+                train_res=getattr(args, "train_res", "original"),
+                progress_callback=print,
             )
             print(f"\n      * [3DGS Training Complete] Model exported to: {trained_model_path}")
             try:
