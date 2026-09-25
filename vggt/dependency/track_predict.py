@@ -239,7 +239,8 @@ def _forward_on_query(
         tracker, images_feed, query_points, fmaps_feed, fine_tracking=fine_tracking
     )
 
-    pred_track, pred_vis = switch_tensor_order([pred_track, pred_vis], reorder_index, dim=1)
+    reorder_index_dev = reorder_index.to(pred_track.device) if isinstance(reorder_index, torch.Tensor) else reorder_index
+    pred_track, pred_vis = switch_tensor_order([pred_track, pred_vis], reorder_index_dev, dim=1)
 
     pred_track = pred_track.detach().squeeze(0).float().cpu().numpy()
     pred_vis = pred_vis.detach().squeeze(0).float().cpu().numpy()

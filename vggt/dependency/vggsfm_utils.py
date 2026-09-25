@@ -174,6 +174,7 @@ def calculate_index_mappings(query_index, S, device=None):
 def switch_tensor_order(tensors, order, dim=1):
     """
     Reorder tensors along a specific dimension according to the given order.
+    Automatically matches index order device to target tensor device to avoid CUDA/CPU mismatches.
 
     Args:
         tensors: List of tensors to reorder
@@ -183,7 +184,14 @@ def switch_tensor_order(tensors, order, dim=1):
     Returns:
         List of reordered tensors
     """
-    return [torch.index_select(tensor, dim, order) if tensor is not None else None for tensor in tensors]
+    res = []
+    for tensor in tensors:
+        if tensor is None:
+            res.append(None)
+        else:
+            order_dev = order.to(tensor.device) if isinstance(order, torch.Tensor) else order
+            res.append(torch.index_select(tensor, dim, order_dev))
+    return res
 
 
 def initialize_feature_extractors(max_query_num, det_thres=0.005, extractor_method="aliked", device="cuda"):

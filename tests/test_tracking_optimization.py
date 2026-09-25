@@ -122,6 +122,26 @@ class TestTrackingOptimization(unittest.TestCase):
         # Should have exited without entering the forward loop (which would crash on images=None)
         self.assertEqual(len(out_tracks), 1)
 
+    def test_switch_tensor_order_cross_device(self):
+        """Verify switch_tensor_order dynamically matches order device to target tensor device."""
+        import torch
+        from vggt.dependency.vggsfm_utils import switch_tensor_order
+
+        t_cpu = torch.randn(2, 10, 4)
+        order_cuda = torch.tensor([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], device="cuda" if torch.cuda.is_available() else "cpu")
+
+        res = switch_tensor_order([t_cpu], order_cuda, dim=1)
+        self.assertEqual(res[0].device, t_cpu.device)
+        self.assertEqual(res[0].shape, t_cpu.shape)
+
+        if torch.cuda.is_available():
+            t_cuda = torch.randn(2, 10, 4, device="cuda")
+            order_cpu = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], device="cpu")
+            res_cuda = switch_tensor_order([t_cuda], order_cpu, dim=1)
+            self.assertEqual(res_cuda[0].device, t_cuda.device)
+            self.assertEqual(res_cuda[0].shape, t_cuda.shape)
+
 
 if __name__ == "__main__":
     unittest.main()
+
