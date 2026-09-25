@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -418,36 +418,119 @@ def rename_colmap_recons_and_rescale_camera(
     return reconstruction
 
 
+def _process_single_image_vggt_omega(p, mode="max_size", image_resolution=512, patch_size=16):
+    from PIL import Image
+    with Image.open(p) as img:
+        orig_w, orig_h = img.size
+        aspect_ratio = orig_h / max(orig_w, 1)
+
+        # Meta VGGT-Omega crop rules: restrict aspect ratio to [0.5, 2.0]
+        min_ar, max_ar = 0.5, 2.0
+        crop_box = None
+        if aspect_ratio < min_ar:
+            crop_w = min(orig_w, max(1, int(round(orig_h / min_ar))))
+            left = max((orig_w - crop_w) // 2, 0)
+            crop_box = (left, 0, left + crop_w, orig_h)
+            eff_ar = orig_h / max(crop_w, 1)
+        elif aspect_ratio > max_ar:
+            crop_h = min(orig_h, max(1, int(round(orig_w * max_ar))))
+            top = max((orig_h - crop_h) // 2, 0)
+            crop_box = (0, top, orig_w, top + crop_h)
+            eff_ar = crop_h / max(orig_w, 1)
+        else:
+            eff_ar = aspect_ratio
+
+        if mode == "balanced":
+            from vggt_omega.utils.load_fn import _balanced_target_shape
+            target_h, target_w = _balanced_target_shape(eff_ar, image_resolution, patch_size)
+        else:
+            from vggt_omega.utils.load_fn import _max_size_target_shape
+            target_h, target_w = _max_size_target_shape(eff_ar, image_resolution, patch_size)
+
+        # Hardware-accelerated libjpeg-turbo DCT draft scaling: decodes directly at reduced frequency in C/AVX2
+        req_w = max(target_w * 2, image_resolution)
+        req_h = max(target_h * 2, image_resolution)
+        try:
+            img.draft("RGB", (req_w, req_h))
+        except Exception:
+            pass
+
+        draft_w, draft_h = img.size
+        scale_x = draft_w / float(orig_w)
+        scale_y = draft_h / float(orig_h)
+
+        if img.mode == "RGBA":
+            background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            img = Image.alpha_composite(background, img)
+        rgb_img = img.convert("RGB")
+
+        if crop_box is not None:
+            c_left, c_top, c_right, c_bottom = crop_box
+            scaled_box = (
+                max(0, int(round(c_left * scale_x))),
+                max(0, int(round(c_top * scale_y))),
+                min(draft_w, int(round(c_right * scale_x))),
+                min(draft_h, int(round(c_bottom * scale_y)))
+            )
+            rgb_img = rgb_img.crop(scaled_box)
+
+        final_img = rgb_img.resize((target_w, target_h), Image.Resampling.BICUBIC)
+        rgb_arr = np.array(final_img, dtype=np.uint8)
+        return rgb_arr, (orig_w, orig_h), (target_h, target_w)
+
+
 def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512, img_load_res=1024, device="cuda"):
     """
-    Unified high-performance image preprocessor for VGGT and VGGT-Omega.
+    Unified high-performance hardware-accelerated image preprocessor for VGGT and VGGT-Omega.
+    Features:
+      1. Multi-threaded CPU decoding via ThreadPoolExecutor.
+      2. Native libjpeg-turbo DCT draft scaling (decodes at 1/2 or 1/4 size directly in C/AVX2).
+      3. Strict adherence to Meta VGGT-Omega crop aspect ratio [0.5, 2.0] & patch multiple rules.
+      4. Single-pass metadata extraction (no redundant re-opening of images).
     Returns:
         imgs_tensor: torch.Tensor on device
         orig_coords: np.ndarray of shape (N, 6) containing [0, 0, target_w, target_h, orig_w, orig_h]
         rgb_uint8: np.ndarray of shape (N, H, W, 3) uint8 on CPU
         is_square: bool
     """
-    from PIL import Image
-    orig_sizes = []
-    for p in paths:
-        with Image.open(p) as img:
-            orig_sizes.append(img.size)  # (width, height)
+    from concurrent.futures import ThreadPoolExecutor
 
     if engine == "vggt_omega" and preprocess_mode in ["max_size", "balanced"]:
-        from vggt_omega.utils.load_fn import load_and_preprocess_images
-        imgs_tensor = load_and_preprocess_images(paths, mode=preprocess_mode, image_resolution=vggt_res).to(device)
-        B, C, H_t, W_t = imgs_tensor.shape
-        orig_coords = np.array([[0.0, 0.0, float(W_t), float(H_t), float(w), float(h)] for (w, h) in orig_sizes], dtype=np.float32)
-        rgb_uint8 = (imgs_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
-        return imgs_tensor, orig_coords, rgb_uint8, False
+        num_workers = min(16, max(4, os.cpu_count() or 8))
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            worker = lambda p: _process_single_image_vggt_omega(p, mode=preprocess_mode, image_resolution=vggt_res, patch_size=16)
+            results = list(executor.map(worker, paths))
+
+        rgb_arr_list = [r[0] for r in results]
+        orig_sizes = [r[1] for r in results]
+        target_shapes = [r[2] for r in results]
+        shapes_set = set(target_shapes)
+
+        if len(shapes_set) > 1:
+            from vggt_omega.utils.load_fn import _pad_images_to_common_size
+            tensor_list = [torch.from_numpy(arr).permute(2, 0, 1).float().div_(255.0) for arr in rgb_arr_list]
+            padded_tensors = _pad_images_to_common_size(tensor_list, shapes_set)
+            imgs_tensor = torch.stack(padded_tensors).to(device)
+            B, C, H_t, W_t = imgs_tensor.shape
+            orig_coords = np.array([[0.0, 0.0, float(W_t), float(H_t), float(w), float(h)] for (w, h) in orig_sizes], dtype=np.float32)
+            rgb_uint8 = (imgs_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+            return imgs_tensor, orig_coords, rgb_uint8, False
+        else:
+            batch_uint8 = np.stack(rgb_arr_list, axis=0)
+            rgb_uint8 = batch_uint8
+            imgs_tensor = torch.from_numpy(batch_uint8).permute(0, 3, 1, 2).float().div_(255.0).to(device)
+            B, C, H_t, W_t = imgs_tensor.shape
+            orig_coords = np.array([[0.0, 0.0, float(W_t), float(H_t), float(w), float(h)] for (w, h) in orig_sizes], dtype=np.float32)
+            return imgs_tensor, orig_coords, rgb_uint8, False
     else:
         from vggt.utils.load_fn import load_and_preprocess_images_square
-        tensors = []
-        coords = []
-        for p in paths:
-            st, sc = load_and_preprocess_images_square([p], target_size=img_load_res)
-            tensors.append(st)
-            coords.append(sc)
+        num_workers = min(16, max(4, os.cpu_count() or 8))
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            def _load_sq(p):
+                return load_and_preprocess_images_square([p], target_size=img_load_res)
+            sq_results = list(executor.map(_load_sq, paths))
+        tensors = [r[0] for r in sq_results]
+        coords = [r[1] for r in sq_results]
         imgs_loaded = torch.cat(tensors, dim=0).to(device)
         orig_coords = torch.cat(coords, dim=0).cpu().numpy()
         resized = F.interpolate(imgs_loaded, size=(vggt_res, vggt_res), mode="bilinear", align_corners=False)
@@ -604,16 +687,34 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         prev_chunk_conf = None
         prev_overlap_start = 0
 
+        # Asynchronous batch prefetching pipeline:
+        # Pre-loads the next chunk on CPU worker threads while GPU is busy with forward inference
+        from concurrent.futures import ThreadPoolExecutor
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+
+        def _fetch_chunk_data(idx):
+            s_i, e_i = chunk_ranges[idx]
+            sub_paths = image_paths[s_i:e_i]
+            return load_and_preprocess_vggt_images(
+                sub_paths, engine=engine, preprocess_mode=vggt_preprocess_mode,
+                vggt_res=vggt_res, img_load_res=img_load_res, device="cpu"
+            )
+
+        future_batch = prefetch_executor.submit(_fetch_chunk_data, 0)
+
         for c_idx, (c_start, c_end) in enumerate(chunk_ranges):
             c_len = c_end - c_start
             batch_pct = ((c_idx + 1) / len(chunk_ranges)) * 50.0
             print(f"[TELEMETRY:STAGE3] batch={c_idx+1} total={len(chunk_ranges)} pct={batch_pct:.1f}", flush=True)
             print(f"   --> Batch [{c_idx+1}/{len(chunk_ranges)}]: Frames {c_start+1} to {c_end} ({c_len} frames)...")
 
-            c_paths = image_paths[c_start:c_end]
-            c_resized, c_coord, c_rgb, is_square_padded = load_and_preprocess_vggt_images(
-                c_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
-            )
+            c_resized, c_coord, c_rgb, is_square_padded = future_batch.result()
+            c_resized = c_resized.to(device)
+
+            if c_idx + 1 < len(chunk_ranges):
+                future_batch = prefetch_executor.submit(_fetch_chunk_data, c_idx + 1)
+            else:
+                future_batch = None
 
             with torch.no_grad():
                 if engine == "vggt_omega":
@@ -675,49 +776,71 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
                 H_d, W_d = c_depth.shape[1], c_depth.shape[2]
                 grid_step = max(H_d // 16, 16)
+                u_coords = np.arange(grid_step, W_d - grid_step, grid_step, dtype=np.float64)
+                v_coords = np.arange(grid_step, H_d - grid_step, grid_step, dtype=np.float64)
+                if len(u_coords) > 0 and len(v_coords) > 0:
+                    vv, uu = np.meshgrid(v_coords, u_coords, indexing='ij')
+                    grid_u = uu.flatten()
+                    grid_v = vv.flatten()
+                    grid_v_idx = grid_v.astype(np.intp)
+                    grid_u_idx = grid_u.astype(np.intp)
+                else:
+                    grid_u = np.array([], dtype=np.float64)
+                    grid_v = np.array([], dtype=np.float64)
+                    grid_v_idx = np.array([], dtype=np.intp)
+                    grid_u_idx = np.array([], dtype=np.intp)
 
                 for k in range(actual_overlap):
+                    if len(grid_u) == 0:
+                        break
                     prev_k = prev_chunk_centers.shape[0] - actual_overlap + k
 
+                    c_s = c_conf[k, grid_v_idx, grid_u_idx]
+                    c_d = prev_chunk_conf[prev_k, grid_v_idx, grid_u_idx]
+                    z_s = c_depth[k, grid_v_idx, grid_u_idx].astype(np.float64)
+                    z_d = prev_chunk_depth[prev_k, grid_v_idx, grid_u_idx].astype(np.float64)
+
+                    valid = (c_s >= 1.5) & (c_d >= 1.5) & (z_s > 0.05) & (z_d > 0.05)
+                    if not np.any(valid):
+                        continue
+
+                    val_u = grid_u[valid]
+                    val_v = grid_v[valid]
+                    val_zs = z_s[valid]
+                    val_zd = z_d[valid]
+
+                    # Source camera 3D points -> world
+                    fx_s, fy_s = c_int[k, 0, 0], c_int[k, 1, 1]
+                    cx_s, cy_s = c_int[k, 0, 2], c_int[k, 1, 2]
                     R_src = c_ext[k, :3, :3]
                     t_src = c_ext[k, :3, 3]
-                    fx_s = c_int[k, 0, 0]
-                    fy_s = c_int[k, 1, 1]
-                    cx_s = c_int[k, 0, 2]
-                    cy_s = c_int[k, 1, 2]
 
+                    p_cam_s = np.stack([(val_u - cx_s) * val_zs / fx_s, (val_v - cy_s) * val_zs / fy_s, val_zs], axis=1)
+                    p_w_s = (p_cam_s - t_src) @ R_src
+
+                    # Dst camera 3D points -> world
+                    fx_d, fy_d = prev_chunk_int[prev_k, 0, 0], prev_chunk_int[prev_k, 1, 1]
+                    cx_d, cy_d = prev_chunk_int[prev_k, 0, 2], prev_chunk_int[prev_k, 1, 2]
                     R_dst = prev_chunk_ext[prev_k, :3, :3]
                     t_dst = prev_chunk_ext[prev_k, :3, 3]
-                    fx_d = prev_chunk_int[prev_k, 0, 0]
-                    fy_d = prev_chunk_int[prev_k, 1, 1]
-                    cx_d = prev_chunk_int[prev_k, 0, 2]
-                    cy_d = prev_chunk_int[prev_k, 1, 2]
 
-                    for v_pix in range(grid_step, H_d - grid_step, grid_step):
-                        for u_pix in range(grid_step, W_d - grid_step, grid_step):
-                            c_s = float(c_conf[k, v_pix, u_pix])
-                            c_d = float(prev_chunk_conf[prev_k, v_pix, u_pix])
-                            if c_s >= 1.5 and c_d >= 1.5:
-                                z_s = float(c_depth[k, v_pix, u_pix])
-                                z_d = float(prev_chunk_depth[prev_k, v_pix, u_pix])
-                                if z_s > 0.05 and z_d > 0.05:
-                                    p_cam_s = np.array([(u_pix - cx_s) * z_s / fx_s, (v_pix - cy_s) * z_s / fy_s, z_s], dtype=np.float64)
-                                    p_w_s = (R_src.T @ (p_cam_s - t_src)).flatten()
+                    p_cam_d = np.stack([(val_u - cx_d) * val_zd / fx_d, (val_v - cy_d) * val_zd / fy_d, val_zd], axis=1)
+                    p_w_d = (p_cam_d - t_dst) @ R_dst
 
-                                    p_cam_d = np.array([(u_pix - cx_d) * z_d / fx_d, (v_pix - cy_d) * z_d / fy_d, z_d], dtype=np.float64)
-                                    p_w_d = (R_dst.T @ (p_cam_d - t_dst)).flatten()
+                    src_pts_3d.append(p_w_s)
+                    dst_pts_3d.append(p_w_d)
 
-                                    src_pts_3d.append(p_w_s)
-                                    dst_pts_3d.append(p_w_d)
-
-                if len(src_pts_3d) >= 16:
-                    src_pts_arr = np.array(src_pts_3d, dtype=np.float64).reshape(-1, 3)
-                    dst_pts_arr = np.array(dst_pts_3d, dtype=np.float64).reshape(-1, 3)
-                    src_cam_weighted = np.repeat(src_overlap, 10, axis=0).reshape(-1, 3)
-                    dst_cam_weighted = np.repeat(dst_overlap, 10, axis=0).reshape(-1, 3)
-                    src_all = np.vstack([src_cam_weighted, src_pts_arr])
-                    dst_all = np.vstack([dst_cam_weighted, dst_pts_arr])
-                    s_rel, R_rel, t_rel = umeyama_alignment(src_all, dst_all)
+                if src_pts_3d:
+                    src_pts_arr = np.concatenate(src_pts_3d, axis=0)
+                    dst_pts_arr = np.concatenate(dst_pts_3d, axis=0)
+                    if len(src_pts_arr) >= 16:
+                        src_cam_weighted = np.repeat(src_overlap, 10, axis=0).reshape(-1, 3)
+                        dst_cam_weighted = np.repeat(dst_overlap, 10, axis=0).reshape(-1, 3)
+                        src_all = np.vstack([src_cam_weighted, src_pts_arr])
+                        dst_all = np.vstack([dst_cam_weighted, dst_pts_arr])
+                        s_rel, R_rel, t_rel = umeyama_alignment(src_all, dst_all)
+                    else:
+                        s_rel, R_rel, t_rel = umeyama_alignment(src_overlap.reshape(-1, 3), dst_overlap.reshape(-1, 3))
                 else:
                     s_rel, R_rel, t_rel = umeyama_alignment(src_overlap.reshape(-1, 3), dst_overlap.reshape(-1, 3))
 
@@ -752,6 +875,8 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             del c_resized, c_coord, c_rgb
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+        prefetch_executor.shutdown(wait=False)
 
         extrinsic = np.concatenate(all_extrinsics, axis=0)
         intrinsic = np.concatenate(all_intrinsics, axis=0)
