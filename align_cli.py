@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.8 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.9 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1573,6 +1573,7 @@ def main():
     parser.add_argument("--no_pfgs_align_depth", dest="pfgs_align_depth", action="store_false", help="Disable align depth")
     parser.add_argument("--pfgs_downscale", choices=["auto", "1", "2", "4"], default="1", help="Image downscale factor for PFGS360 ('1' for full res, '2' for half, 'auto' for auto <=1600px)")
     parser.add_argument("--train_res", "--res", default="original", choices=["original", "native", "2k", "1k", "4k"], help="Training image resolution ('original' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
+    parser.add_argument("--log_file", "--log_path", type=str, default=None, help="Path to current session telemetry and diagnostic log file")
 
     args = parser.parse_args()
 
@@ -2287,11 +2288,36 @@ def main():
 
     num_points = reconstruction.num_points3D() if reconstruction is not None and reconstruction.num_points3D() > 0 else len(dense_3d)
 
+    # Resolve Session Telemetry & Diagnostic Log
+    log_file_arg = getattr(args, "log_file", None)
+    log_path = None
+    log_name = None
+
+    if log_file_arg and os.path.isfile(log_file_arg):
+        log_path = os.path.abspath(log_file_arg)
+        log_name = os.path.basename(log_path)
+    else:
+        logs_dir = os.path.join(current_dir, "logs")
+        if os.path.isdir(logs_dir):
+            cands = [os.path.join(logs_dir, f) for f in os.listdir(logs_dir) if f.startswith("abu_align_") and f.endswith(".log") and f != "abu_align_latest.log"]
+            if cands:
+                cands.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                log_path = os.path.abspath(cands[0])
+                log_name = os.path.basename(log_path)
+            elif os.path.isfile(os.path.join(logs_dir, "abu_align_latest.log")):
+                log_path = os.path.abspath(os.path.join(logs_dir, "abu_align_latest.log"))
+                log_name = "abu_align_latest.log"
+
+    log_display_name = log_name if log_name else "N/A"
+    log_display_path = log_path if log_path else "N/A"
+
     report_lines = [
         "======================================================================",
         "                       RECONSTRUCTION REPORT                          ",
         "======================================================================",
         f" Date & Time:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f" Log File:             {log_display_name}",
+        f" Log Location:         {log_display_path}",
         f" Dataset Source:       {scan_dir}",
         f" Total Photos:         {total_images_found}",
         f" Registered Views:     {reg_images} / {num_frames} ({reg_images/max(num_frames, 1)*100:.1f}%)",
@@ -2487,6 +2513,7 @@ def main():
         f"   |     |-- cameras.csv          (RealityCapture camera alignment)",
         f"   |     |-- transforms.json      (NeRF / 3DGS camera poses & intrinsics)",
         f"   |     \\-- points.ply           (Dense colored point cloud tie points)",
+        f"   |-- {log_name if log_name else 'session.log'}              (Diagnostic session log archive)",
         f"   \\-- reconstruction_report.txt  (This summary file)",
         f" Total Runtime:        {int(total_time//60):02d}:{int(total_time%60):02d} ({total_time:.1f} seconds)",
         "======================================================================",
@@ -2499,6 +2526,17 @@ def main():
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(report_text)
     print(f"\nSaved report to: {report_file}")
+
+    # Archive session log into the output directory
+    if log_path and os.path.isfile(log_path):
+        try:
+            import shutil
+            dest_log = os.path.join(output_dir, log_name if log_name else "abu_align_session.log")
+            if os.path.abspath(log_path) != os.path.abspath(dest_log):
+                shutil.copy2(log_path, dest_log)
+                print(f"Archived session log copy to: {dest_log}")
+        except Exception as e:
+            print(f"[NOTE] Could not archive session log copy: {e}")
 
     # Stage 6: Automated 3D Gaussian Splatting Training (if requested)
     if args.train:
@@ -2542,7 +2580,12 @@ def main():
             try:
                 max_g_str = f"{getattr(args, 'train_max_gaussians', 0):,}" if getattr(args, "train_max_gaussians", 0) > 0 else "Unlimited"
                 with open(report_file, "a", encoding="utf-8") as rf:
-                    rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n   * Max Gaussians:     {max_g_str}\n======================================================================\n")
+                    rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n   * Max Gaussians:     {max_g_str}\n   * Log File:          {log_display_name}\n   * Log Location:      {log_display_path}\n======================================================================\n")
+                if log_path and os.path.isfile(log_path):
+                    import shutil
+                    dest_log = os.path.join(output_dir, log_name if log_name else "abu_align_session.log")
+                    if os.path.abspath(log_path) != os.path.abspath(dest_log):
+                        shutil.copy2(log_path, dest_log)
             except Exception:
                 pass
         except Exception as e:

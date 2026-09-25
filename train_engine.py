@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.6.8 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.6.9 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -1871,8 +1871,33 @@ if __name__ == "__main__":
     parser.add_argument("--max_gaussians", "--train_max_gaussians", type=int, default=0, help="Maximum number of Gaussians cap (default: 0 for unlimited / engine default)")
     parser.add_argument("--pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_true", default=None, help="Force enable pre-aligned poses in PFGS360 (all frames train from step 0)")
     parser.add_argument("--no_pfgs_use_prior_poses", dest="pfgs_use_prior_poses", action="store_false", help="Force disable pre-aligned poses in PFGS360 (sequential growth)")
+    parser.add_argument("--log_file", "--log_path", type=str, default=None, help="Path to current session telemetry and diagnostic log file")
 
     args = parser.parse_args()
+
+    # Resolve Session Telemetry & Diagnostic Log
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file_arg = getattr(args, "log_file", None)
+    log_path = None
+    log_name = None
+
+    if log_file_arg and os.path.isfile(log_file_arg):
+        log_path = os.path.abspath(log_file_arg)
+        log_name = os.path.basename(log_path)
+    else:
+        logs_dir = os.path.join(current_dir, "logs")
+        if os.path.isdir(logs_dir):
+            cands = [os.path.join(logs_dir, f) for f in os.listdir(logs_dir) if (f.startswith("abu_train_") or f.startswith("abu_align_")) and f.endswith(".log") and f != "abu_align_latest.log"]
+            if cands:
+                cands.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                log_path = os.path.abspath(cands[0])
+                log_name = os.path.basename(log_path)
+            elif os.path.isfile(os.path.join(logs_dir, "abu_align_latest.log")):
+                log_path = os.path.abspath(os.path.join(logs_dir, "abu_align_latest.log"))
+                log_name = "abu_align_latest.log"
+
+    log_display_name = log_name if log_name else "N/A"
+    log_display_path = log_path if log_path else "N/A"
 
     # Smart discovery of 3dgs_dataset
     raw_path = os.path.abspath(args.dataset)
@@ -1909,7 +1934,7 @@ if __name__ == "__main__":
     os.makedirs(out_models, exist_ok=True)
 
     try:
-        run_3dgs_training(
+        trained_model = run_3dgs_training(
             engine=args.engine,
             dataset_dir=target_3dgs,
             output_dir=out_models,
@@ -1937,6 +1962,71 @@ if __name__ == "__main__":
             max_gaussians=args.max_gaussians,
             progress_callback=print
         )
+
+        candidate_report_dirs = []
+        parent_dir = os.path.dirname(target_3dgs) if os.path.basename(target_3dgs).lower() == "3dgs_dataset" else target_3dgs
+        if parent_dir and os.path.isdir(parent_dir):
+            candidate_report_dirs.append(parent_dir)
+        if out_models and os.path.isdir(out_models) and out_models not in candidate_report_dirs:
+            candidate_report_dirs.append(out_models)
+
+        max_g_str = f"{args.max_gaussians:,}" if args.max_gaussians > 0 else "Unlimited"
+
+        # 1. Update existing reconstruction_report.txt if present in parent directories
+        for r_dir in candidate_report_dirs:
+            rep_file = os.path.join(r_dir, "reconstruction_report.txt")
+            if os.path.isfile(rep_file):
+                try:
+                    with open(rep_file, "a", encoding="utf-8") as rf:
+                        rf.write(
+                            f"\n[3DGS TRAINING COMPLETED]\n"
+                            f"   * Date & Time:       {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"   * Training Engine:   {args.engine}\n"
+                            f"   * Exported Model:    {trained_model}\n"
+                            f"   * Final Iterations:  {args.iterations:,}\n"
+                            f"   * Max Gaussians:     {max_g_str}\n"
+                            f"   * Log File:          {log_display_name}\n"
+                            f"   * Log Location:      {log_display_path}\n"
+                            f"======================================================================\n"
+                        )
+                    print(f"Updated reconstruction report: {rep_file}")
+                except Exception as e:
+                    print(f"[NOTE] Could not update {rep_file}: {e}")
+
+        # 2. Always generate standalone training_report.txt in out_models
+        try:
+            train_report_file = os.path.join(out_models, "training_report.txt")
+            train_report_content = [
+                "======================================================================",
+                "                         3DGS TRAINING REPORT                         ",
+                "======================================================================",
+                f" Date & Time:          {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f" Log File:             {log_display_name}",
+                f" Log Location:         {log_display_path}",
+                f" Dataset Source:       {target_3dgs}",
+                f" Training Engine:      {args.engine}",
+                f" Iterations:           {args.iterations:,}",
+                f" Max Gaussians:        {max_g_str}",
+                f" Exported Model:       {trained_model}",
+                "======================================================================",
+            ]
+            with open(train_report_file, "w", encoding="utf-8") as tf:
+                tf.write("\n".join(train_report_content) + "\n")
+            print(f"Saved training report: {train_report_file}")
+        except Exception as e:
+            print(f"[NOTE] Could not write training report: {e}")
+
+        # 3. Archive session log into out_models and candidate directories
+        if log_path and os.path.isfile(log_path):
+            for dest_folder in set([out_models] + candidate_report_dirs):
+                try:
+                    dest_log = os.path.join(dest_folder, log_name if log_name else "abu_train_session.log")
+                    if os.path.abspath(log_path) != os.path.abspath(dest_log):
+                        shutil.copy2(log_path, dest_log)
+                        print(f"Archived session log copy to: {dest_log}")
+                except Exception:
+                    pass
+
     except Exception as e:
         print(f"\n[CRITICAL ERROR] 3DGS Training failed: {e}")
         sys.exit(1)

@@ -227,6 +227,8 @@ def parse_run_report(run_dir: str) -> Dict[str, str]:
     meta = {
         "engine": "Unknown",
         "date": "Unknown",
+        "log_file": "N/A",
+        "log_location": "N/A",
         "dataset": "",
         "photos": "0",
         "registered": "0",
@@ -249,6 +251,10 @@ def parse_run_report(run_dir: str) -> Dict[str, str]:
                 line = raw_line.strip().lstrip("*").strip()
                 if "date & time:" in line.lower():
                     meta["date"] = line.split(":", 1)[1].strip()
+                elif "log file:" in line.lower():
+                    meta["log_file"] = line.split(":", 1)[1].strip()
+                elif "log location:" in line.lower():
+                    meta["log_location"] = line.split(":", 1)[1].strip()
                 elif "photogrammetry engine:" in line.lower():
                     meta["engine"] = line.split(":", 1)[1].strip()
                 elif "dataset source:" in line.lower():
@@ -608,12 +614,16 @@ def main():
         date_str = report_meta.get("date", "Recent Alignment")
         tag_status = "🟢 Current Latest Run" if run_name == run_names[0] else "📁 Previous Run"
 
+        log_f = report_meta.get("log_file", "N/A")
+        log_row = f"| **Log File** | `{log_f}` |\n" if (log_f and log_f != "N/A") else ""
+
         info_card.content = (
             f"**Status**: {tag_status}\n\n"
             f"| Attribute | Value |\n"
             f"| :--- | :--- |\n"
             f"| **Engine** | `{eng}` |\n"
             f"| **Timestamp** | `{date_str}` |\n"
+            f"{log_row}"
             f"| **Cameras** | **{len(cameras)} tracked** ({cam_source_label}) |\n"
             f"| **3D Points** | **{inlier_pts:,}** / {total_pts:,} vertices ({ply_label}) |\n"
             f"| **Folder** | `{os.path.basename(run_path)}` |\n\n"
