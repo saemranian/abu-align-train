@@ -292,15 +292,19 @@ def predict_tracks_in_chunks(
         fine_pred_track, _, pred_vis, pred_score = track_predictor(
             images_feed, split_points, fmaps=fmaps_feed, fine_tracking=fine_tracking, fine_chunk=fine_chunk
         )
-        fine_pred_track_list.append(fine_pred_track)
-        pred_vis_list.append(pred_vis)
-        pred_score_list.append(pred_score)
+        fine_pred_track_list.append(fine_pred_track.cpu())
+        pred_vis_list.append(pred_vis.cpu())
+        if pred_score is not None:
+            pred_score_list.append(pred_score.cpu())
+        del fine_pred_track, pred_vis, pred_score
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Concatenate the results from all splits
     fine_pred_track = torch.cat(fine_pred_track_list, dim=2)
     pred_vis = torch.cat(pred_vis_list, dim=2)
 
-    if pred_score is not None:
+    if pred_score_list:
         pred_score = torch.cat(pred_score_list, dim=2)
     else:
         pred_score = None

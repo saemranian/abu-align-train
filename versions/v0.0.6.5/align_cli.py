@@ -511,7 +511,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
     cached_neural = None
     if use_cache:
-        cached_neural = load_neural_cache(cache_root, cache_key, device=device, dtype=dtype)
+        cached_neural = load_neural_cache(cache_root, cache_key, device="cpu", dtype=dtype)
 
     points_rgb = None
     images = None
@@ -537,7 +537,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         # Load RGB points efficiently without GPU bloat
         cached_imgs = cached_neural.get("images")
         if cached_imgs is not None:
-            images = cached_imgs
+            images = cached_imgs.to(device) if use_ba else cached_imgs
             points_rgb = (images.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
         else:
             c_resized, c_coord, c_rgb, _ = load_and_preprocess_vggt_images(
@@ -550,6 +550,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 del c_resized
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+
+        del cached_neural
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     elif num_frames > 48 and args.auto_chunk:
         user_chunk = getattr(args, "chunk_size", None)
@@ -944,6 +948,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         else:
             print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_count_str}, {max_query_pts} pts/frame, fine_tracking=False]...")
             from vggt.dependency.track_predict import predict_tracks
+            should_augment = (not is_fast) and (num_frames <= 48)
             with torch.no_grad():
                 pred_tracks, pred_vis_scores, pred_confs, points_3d_ba, points_rgb_ba = predict_tracks(
                     images,
@@ -954,6 +959,8 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     query_frame_num=query_frames,
                     keypoint_extractor="aliked+sp",
                     fine_tracking=False,
+                    complete_non_vis=should_augment,
+                    max_augment_queries=2 if should_augment else 0,
                 )
                 torch.cuda.empty_cache()
 
@@ -984,7 +991,12 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         print(f"      * Initializing PyCOLMAP with {cam_model_type} camera model (shared_camera={args.shared_camera}, max_reproj_error={effective_reproj_thresh:.1f}px)...")
         
         # Adaptive min inliers per frame based on track distribution to prevent dropping non-contiguous frames
-        min_inliers = max(8, min(24, int(track_mask.sum(1).min()))) if track_mask.ndim > 1 else 16
+        tracked_counts = track_mask.sum(1) if track_mask.ndim > 1 else np.array([16])
+        valid_inlier_frames = tracked_counts[tracked_counts > 0]
+        if len(valid_inlier_frames) > 0:
+            min_inliers = max(6, min(24, int(np.median(valid_inlier_frames) * 0.25)))
+        else:
+            min_inliers = 6
         image_shapes = original_coords[:, -2:].cpu().numpy() if isinstance(original_coords, torch.Tensor) else original_coords[:, -2:]
         cam_image_size = np.array([images.shape[-1], images.shape[-2]])
 

@@ -21,6 +21,7 @@ def predict_tracks(
     max_points_num=163840,
     fine_tracking=True,
     complete_non_vis=True,
+    max_augment_queries=0,
 ):
     """
     Predict tracks for the given images and masks.
@@ -114,7 +115,7 @@ def predict_tracks(
         pred_points_3d.append(pred_point_3d)
         pred_colors.append(pred_color)
 
-    if complete_non_vis:
+    if complete_non_vis and max_augment_queries > 0:
         pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, pred_colors = _augment_non_visible_frames(
             pred_tracks,
             pred_vis_scores,
@@ -132,6 +133,7 @@ def predict_tracks(
             min_vis=500,
             non_vis_thresh=0.1,
             device=device,
+            max_augment_queries=max_augment_queries,
         )
 
     pred_tracks = np.concatenate(pred_tracks, axis=1)
@@ -242,6 +244,10 @@ def _forward_on_query(
     pred_track = pred_track.detach().squeeze(0).float().cpu().numpy()
     pred_vis = pred_vis.detach().squeeze(0).float().cpu().numpy()
 
+    del images_feed, fmaps_feed
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return pred_track, pred_vis, pred_conf, pred_point_3d, pred_color
 
 
@@ -263,34 +269,19 @@ def _augment_non_visible_frames(
     min_vis: int = 500,
     non_vis_thresh: float = 0.1,
     device: torch.device = None,
+    max_augment_queries: int = 2,
 ):
     """
     Augment tracking for frames with insufficient visibility.
-
-    Args:
-        pred_tracks: List of numpy arrays containing predicted tracks.
-        pred_vis_scores: List of numpy arrays containing visibility scores.
-        pred_confs: List of numpy arrays containing confidence scores.
-        pred_points_3d: List of numpy arrays containing 3D points.
-        pred_colors: List of numpy arrays containing point colors.
-        images: Tensor of shape [S, 3, H, W] containing the input images.
-        conf: Tensor of shape [S, 1, H, W] containing confidence scores
-        points_3d: Tensor containing 3D points
-        fmaps_for_tracker: Feature maps for the tracker
-        keypoint_extractors: Initialized feature extractors
-        tracker: VGG-SFM tracker
-        max_points_num: Maximum number of points to process at once
-        fine_tracking: Whether to use fine tracking
-        min_vis: Minimum visibility threshold
-        non_vis_thresh: Non-visibility threshold
-        device: Device to use for computation
-
-    Returns:
-        Updated pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, and pred_colors lists.
+    Bounded by max_augment_queries to prevent infinite / marathon loops on large scans.
     """
+    if max_augment_queries <= 0:
+        return pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, pred_colors
+
     last_query = -1
     final_trial = False
     cur_extractors = keypoint_extractors  # may be replaced on the final trial
+    augment_count = 0
 
     while True:
         # Visibility per frame
@@ -303,14 +294,25 @@ def _augment_non_visible_frames(
         if len(non_vis_frames) == 0:
             break
 
-        print("Processing non visible frames:", non_vis_frames)
+        # In long camera trajectories (>20 non-co-visible frames), visibility is local, not global.
+        # Avoid looping through hundreds of unlinked frames sequentially.
+        if len(non_vis_frames) > 20:
+            print(f"      * [Deep Tracking] Scene exhibits open trajectory co-visibility ({len(non_vis_frames)} frames out of view from initial queries); proceeding with anchor tracks to avoid redundant passes.")
+            break
+
+        if augment_count >= max_augment_queries:
+            print(f"      * [Deep Tracking] Reached max query augmentation limit ({max_augment_queries}); proceeding to bundle adjustment.")
+            break
+        augment_count += 1
+
+        print(f"Processing non visible frames ({len(non_vis_frames)} remaining, pass {augment_count}/{max_augment_queries}):", non_vis_frames)
 
         # Decide the frames & extractor for this round
         if non_vis_frames[0] == last_query:
-            # Same frame failed twice - final "all-in" attempt
+            # Same frame failed twice - final attempt (strictly bounded)
             final_trial = True
             cur_extractors = initialize_feature_extractors(2048, extractor_method="sp+sift+aliked", device=device)
-            query_frame_list = non_vis_frames  # blast them all at once
+            query_frame_list = non_vis_frames[:max_augment_queries]
         else:
             query_frame_list = [non_vis_frames[0]]  # Process one at a time
 
@@ -335,6 +337,9 @@ def _augment_non_visible_frames(
             pred_confs.append(new_conf)
             pred_points_3d.append(new_point_3d)
             pred_colors.append(new_color)
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         if final_trial:
             break  # Stop after final attempt

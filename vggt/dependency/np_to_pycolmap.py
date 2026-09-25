@@ -69,9 +69,14 @@ def batch_np_matrix_to_pycolmap(
 
     assert masks is not None
 
-    if masks.sum(1).min() < min_inlier_per_frame:
-        print(f"Not enough inliers per frame, skip BA.")
-        return None, None
+    inlier_counts_per_frame = masks.sum(1)
+    frames_with_inliers = int((inlier_counts_per_frame >= min_inlier_per_frame).sum())
+    if frames_with_inliers < 2:
+        # Fallback to lower inlier threshold if needed
+        frames_with_inliers = int((inlier_counts_per_frame >= max(4, min_inlier_per_frame // 2)).sum())
+        if frames_with_inliers < 2:
+            print(f"Not enough frames with inliers for BA (need >= 2 frames, found {frames_with_inliers}), skip BA.")
+            return None, None
 
     # Reconstruction object, following the format of PyCOLMAP/COLMAP
     reconstruction = pycolmap.Reconstruction()
