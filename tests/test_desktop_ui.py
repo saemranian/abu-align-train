@@ -227,6 +227,45 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.app.progress_bar["value"], 100)
         self.assertEqual(self.app.pct_lbl.cget("text"), "100.0%")
 
+    def test_vggt_omega_vs_ace0_telemetry_disambiguation(self):
+        """Verify VGGT-Omega neural batch inference is never mislabeled as ACE0 Scene MLP."""
+        # 1. VGGT-Omega Batch Inference
+        self.app.engine_var.set("vggt_omega")
+        self.app.output_queue.put("[TELEMETRY:STAGE3] batch=1 total=12 pct=4.2")
+        self.app._check_queue()
+        text = self.app.telemetry_lbl.cget("text")
+        self.assertIn("Neural Batch Inference", text)
+        self.assertIn("[1/12]", text)
+        self.assertNotIn("ACE0", text)
+        self.assertNotIn("Loss:", text)
+        self.assertEqual(self.app.active_stage_idx, 3)
+
+        # 2. VGGT-Omega Multi-View Tracking
+        self.app.output_queue.put("[TELEMETRY:STAGE5] query=1 total=3 frame=0 pct=33.3 eta_sec=45")
+        self.app._check_queue()
+        text5 = self.app.telemetry_lbl.cget("text")
+        self.assertIn("Multi-View Tracking", text5)
+        self.assertIn("[Query 1/3, Frame #0]", text5)
+        self.assertIn("0m 45s", self.app.eta_lbl.cget("text"))
+        self.assertEqual(self.app.active_stage_idx, 4)
+
+        # 3. ACE0 Structured Telemetry
+        self.app.engine_var.set("acezero")
+        self.app.output_queue.put("[TELEMETRY:STAGE3] pct=12.5 iter=1000 total=8000 loss=0.123 inliers=85.0")
+        self.app._check_queue()
+        ace_text = self.app.telemetry_lbl.cget("text")
+        self.assertIn("ACE0 Scene MLP", ace_text)
+        self.assertIn("[1000/8000]", ace_text)
+        self.assertIn("Loss: 0.123", ace_text)
+        self.assertIn("Inliers: 85.0%", ace_text)
+
+        # 4. ACE0 Raw Iteration Telemetry
+        self.app.output_queue.put("Iteration: 500 | 8000 / Epoch 001 ... Loss: 0.234 ... inliers: 75.0%")
+        self.app._check_queue()
+        raw_text = self.app.telemetry_lbl.cget("text")
+        self.assertIn("ACE0 Scene MLP", raw_text)
+        self.assertIn("[500/8000]", raw_text)
+
 
 if __name__ == "__main__":
     unittest.main()

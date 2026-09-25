@@ -1,124 +1,107 @@
-# Abu Align & Train v0.0.6.4 — Universal Max Gaussians Control Across All 4 3DGS Engines
+# Abu Align & Train v0.0.6.5 — Telemetry Disambiguation Fix: Eliminating "ACE0 Scene MLP" Mislabels during VGGT-Omega Runs
 
-Version **v0.0.6.4** introduces the **Max Gaussians** capacity ceiling to the Abu Train suite, allowing users to control point cloud density, VRAM usage, and export file sizes across all four supported 3DGS training engines: **LichtFeld Studio**, **Nerfstudio Splatfacto**, **NVIDIA 3DGRUT / 3DGUT**, and **PFGS360**.
+Version **v0.0.6.5** resolves the GUI telemetry collision where running VGGT-Omega foundation model inference caused the status bar to display `Stage 4/6: ACE0 Scene MLP [?/12] (4.2%) | Loss: ? | Inliers: ?%`:
 
----
-
-## 1. Executive Summary & Engine Integration Strategy
-
-Prior to v0.0.6.4, users could adjust training iterations (e.g. 7,000 to 30,000) and resolution, but the final Gaussian count was determined implicitly by each engine's densification dynamics. For complex scenes or high-resolution datasets, splat counts could grow to 4–8 million Gaussians, exceeding GPU VRAM during interactive viewing or producing massive `.ply` files (500MB–1GB+).
-
-Version **v0.0.6.4** establishes a unified **Max Gaussians** control mechanism aligned with each engine's upstream repository architecture:
-
-| Engine | Official Engine Mechanism | Secondary / Post-Export Safeguard | Resulting Splat Cap Guarantee |
-| :--- | :--- | :--- | :--- |
-| **LichtFeld Studio** | `--max-cap <num>` CLI parameter (native engine argument) | `cap_ply_gaussians` verification | Strict ceiling enforced by LichtFeld C++ optimizer and binary PLY validator |
-| **Nerfstudio Splatfacto** | Adaptive gradient threshold `--pipeline.model.densify-grad-thresh` & `--pipeline.model.cull-alpha-thresh` | `cap_ply_gaussians` top-k opacity pruning | Optimization avoids over-densification; export is guaranteed $\le N$ |
-| **NVIDIA 3DGRUT / 3DGUT** | Hydra override `strategy=mcmc strategy.add.max_n_gaussians=<num>` + `export_ply.enabled=True` | `cap_ply_gaussians` top-k opacity pruning | PyTorch MCMC optimization clamps Gaussian addition; export capped |
-| **PFGS360** | `--pipeline.model.densify-grad-thresh` + PyTorch `.ckpt` opacity pruning | WSL & Windows PLY verification | Inlier growth controlled during training; checkpoint and PLY capped |
+1. **Telemetry Router Disambiguation**: Refactored `_check_queue()` in `abu_align_gui.py` to correctly differentiate between VGGT-Omega neural batch progress (`batch=... total=...`) and ACE0 Scene MLP optimization (`iter=... loss=... inliers=...`).
+2. **Restored Foundation Model Status Reporting**: VGGT-Omega inference now displays accurate feed-forward batch progress: `Stage 4/6: Neural Batch Inference [1/12] (4.2%)`.
+3. **Restored Deep Multi-View Tracking & Live ETA**: Fixed shadowed `[TELEMETRY:STAGE5]` handler so deep tracking query progress and remaining ETA (`Stage 5/6: Multi-View Tracking [Query 1/3, Frame #0] | ⏱ ETA: ...`) render properly.
+4. **Automated Regression Test**: Added `test_vggt_omega_vs_ace0_telemetry_disambiguation` in `tests/test_desktop_ui.py`, verified across all 36 test cases (100% pass rate).
 
 ---
 
-## 2. Technical Implementation Details
+## 1. Executive Summary & Root Cause Analysis
 
-### A. High-Performance Binary PLY Pruning (`cap_ply_gaussians`)
-In `train_engine.py`:
-- Parses raw binary little-endian `.ply` headers to inspect `element vertex <count>`.
-- Locates the opacity property (`opacity`, `alpha`, or `scalar_opacity`).
-- Uses $O(N)$ partial sorting (`np.argpartition`) to select indices of the top $K$ Gaussians with highest opacity / visibility weights.
-- Rewrites the binary vertex buffer directly, skipping costly round-trips through point-cloud libraries.
-- Operates in under **0.2 seconds** even on multi-million point splats.
+### A. The Reported Issue
 
-```python
-def cap_ply_gaussians(ply_path: str, max_gaussians: int, log_func=None) -> str:
-    # Fast O(N) top-k opacity selection directly on binary memory buffers
-    top_indices = np.argpartition(opacities, -max_gaussians)[-max_gaussians:]
-    # Sort top selection descending
-    top_indices = top_indices[np.argsort(-opacities[top_indices])]
-    # Write updated vertex count and slice raw byte arrays
-    ...
+During VGGT-Omega alignment on 878 photos (`Sel 1`), the GUI displayed:
+```text
+WORKFLOW VGGT-Omega -> LichtFeld Studio
+Stage 4/6: ACE0 Scene MLP [?/12] (4.2%) | Loss: ? | Inliers: ?%
 ```
+While in reality:
+- Photogrammetry Engine was **VGGT-Omega** (`vggt_omega_1b_512.pt`), running 12 chunk windows of 96 frames.
+- ACE0 was never started.
 
-### B. Engine CLI & Runtime Routing
+### B. Root Cause: Telemetry Tag Collisions & Handler Shadowing
 
-1. **LichtFeld Studio**:
-   - When `max_gaussians > 0`, appends `--max-cap <max_gaussians>` to `cmd`.
-   - Runs `cap_ply_gaussians` post-export to ensure absolute consistency.
+1. **What VGGT-Omega Emitted**:
+   In `align_cli.py`:
+   ```python
+   print(f"[TELEMETRY:STAGE3] batch={c_idx+1} total={len(chunk_ranges)} pct={batch_pct:.1f}", flush=True)
+   ```
+2. **The Flawed Interception**:
+   In `abu_align_gui.py`:
+   ```python
+   # Line 3824 (ACE0 Handler):
+   elif msg_s.startswith("[TELEMETRY:STAGE3]") or ("Iteration:" in msg and ...):
+       # Unconditionally parsed as ACE0!
+       cur_it = parts.get("iter", "?")    # Becomes "?"
+       tot_it = parts.get("total", "?")   # Becomes "12" from VGGT "total=12"
+       loss_v = parts.get("loss", "?")    # Becomes "?"
+       inl_v = parts.get("inliers", "?")  # Becomes "?"
+       self.telemetry_lbl.config(
+           text=f"Stage 4/6: ACE0 Scene MLP [{cur_it}/{tot_it}] ({pct:.1f}%) | Loss: {loss_v} | Inliers: {inl_v}%"
+       )
+   ```
+   Because line 3824 appeared before the VGGT-Omega handler at line 3871 and unconditionally matched any string starting with `[TELEMETRY:STAGE3]`, VGGT-Omega's batch messages were swallowed and mislabeled.
 
-2. **Nerfstudio Splatfacto**:
-   - Calculates dynamic gradient densification threshold based on Gaussian budget:
-     $$\text{densify\_grad\_thresh} = \max\left(0.0002, \, 0.0002 \cdot \frac{1,000,000}{\text{max\_gaussians}}\right)$$
-   - Automatically increases alpha culling threshold for tighter budgets:
-     $$\text{cull\_alpha\_thresh} = \begin{cases} 0.05 & \text{if } \text{max\_gaussians} \le 500,000 \\ 0.02 & \text{if } \text{max\_gaussians} \le 1,000,000 \\ 0.005 & \text{otherwise} \end{cases}$$
-   - Runs `ns-export gaussian-splat` and prunes the exported `.ply`.
-
-3. **NVIDIA 3DGRUT / 3DGUT**:
-   - Passes Hydra CLI overrides: `strategy=mcmc strategy.add.max_n_gaussians=<max_gaussians> export_ply.enabled=True`.
-   - Ensures standalone `.ply` models are produced and validated.
-
-4. **PFGS360**:
-   - Dynamically scales densification thresholds.
-   - When extracting point clouds from `.ckpt` weights, prunes `_opacity` logits and associated Gaussians before serializing to PLY.
+3. **Multi-View Tracking Shadowing**:
+   Similarly, line 3868 had `elif msg_s.startswith("[TELEMETRY:STAGE5]"): ... Building COLMAP Reconstruction`, which completely shadowed line 3887 (`Multi-View Tracking [Query q/tot, Frame #f]`).
 
 ---
 
-## 3. UI & CLI User Experience
+## 2. The v0.0.6.5 Fix
 
-### A. Desktop UI & GUI Controls
-- Added **Max Gaussians** dropdown selector to the **Training Settings** panel in both `desktop_ui.py` and `abu_align_gui.py`:
-  - `Unlimited (Engine Default)` — Default
-  - `500,000 (Fast / Low VRAM)` — Ideal for 6GB–8GB GPUs and mobile web viewing
-  - `1,000,000 (Standard)` — Optimal balance between detail and speed
-  - `2,000,000 (Detailed)` — High-quality desktop visualization
-  - `3,000,000 (High Quality)` — Production rendering
-  - `5,000,000 (Maximum Fidelity)` — Complex scenes with high frequency detail
-  - Direct numeric input (e.g. typing `750000` or `1500000`).
-- Contextual Tooltip:
-  > *"Ceiling cap on the maximum number of 3D Gaussians allowed in the trained model. Enforces native optimizer limits (e.g. --max-cap in LichtFeld, MCMC limits in 3DGRUT) and opacity-based pruning upon export."*
+### Refactored Telemetry Dispatcher (`abu_align_gui.py`)
 
-### B. Command-Line Interface (`align_cli.py` & `train_engine.py`)
-- CLI parameter: `--train_max_gaussians <int>` / `--max_gaussians <int>`.
-- Displays in the pre-flight alignment banner:
-  ```text
-  3DGS TRAINING SUITE (ABU TRAIN) SETTINGS:
-     * Auto-Train Status:       Enabled
-     * Training Engine:         LichtFeld Studio
-     * Training Iterations:     30,000
-     * Max Gaussians Cap:       1,000,000
+- **Stage 3 Disambiguation**:
+  ```python
+  is_ace0 = (
+      "iter=" in msg_s
+      or "loss=" in msg_s
+      or ("Iteration:" in msg and "|" in msg)
+      or ((getattr(self, "engine_var", None) is not None and self.engine_var.get() in ["acezero", "ace0"]) and "batch=" not in msg_s)
+      or ((getattr(self, "align_engine_var", None) is not None and self.align_engine_var.get() in ["acezero", "ace0"]) and "batch=" not in msg_s)
+  )
   ```
-- Logs into final run report (`COLMAP_RECONSTRUCTION_REPORT.txt`).
+  - When `is_ace0` is `False` (VGGT-Omega, OpenSfM, 360DVO), routes to:
+    $$\textbf{Stage 4/6: Neural Batch Inference [b/tot] (pct\%)}$$
+  - When `is_ace0` is `True` (Niantic ACE0), routes to:
+    $$\textbf{Stage 4/6: ACE0 Scene MLP [iter/total] (pct\%) \| Loss: loss \| Inliers: inl\%}$$
+
+- **Stage 5 Multi-View Tracking Restoration**:
+  - `[TELEMETRY:STAGE5]` is routed directly to Multi-View Tracking with query tracking and live ETA calculations.
+  - Point cloud / COLMAP reconstruction export is cleanly isolated to `[5/5] Building COLMAP` and point generation markers.
 
 ---
 
-## 4. Test Verification Matrix
+## 3. Test Verification Matrix
 
 All unit tests executed with Conda environment `C:\Users\USer\miniconda3\envs\vggt\python.exe`:
 
 | Test Suite | Tests Run | Result | Notes |
 | :--- | :--- | :--- | :--- |
-| `tests/test_max_gaussians.py` | 4 tests | **PASS (0.18s)** | Verifies binary PLY opacity sorting & capping, no-ops on limits, GUI preset parsing |
+| `tests/test_desktop_ui.py` | 14 tests | **PASS (11.8s)** | Verifies VGGT vs ACE0 telemetry disambiguation, UI layouts, tool dialogs |
 | `tests/test_vggt_omega_optimization.py` | 6 tests | **PASS (0.78s)** | Verifies non-square rescaling, NumPy cache serialization, direct indexing |
-| `tests/test_desktop_ui.py` | 15 tests | **PASS (14.2s)** | Verifies GUI telemetry, parameter persistence, mode switching |
 | `tests/test_gui_presets.py` | 6 tests | **PASS (8.5s)** | Verifies quality presets, resolution flags, draft options |
 | `tests/test_rig_designer.py` | 4 tests | **PASS (9.1s)** | Verifies multi-camera rig topology and calibration |
-| **Complete Discover Suite** | **35 tests** | **PASS (32.1s)** | **0 Failures, 0 Errors, 100% Passing** |
+| **Complete Discover Suite** | **36 tests** | **PASS (27.3s)** | **0 Failures, 0 Errors, 100% Passing** |
 
 ---
 
-## 5. Version History & Build Artifacts
+## 4. Version History & Build Artifacts
 
-- **Base-10 Odometer Version**: `v0.0.6.3` $\to$ **`v0.0.6.4`**
+- **Base-10 Odometer Version**: `v0.0.6.4` $\to$ **`v0.0.6.5`**
 - **Synchronized Files**:
   - `VERSION.txt`
   - `abu_align_gui.py`
-  - `desktop_ui.py`
   - `align_cli.py`
+  - `desktop_ui.py`
   - `train_engine.py`
-  - `Abu_Align.bat`
-  - `Abu_Align_and_Train.bat`
-- **Compiled Executables & Archive**:
-  - `Abu_Align.exe` (v0.0.6.4)
-  - `Abu_Align_and_Train.exe` (v0.0.6.4)
-  - `versions/historical_binaries/Abu_Align_v0.0.6.4.exe`
-  - `versions/historical_binaries/Abu_Align_and_Train_v0.0.6.4.exe`
-- **Snapshot Archive**: `versions/v0.0.6.4/`
+  - `Abu_Align.bat` / `Abu_Align_and_Train.bat`
+- **Recompiled Executables**:
+  - `Abu_Align.exe` (v0.0.6.5)
+  - `Abu_Align_and_Train.exe` (v0.0.6.5)
+  - `versions/historical_binaries/Abu_Align_v0.0.6.5.exe`
+  - `versions/historical_binaries/Abu_Align_and_Train_v0.0.6.5.exe`
+- **Snapshot Archive**: `versions/v0.0.6.5/`

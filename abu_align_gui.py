@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.6.4
+Abu Align & Train Version 0.0.6.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.6.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.6.5 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -3686,7 +3686,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.6.4 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.6.5 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3821,30 +3821,56 @@ class AbuAlignApp:
                                 self.telemetry_lbl.config(text=f"Stage 3/6: ACE0 Evaluating Candidate Seed #{seed_m.group(1)}...", fg="#38bdf8")
                             else:
                                 self.telemetry_lbl.config(text="Stage 3/6: ACE0 Candidate Seed Evaluation...", fg="#38bdf8")
-                    elif msg_s.startswith("[TELEMETRY:STAGE3]") or ("Iteration:" in msg and "|" in msg and ("ace_trainer" in msg or "ACE0" in msg or "Epoch" in msg)):
+                    # Stage 3 Telemetry: Neural Batch Inference (VGGT-Omega / OpenSfM / 360DVO) OR ACE0 Scene MLP
+                    elif (
+                        msg_s.startswith("[TELEMETRY:STAGE3]")
+                        or "Stage 3" in msg
+                        or ("Iteration:" in msg and "|" in msg and ("ace_trainer" in msg or "ACE0" in msg or "Epoch" in msg))
+                    ):
                         self._set_stage(3)
                         try:
-                            if msg_s.startswith("[TELEMETRY:STAGE3]"):
+                            # Disambiguate ACE0 Scene MLP vs VGGT-Omega / Foundation Inference
+                            is_ace0 = (
+                                "iter=" in msg_s
+                                or "loss=" in msg_s
+                                or ("Iteration:" in msg and "|" in msg)
+                                or ((getattr(self, "engine_var", None) is not None and self.engine_var.get() in ["acezero", "ace0"]) and "batch=" not in msg_s)
+                                or ((getattr(self, "align_engine_var", None) is not None and self.align_engine_var.get() in ["acezero", "ace0"]) and "batch=" not in msg_s)
+                            )
+                            if is_ace0:
+                                if msg_s.startswith("[TELEMETRY:STAGE3]"):
+                                    parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
+                                    pct = float(parts.get("pct", 0))
+                                    cur_it = parts.get("iter", "?")
+                                    tot_it = parts.get("total", "?")
+                                    loss_v = parts.get("loss", "?")
+                                    inl_v = parts.get("inliers", "?")
+                                else:
+                                    it_m = re.search(r"Iteration:\s*(\d+)\s*\|\s*(\d+).*Loss:\s*([\d\.]+).*inliers.*:\s*([\d\.]+)%", msg)
+                                    if it_m:
+                                        cur_it = int(it_m.group(1))
+                                        tot_it = int(it_m.group(2))
+                                        loss_v = it_m.group(3)
+                                        inl_v = it_m.group(4)
+                                        pct = (cur_it / max(1, tot_it)) * 100.0
+                                    else:
+                                        pct, cur_it, tot_it, loss_v, inl_v = 0, "?", "?", "?", "?"
+                                self.progress_bar["value"] = pct
+                                self.pct_lbl.config(text=f"{pct:5.1f}%")
+                                focal_str = f" | Focal: {getattr(self, '_last_ace_focal', '')}px" if hasattr(self, '_last_ace_focal') else ""
+                                self.telemetry_lbl.config(text=f"Stage 4/6: ACE0 Scene MLP [{cur_it}/{tot_it}] ({pct:.1f}%) | Loss: {loss_v} | Inliers: {inl_v}%{focal_str}", fg=self.accent_blue)
+                            else:
                                 parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
                                 pct = float(parts.get("pct", 0))
-                                cur_it = parts.get("iter", "?")
-                                tot_it = parts.get("total", "?")
-                                loss_v = parts.get("loss", "?")
-                                inl_v = parts.get("inliers", "?")
-                            else:
-                                it_m = re.search(r"Iteration:\s*(\d+)\s*\|\s*(\d+).*Loss:\s*([\d\.]+).*inliers.*:\s*([\d\.]+)%", msg)
-                                if it_m:
-                                    cur_it = int(it_m.group(1))
-                                    tot_it = int(it_m.group(2))
-                                    loss_v = it_m.group(3)
-                                    inl_v = it_m.group(4)
-                                    pct = (cur_it / max(1, tot_it)) * 100.0
+                                self.progress_bar["value"] = pct
+                                self.pct_lbl.config(text=f"{pct:5.1f}%")
+                                if parts.get("status") == "cache_hit":
+                                    self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)", fg="#60a5fa")
+                                    self.eta_lbl.config(text="Saved ~5-10 min")
                                 else:
-                                    pct, cur_it, tot_it, loss_v, inl_v = 0, "?", "?", "?", "?"
-                            self.progress_bar["value"] = pct
-                            self.pct_lbl.config(text=f"{pct:5.1f}%")
-                            focal_str = f" | Focal: {getattr(self, '_last_ace_focal', '')}px" if hasattr(self, '_last_ace_focal') else ""
-                            self.telemetry_lbl.config(text=f"Stage 4/6: ACE0 Scene MLP [{cur_it}/{tot_it}] ({pct:.1f}%) | Loss: {loss_v} | Inliers: {inl_v}%{focal_str}", fg=self.accent_blue)
+                                    b = parts.get("batch", "?")
+                                    tot = parts.get("total", "?")
+                                    self.telemetry_lbl.config(text=f"Stage 4/6: Neural Batch Inference [{b}/{tot}] ({pct:.1f}%)", fg=self.accent_blue)
                         except Exception:
                             pass
                     elif msg_s.startswith("[TELEMETRY:ACE_OPTICS]") or "Current Focal Length:" in msg:
@@ -3865,26 +3891,7 @@ class AbuAlignApp:
                             self.telemetry_lbl.config(text=f"Stage 5/6: ACE0 Camera Registration [{reg_pct:.1f}% Views Aligned]", fg="#a855f7")
                         except Exception:
                             pass
-                    elif msg_s.startswith("[TELEMETRY:STAGE5]") or any(k in msg for k in ["Stage 4", "Generating 3D points", "Predicting dense point", "Building pycolmap"]) or ("Loaded" in msg and "3D scene coordinates" in msg):
-                        self._set_stage(4)
-                        self.telemetry_lbl.config(text="Stage 5/6: Building COLMAP Reconstruction & Point Cloud...", fg="#a855f7")
-                    elif msg_s.startswith("[TELEMETRY:STAGE3]") or "Stage 3" in msg:
-                        self._set_stage(2)
-                        try:
-                            parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
-                            pct = float(parts.get("pct", 0))
-                            self.progress_bar["value"] = pct
-                            self.pct_lbl.config(text=f"{pct:5.1f}%")
-                            if parts.get("status") == "cache_hit":
-                                self.telemetry_lbl.config(text="⚡ [Smart Cache Hit] Neural Poses & 3D Points Loaded (Stage 3 & 4 Skipped)", fg="#60a5fa")
-                                self.eta_lbl.config(text="Saved ~5-10 min")
-                            else:
-                                b = parts.get("batch", "?")
-                                tot = parts.get("total", "?")
-                                self.telemetry_lbl.config(text=f"Stage 3/5: Neural Batch Inference [{b}/{tot}] ({pct:.1f}%)", fg=self.accent_blue)
-                        except Exception:
-                            pass
-                    elif msg_s.startswith("[TELEMETRY:STAGE5]") or "Stage 5" in msg:
+                    elif msg_s.startswith("[TELEMETRY:STAGE5]") or "Stage 5" in msg or ("Deep Multi-View Tracking" in msg and "Query" in msg):
                         self._set_stage(4)
                         try:
                             parts = dict(kv.split("=") for kv in msg_s.split()[1:] if "=" in kv)
@@ -3900,10 +3907,13 @@ class AbuAlignApp:
                                 f = parts.get("frame", "?")
                                 eta_s = float(parts.get("eta_sec", 0))
                                 eta_str = f"{int(eta_s//60)}m {int(eta_s%60):02d}s" if eta_s > 0 else "calculating..."
-                                self.telemetry_lbl.config(text=f"Stage 5/5: Multi-View Tracking [Query {q}/{tot}, Frame #{f}] ({pct:.1f}%)", fg="#a855f7")
+                                self.telemetry_lbl.config(text=f"Stage 5/6: Multi-View Tracking [Query {q}/{tot}, Frame #{f}] ({pct:.1f}%)", fg="#a855f7")
                                 self.eta_lbl.config(text=f"⏱ ETA: {eta_str}")
                         except Exception:
                             pass
+                    elif any(k in msg for k in ["[5/5] Building COLMAP", "Stage 4", "Generating 3D points", "Predicting dense point", "Building pycolmap"]) or ("Loaded" in msg and "3D scene coordinates" in msg):
+                        self._set_stage(4)
+                        self.telemetry_lbl.config(text="Stage 5/6: Building COLMAP Reconstruction & Point Cloud...", fg="#a855f7")
                     elif any(k in msg for k in ["[LichtFeld]", "[Nerfstudio]", "[3DGRUT]", "[PFGS360]", "[PFGS360-ERR]", "Stage 6", "Starting 3DGS", "pfgs360"]):
                         self._set_stage(5)
                         if hasattr(self, "save_finish_btn") and str(self.save_finish_btn["state"]) != tk.NORMAL and self.is_running:
@@ -4205,7 +4215,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.6.4 - {title}")
+        doc_win.title(f"Abu Align v0.0.6.5 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4483,7 +4493,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.6.4\n"
+            "Abu Align & Train - Version 0.0.6.5\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
