@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.6 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.6.7 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -593,8 +593,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         print(f"      * [Smart Cache] Cleared {n_cleared} cache items ({b_freed/(1024*1024):.1f} MB freed).")
 
     cached_neural = None
+    was_cached = False
     if use_cache:
         cached_neural = load_neural_cache(cache_root, cache_key, device="cpu", dtype=dtype)
+        if cached_neural is not None:
+            was_cached = True
 
     points_rgb = None
     images = None
@@ -635,6 +638,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     torch.cuda.empty_cache()
 
         del cached_neural
+        cached_neural = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -950,7 +954,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     print()
 
     # Save to neural cache if not already cached
-    if cached_neural is None and use_cache:
+    if not was_cached and use_cache:
         try:
             saved_dir = save_neural_cache(
                 cache_root,

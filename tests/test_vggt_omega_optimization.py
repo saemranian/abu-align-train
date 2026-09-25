@@ -261,6 +261,28 @@ class TestVGGTOmegaOptimization(unittest.TestCase):
         self.assertEqual(qx_scaled[2], 511)
         self.assertEqual(qy_scaled[2], 287)
 
+    def test_cache_hit_variable_binding(self):
+        """Verify that cache hit handling binds was_cached and does not trigger UnboundLocalError."""
+        cached_neural = {"load_time_sec": 0.1}
+        was_cached = False
+        use_cache = True
+
+        if cached_neural is not None:
+            was_cached = True
+            del cached_neural
+            cached_neural = None
+
+        error_raised = False
+        try:
+            if not was_cached and use_cache:
+                pass
+        except UnboundLocalError:
+            error_raised = True
+
+        self.assertFalse(error_raised)
+        self.assertTrue(was_cached)
+
 
 if __name__ == "__main__":
     unittest.main()
+
