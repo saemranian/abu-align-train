@@ -11,6 +11,7 @@ ready for multi-application export (COLMAP, Postshot/RealityCapture CSV, transfo
 
 import os
 import sys
+import re
 import time
 import subprocess
 import glob
@@ -164,7 +165,8 @@ def run_acezero_reconstruction(
 
     for idx, src_path in enumerate(image_paths):
         ext = Path(src_path).suffix.lower()
-        dst_name = f"{idx:05d}_{Path(src_path).stem}.jpg"
+        clean_stem = re.sub(r'[^\w\-]', '_', Path(src_path).stem)
+        dst_name = f"{idx:05d}_{clean_stem}.jpg"
         dst_path = stage_dir / dst_name
         needs_scale = False
         scale_val = 1.0
@@ -244,6 +246,9 @@ def run_acezero_reconstruction(
         wsl_acezero_dir = wsl_bridge.win_to_wsl_path(str(ACEZERO_DIR))
 
         bash_cmd = (
+            f"export PYTHONIOENCODING=utf-8 && "
+            f"export LC_ALL=C.UTF-8 && "
+            f"export LANG=C.UTF-8 && "
             f"export PYTHONPATH='{wsl_acezero_dir}:{wsl_acezero_dir}/dsacstar:$PYTHONPATH' && "
             f"export LD_LIBRARY_PATH='{wsl_bridge.WSL_CONDA_ENV}/lib/python3.10/site-packages/torch/lib:{wsl_bridge.WSL_CONDA_ENV}/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' && "
             f"cd '{wsl_acezero_dir}' && "
@@ -296,13 +301,20 @@ def run_acezero_reconstruction(
         ]
 
         log(f"      * Executing ACE0 mapping loop: {' '.join(cmd)}")
+        win_env = os.environ.copy()
+        win_env["PYTHONIOENCODING"] = "utf-8"
+        win_env["LC_ALL"] = "C.UTF-8"
+        win_env["LANG"] = "C.UTF-8"
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
-            cwd=str(ACEZERO_DIR)
+            cwd=str(ACEZERO_DIR),
+            env=win_env
         )
 
         while True:
