@@ -22,36 +22,55 @@ def predict_tracks(
     fine_tracking=True,
     complete_non_vis=True,
     max_augment_queries=0,
+    *,
+    window_size=32,
+    window_stride=24,
+    image_paths=None,
+    engine="vggt_omega",
+    preprocess_mode="max_size",
+    vggt_res=512,
+    img_load_res=1024,
 ):
     """
     Predict tracks for the given images and masks.
 
-    TODO: support non-square images
-    TODO: support masks
-
-
-    This function predicts the tracks for the given images and masks using the specified query method
-    and track predictor. It finds query points, and predicts the tracks, visibility, and scores for the query frames.
-
-    Args:
-        images: Tensor of shape [S, 3, H, W] containing the input images.
-        conf: Tensor of shape [S, 1, H, W] containing the confidence scores. Default is None.
-        points_3d: Tensor containing 3D points. Default is None.
-        masks: Optional tensor of shape [S, 1, H, W] containing masks. Default is None.
-        max_query_pts: Maximum number of query points. Default is 2048.
-        query_frame_num: Number of query frames to use. Default is 5.
-        keypoint_extractor: Method for keypoint extraction. Default is "aliked+sp".
-        max_points_num: Maximum number of points to process at once. Default is 163840.
-        fine_tracking: Whether to use fine tracking. Default is True.
-        complete_non_vis: Whether to augment non-visible frames. Default is True.
-
-    Returns:
-        pred_tracks: Numpy array containing the predicted tracks.
-        pred_vis_scores: Numpy array containing the visibility scores for the tracks.
-        pred_confs: Numpy array containing the confidence scores for the tracks.
-        pred_points_3d: Numpy array containing the 3D points for the tracks.
-        pred_colors: Numpy array containing the point colors for the tracks. (0, 255)
+    Supports both monolithic tracking (for <= 48 frames) and sliding-window zero-paging
+    tracking (for > 48 frames or large sequences up to thousands of frames).
     """
+    # Support list of image paths passed as images or image_paths
+    if image_paths is None and isinstance(images, (list, tuple)) and len(images) > 0 and isinstance(images[0], str):
+        image_paths = list(images)
+        images = None
+
+    if image_paths is not None:
+        num_frames = len(image_paths)
+    elif isinstance(images, torch.Tensor):
+        num_frames = images.shape[0]
+    else:
+        num_frames = 0
+
+    # Auto-dispatch to sliding-window mode for large scans or when images is not a monolithic GPU tensor
+    if num_frames > 48 or images is None:
+        return predict_tracks_windowed(
+            images=images,
+            conf=conf,
+            points_3d=points_3d,
+            masks=masks,
+            max_query_pts=max_query_pts,
+            query_frame_num=query_frame_num,
+            keypoint_extractor=keypoint_extractor,
+            max_points_num=max_points_num,
+            fine_tracking=fine_tracking,
+            complete_non_vis=complete_non_vis,
+            max_augment_queries=max_augment_queries,
+            window_size=window_size,
+            window_stride=window_stride,
+            image_paths=image_paths,
+            engine=engine,
+            preprocess_mode=preprocess_mode,
+            vggt_res=vggt_res,
+            img_load_res=img_load_res,
+        )
 
     device = images.device
     dtype = images.dtype
@@ -344,5 +363,186 @@ def _augment_non_visible_frames(
 
         if final_trial:
             break  # Stop after final attempt
+
+    return pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, pred_colors
+
+
+def predict_tracks_windowed(
+    images,
+    conf=None,
+    points_3d=None,
+    masks=None,
+    max_query_pts=1024,
+    query_frame_num=5,
+    keypoint_extractor="aliked+sp",
+    max_points_num=163840,
+    fine_tracking=False,
+    complete_non_vis=False,
+    max_augment_queries=0,
+    *,
+    window_size=32,
+    window_stride=24,
+    image_paths=None,
+    engine="vggt_omega",
+    preprocess_mode="max_size",
+    vggt_res=512,
+    img_load_res=1024,
+    device=None,
+    dtype=torch.float32,
+):
+    """
+    Sliding-Window Zero-Paging Multi-View Point Tracker.
+    Divides massive sequences (up to thousands of frames) into overlapping temporal windows.
+    Runs CoTracker within bounded windows (default 32 frames), preventing PCIe paging and VRAM exhaustion.
+    """
+    if device is None:
+        if isinstance(images, torch.Tensor):
+            device = images.device
+            dtype = images.dtype
+        else:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if image_paths is not None:
+        num_frames = len(image_paths)
+    elif isinstance(images, torch.Tensor):
+        num_frames = images.shape[0]
+    elif isinstance(images, (list, tuple)):
+        image_paths = list(images)
+        num_frames = len(image_paths)
+    else:
+        raise ValueError("Either images tensor or image_paths must be provided to predict_tracks_windowed")
+
+    # Generate overlapping windows
+    windows = []
+    start = 0
+    while start < num_frames:
+        end = min(start + window_size, num_frames)
+        windows.append((start, end))
+        if end == num_frames:
+            break
+        start += window_stride
+    num_windows = len(windows)
+
+    print(f"      * [Sliding Window Tracking] Initialized {num_windows} temporal windows (size={window_size}, stride={window_stride}) for {num_frames} views.")
+
+    # Initialize tracker and feature extractors once
+    tracker = build_vggsfm_tracker().to(device, dtype)
+    keypoint_extractors = initialize_feature_extractors(
+        max_query_pts, extractor_method=keypoint_extractor, device=device
+    )
+
+    all_pred_tracks = []
+    all_pred_vis = []
+    all_pred_confs = []
+    all_pred_pts3d = []
+    all_pred_colors = []
+
+    t_track_start = time.time()
+
+    # Pre-import image loader if loading from disk
+    image_loader = None
+    if image_paths is not None:
+        from align_cli import load_and_preprocess_vggt_images
+        image_loader = load_and_preprocess_vggt_images
+
+    # Normalize conf shape if needed: (N, H, W)
+    if conf is not None:
+        if isinstance(conf, torch.Tensor):
+            conf_np = conf.float().cpu().numpy()
+        else:
+            conf_np = conf
+        if conf_np.ndim == 4 and conf_np.shape[-1] == 1:
+            conf_np = conf_np.squeeze(-1)
+        elif conf_np.ndim == 4 and conf_np.shape[1] == 1:
+            conf_np = conf_np.squeeze(1)
+    else:
+        conf_np = None
+
+    if points_3d is not None:
+        if isinstance(points_3d, torch.Tensor):
+            pts3d_np = points_3d.float().cpu().numpy()
+        else:
+            pts3d_np = points_3d
+    else:
+        pts3d_np = None
+
+    for w_idx, (s, e) in enumerate(windows):
+        w_len = e - s
+        q_elapsed = time.time() - t_track_start
+        q_avg = q_elapsed / max(w_idx, 1)
+        q_eta = q_avg * (num_windows - w_idx) if w_idx > 0 else 0
+        eta_str = f" | ETA: {int(q_eta//60)}m {int(q_eta%60):02d}s" if w_idx > 0 else ""
+        pct = (w_idx / num_windows) * 100
+
+        print(f"[TELEMETRY:STAGE5] query={w_idx+1} total={num_windows} frame={s} pct={pct:.1f} eta_sec={int(q_eta)}", flush=True)
+        print(f"      * [Sliding Window Tracking] Window [{w_idx+1}/{num_windows}] (Frames {s}..{e-1}) - {pct:.1f}%{eta_str}...", flush=True)
+
+        # 1. Load window images on demand (Zero VRAM footprint outside window)
+        if image_loader is not None:
+            w_paths = image_paths[s:e]
+            win_imgs, _, win_rgb, _ = image_loader(
+                w_paths,
+                engine=engine,
+                preprocess_mode=preprocess_mode,
+                vggt_res=vggt_res,
+                img_load_res=img_load_res,
+                device=device,
+            )
+        else:
+            win_imgs = images[s:e].to(device)
+
+        with torch.no_grad():
+            fmaps_win = tracker.process_images_to_fmaps(win_imgs)
+
+        # 2. Determine query frame(s) within window
+        # Window start frame is always queried (local index 0 -> global frame s)
+        # For multi-pass or standard/ultra modes, also query middle frame to maximize track density
+        q_indices_local = [0]
+        if complete_non_vis and w_len > 12:
+            q_indices_local.append(w_len // 2)
+
+        conf_win = conf_np[s:e] if conf_np is not None else None
+        pts3d_win = pts3d_np[s:e] if pts3d_np is not None else None
+
+        for q_loc in q_indices_local:
+            with torch.no_grad():
+                pred_track, pred_vis, pred_conf, pred_pt3d, pred_color = _forward_on_query(
+                    q_loc,
+                    win_imgs,
+                    conf_win,
+                    pts3d_win,
+                    fmaps_win,
+                    keypoint_extractors,
+                    tracker,
+                    max_points_num,
+                    fine_tracking,
+                    device,
+                )
+
+            K = pred_track.shape[1]
+            full_track = np.zeros((num_frames, K, 2), dtype=np.float32)
+            full_vis = np.zeros((num_frames, K), dtype=np.float32)
+            full_track[s:e] = pred_track
+            full_vis[s:e] = pred_vis
+
+            all_pred_tracks.append(full_track)
+            all_pred_vis.append(full_vis)
+            if pred_conf is not None:
+                all_pred_confs.append(pred_conf)
+            if pred_pt3d is not None:
+                all_pred_pts3d.append(pred_pt3d)
+            if pred_color is not None:
+                all_pred_colors.append(pred_color)
+
+        # 3. Purge window tensors from GPU immediately
+        del win_imgs, fmaps_win
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    pred_tracks = np.concatenate(all_pred_tracks, axis=1) if all_pred_tracks else np.zeros((num_frames, 0, 2), dtype=np.float32)
+    pred_vis_scores = np.concatenate(all_pred_vis, axis=1) if all_pred_vis else np.zeros((num_frames, 0), dtype=np.float32)
+    pred_confs = np.concatenate(all_pred_confs, axis=0) if all_pred_confs else None
+    pred_points_3d = np.concatenate(all_pred_pts3d, axis=0) if all_pred_pts3d else None
+    pred_colors = np.concatenate(all_pred_colors, axis=0) if all_pred_colors else None
 
     return pred_tracks, pred_vis_scores, pred_confs, pred_points_3d, pred_colors

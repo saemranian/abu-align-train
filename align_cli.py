@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.6.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.7.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -623,19 +623,30 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         # Load RGB points efficiently without GPU bloat
         cached_imgs = cached_neural.get("images")
         if cached_imgs is not None:
-            images = cached_imgs.to(device) if use_ba else cached_imgs
+            images = cached_imgs.to(device) if (use_ba and num_frames <= 48) else cached_imgs
             points_rgb = (images.permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+            if num_frames > 48:
+                images = None
         else:
-            c_resized, c_coord, c_rgb, _ = load_and_preprocess_vggt_images(
-                image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
-            )
-            points_rgb = c_rgb
-            if use_ba:
-                images = c_resized
-            else:
+            if num_frames > 48:
+                # Zero-Paging: Load points_rgb on CPU; do not allocate monolithic GPU tensor for large scans
+                c_resized, c_coord, c_rgb, _ = load_and_preprocess_vggt_images(
+                    image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device="cpu"
+                )
+                points_rgb = c_rgb
                 del c_resized
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                images = None  # Sliding-window tracking will load images on demand per window
+            else:
+                c_resized, c_coord, c_rgb, _ = load_and_preprocess_vggt_images(
+                    image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
+                )
+                points_rgb = c_rgb
+                if use_ba:
+                    images = c_resized
+                else:
+                    del c_resized
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         del cached_neural
         cached_neural = None
@@ -866,7 +877,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                 all_depth_confs.append(c_conf[actual_overlap:])
                 all_rgb_uint8.append(c_rgb[actual_overlap:])
                 all_orig_coords.append(c_coord[actual_overlap:])
-                if use_ba and num_frames <= 200:
+                if use_ba and num_frames <= 48:
                     ba_images_list.append(c_resized[actual_overlap:].cpu())
 
                 prev_chunk_centers = c_centers
@@ -1006,9 +1017,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
     is_ultra = align_mode == "ultra"
     is_fast = align_mode == "fast"
 
-    # Zero-Paging Guard: Fallback to feedforward if images tensor was purged for large scans / low VRAM
-    if use_ba and images is None:
-        print("      * [NOTICE] High frame count or low VRAM mode active; using feedforward reconstruction (skipping Ceres BA).")
+    # Zero-Paging Guard: Fallback to feedforward only if neither images tensor nor image_paths are available
+    if use_ba and images is None and (image_paths is None or len(image_paths) == 0):
+        print("      * [NOTICE] High frame count or low VRAM mode active and no image paths found; using feedforward reconstruction (skipping Ceres BA).")
         use_ba = False
         align_mode = "none"
 
@@ -1078,9 +1089,10 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             print(f"      * Running Deep Multi-View Tracking [{align_mode.upper()} mode: {query_count_str}, {max_query_pts} pts/frame, fine_tracking=False]...")
             from vggt.dependency.track_predict import predict_tracks
             should_augment = (not is_fast) and (num_frames <= 48)
+            win_stride = 24 if is_fast else 16
             with torch.no_grad():
                 pred_tracks, pred_vis_scores, pred_confs, points_3d_ba, points_rgb_ba = predict_tracks(
-                    images,
+                    images if images is not None else image_paths,
                     conf=depth_conf,
                     points_3d=points_3d,
                     masks=None,
@@ -1090,6 +1102,13 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     fine_tracking=False,
                     complete_non_vis=should_augment,
                     max_augment_queries=2 if should_augment else 0,
+                    window_size=32,
+                    window_stride=win_stride,
+                    image_paths=image_paths,
+                    engine=engine,
+                    preprocess_mode=vggt_preprocess_mode,
+                    vggt_res=vggt_res,
+                    img_load_res=img_load_res,
                 )
                 torch.cuda.empty_cache()
 
@@ -1113,7 +1132,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         track_mask = pred_vis_scores > track_vis_thresh
 
         # Scale reprojection error threshold dynamically with canvas resolution
-        scale_res = images.shape[-1] / 512.0
+        img_canvas_w = images.shape[-1] if isinstance(images, torch.Tensor) else vggt_res
+        img_canvas_h = images.shape[-2] if isinstance(images, torch.Tensor) else vggt_res
+        scale_res = img_canvas_w / 512.0
         effective_reproj_thresh = reproj_err_thresh * scale_res
 
         cam_model_type = "OPENCV" if (args.lens_model == "brown" and not is_fast) else "PINHOLE"
@@ -1127,7 +1148,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         else:
             min_inliers = 6
         image_shapes = original_coords[:, -2:].cpu().numpy() if isinstance(original_coords, torch.Tensor) else original_coords[:, -2:]
-        cam_image_size = np.array([images.shape[-1], images.shape[-2]])
+        cam_image_size = np.array([img_canvas_w, img_canvas_h])
 
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap(
             points_3d_ba,

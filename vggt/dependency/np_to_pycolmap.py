@@ -55,10 +55,35 @@ def batch_np_matrix_to_pycolmap(
     reproj_mask = None
 
     if max_reproj_error is not None:
-        projected_points_2d, projected_points_cam = project_3D_points_np(points3d, extrinsics, intrinsics)
-        projected_diff = np.linalg.norm(projected_points_2d - tracks, axis=-1)
-        projected_points_2d[projected_points_cam[:, -1] <= 0] = 1e6
-        reproj_mask = projected_diff < max_reproj_error
+        if masks is not None and N > 48:
+            # High-efficiency sparse reprojection: only compute reprojection for observed candidate points
+            f_idx, p_idx = np.nonzero(masks)
+            if len(f_idx) > 0:
+                pts_sub = points3d[p_idx]
+                R_sub = extrinsics[f_idx, :3, :3]
+                t_sub = extrinsics[f_idx, :3, 3]
+                pts_cam = np.einsum('kij,kj->ki', R_sub, pts_sub) + t_sub
+                z = pts_cam[:, 2]
+                valid_z = z > 1e-4
+                uv = pts_cam[:, :2] / np.where(valid_z[:, None], z[:, None], 1.0)
+                K_sub = intrinsics[f_idx]
+                fx = K_sub[:, 0, 0]
+                fy = K_sub[:, 1, 1]
+                cx = K_sub[:, 0, 2]
+                cy = K_sub[:, 1, 2]
+                u_proj = fx * uv[:, 0] + cx
+                v_proj = fy * uv[:, 1] + cy
+                proj_2d = np.stack([u_proj, v_proj], axis=-1)
+                obs_2d = tracks[f_idx, p_idx]
+                err = np.linalg.norm(proj_2d - obs_2d, axis=-1)
+                reproj_valid = valid_z & (err < max_reproj_error)
+                reproj_mask = np.zeros_like(masks, dtype=bool)
+                reproj_mask[f_idx, p_idx] = reproj_valid
+        else:
+            projected_points_2d, projected_points_cam = project_3D_points_np(points3d, extrinsics, intrinsics)
+            projected_diff = np.linalg.norm(projected_points_2d - tracks, axis=-1)
+            projected_points_2d[projected_points_cam[:, -1] <= 0] = 1e6
+            reproj_mask = projected_diff < max_reproj_error
 
     if masks is not None and reproj_mask is not None:
         masks = np.logical_and(masks, reproj_mask)
@@ -92,6 +117,9 @@ def batch_np_matrix_to_pycolmap(
         reconstruction.add_point3D(points3d[vidx], pycolmap.Track(), rgb)
 
     num_points3D = len(valid_idx)
+    valid_pts_xyz = points3d[valid_idx]
+    pts_within_range = (valid_pts_xyz < max_points3D_val).all(axis=-1)
+
     cameras_by_shape = {}
     # frame idx
     for fidx in range(N):
@@ -118,25 +146,20 @@ def batch_np_matrix_to_pycolmap(
         )  # Rot and Trans
 
         points2D_list = []
-
         point2D_idx = 0
 
-        # NOTE point3D_id start by 1
-        for point3D_id in range(1, num_points3D + 1):
-            original_track_idx = valid_idx[point3D_id - 1]
+        # Vectorized candidate selection: only loop over active valid points in this frame
+        f_mask = masks[fidx, valid_idx] & pts_within_range
+        active_sub_indices = np.nonzero(f_mask)[0]
 
-            if (reconstruction.points3D[point3D_id].xyz < max_points3D_val).all():
-                if masks[fidx][original_track_idx]:
-                    # It seems we don't need +0.5 for BA
-                    point2D_xy = tracks[fidx][original_track_idx]
-                    # Please note when adding the Point2D object
-                    # It not only requires the 2D xy location, but also the id to 3D point
-                    points2D_list.append(pycolmap.Point2D(point2D_xy, point3D_id))
-
-                    # add element
-                    track = reconstruction.points3D[point3D_id].track
-                    track.add_element(fidx + 1, point2D_idx)
-                    point2D_idx += 1
+        for sub_idx in active_sub_indices:
+            point3D_id = sub_idx + 1
+            original_track_idx = valid_idx[sub_idx]
+            point2D_xy = tracks[fidx, original_track_idx]
+            points2D_list.append(pycolmap.Point2D(point2D_xy, point3D_id))
+            track = reconstruction.points3D[point3D_id].track
+            track.add_element(fidx + 1, point2D_idx)
+            point2D_idx += 1
 
         assert point2D_idx == len(points2D_list)
 
