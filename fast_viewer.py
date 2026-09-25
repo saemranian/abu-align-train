@@ -10,6 +10,7 @@ import time
 import glob
 import json
 import math
+import struct
 import argparse
 import webbrowser
 import subprocess
@@ -222,6 +223,198 @@ def load_cameras_from_transforms(tf_path: str) -> List[Dict]:
     return poses
 
 
+def load_cameras_from_colmap_bin(images_bin_path: str) -> List[Dict]:
+    """Loads camera poses from binary COLMAP images.bin file: num_reg_images uint64, then records."""
+    poses = []
+    if not os.path.isfile(images_bin_path):
+        return poses
+    try:
+        with open(images_bin_path, 'rb') as f:
+            num_reg_images = struct.unpack('<Q', f.read(8))[0]
+            for _ in range(num_reg_images):
+                img_id = struct.unpack('<I', f.read(4))[0]
+                qw, qx, qy, qz = struct.unpack('<4d', f.read(32))
+                tx, ty, tz = struct.unpack('<3d', f.read(24))
+                cam_id = struct.unpack('<I', f.read(4))[0]
+                name_chars = []
+                while True:
+                    ch = f.read(1)
+                    if ch == b'\x00' or not ch:
+                        break
+                    name_chars.append(ch)
+                name = b''.join(name_chars).decode('utf-8', errors='ignore')
+                num_pts = struct.unpack('<Q', f.read(8))[0]
+                f.seek(num_pts * 24, os.SEEK_CUR)
+
+                # Convert w2c to c2w
+                R_w2c = np.array([
+                    [1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy - qz*qw),       2.0*(qx*qz + qy*qw)],
+                    [2.0*(qx*qy + qz*qw),       1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz - qx*qw)],
+                    [2.0*(qx*qz - qy*qw),       2.0*(qy*qz + qx*qw),       1.0 - 2.0*(qx*qx + qy*qy)]
+                ], dtype=np.float64)
+                t_w2c = np.array([tx, ty, tz], dtype=np.float64)
+
+                R_c2w = R_w2c.T
+                t_c2w = -R_c2w @ t_w2c
+
+                tr = np.trace(R_c2w)
+                if tr > 0:
+                    S = math.sqrt(tr + 1.0) * 2.0
+                    qw_c = 0.25 * S
+                    qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
+                    qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
+                    qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
+                else:
+                    qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+
+                poses.append({
+                    "name": os.path.basename(name),
+                    "pos": t_c2w.astype(np.float32),
+                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                })
+    except Exception as e:
+        print(f"[Warning] Failed to parse COLMAP images.bin {images_bin_path}: {e}")
+    return poses
+
+
+def load_cameras_from_opensfm(opensfm_path: str) -> List[Dict]:
+    """Loads camera poses from OpenSfM reconstruction.json file."""
+    poses = []
+    if not os.path.isfile(opensfm_path):
+        return poses
+    try:
+        with open(opensfm_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        reconstructions = data if isinstance(data, list) else [data]
+        for rec in reconstructions:
+            shots = rec.get("shots", {})
+            for name, shot in shots.items():
+                r = shot.get("rotation", [0, 0, 0])
+                t = shot.get("translation", [0, 0, 0])
+                rx, ry, rz = float(r[0]), float(r[1]), float(r[2])
+                tx, ty, tz = float(t[0]), float(t[1]), float(t[2])
+
+                theta = math.sqrt(rx*rx + ry*ry + rz*rz)
+                if theta > 1e-7:
+                    kx, ky, kz = rx / theta, ry / theta, rz / theta
+                    c = math.cos(theta)
+                    s = math.sin(theta)
+                    v = 1.0 - c
+                    R_w2c = np.array([
+                        [kx*kx*v + c,      kx*ky*v - kz*s,  kx*kz*v + ky*s],
+                        [kx*ky*v + kz*s,  ky*ky*v + c,      ky*kz*v - kx*s],
+                        [kx*kz*v - ky*s,  ky*kz*v + kx*s,  kz*kz*v + c]
+                    ], dtype=np.float64)
+                else:
+                    R_w2c = np.eye(3, dtype=np.float64)
+
+                t_w2c = np.array([tx, ty, tz], dtype=np.float64)
+                R_c2w = R_w2c.T
+                t_c2w = -R_c2w @ t_w2c
+
+                tr = np.trace(R_c2w)
+                if tr > 0:
+                    S = math.sqrt(tr + 1.0) * 2.0
+                    qw_c = 0.25 * S
+                    qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
+                    qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
+                    qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
+                else:
+                    qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+
+                poses.append({
+                    "name": os.path.basename(name),
+                    "pos": t_c2w.astype(np.float32),
+                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                })
+    except Exception as e:
+        print(f"[Warning] Failed to parse OpenSfM reconstruction.json {opensfm_path}: {e}")
+    return poses
+
+
+def load_cameras_from_ace0(ace0_path: str) -> List[Dict]:
+    """Loads camera poses from ACE0 poses_final.txt or poses_subpixel.txt."""
+    poses = []
+    if not os.path.isfile(ace0_path):
+        return poses
+    try:
+        with open(ace0_path, "r", encoding="utf-8") as f:
+            for line in f:
+                tokens = line.strip().split()
+                if len(tokens) >= 10:
+                    raw_img_path = " ".join(tokens[:-9])
+                    qw = float(tokens[-9])
+                    qx = float(tokens[-8])
+                    qy = float(tokens[-7])
+                    qz = float(tokens[-6])
+                    tx = float(tokens[-5])
+                    ty = float(tokens[-4])
+                    tz = float(tokens[-3])
+
+                    R_w2c = np.array([
+                        [1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy - qz*qw),       2.0*(qx*qz + qy*qw)],
+                        [2.0*(qx*qy + qz*qw),       1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz - qx*qw)],
+                        [2.0*(qx*qz - qy*qw),       2.0*(qy*qz + qx*qw),       1.0 - 2.0*(qx*qx + qy*qy)]
+                    ], dtype=np.float64)
+                    t_w2c = np.array([tx, ty, tz], dtype=np.float64)
+
+                    R_c2w = R_w2c.T
+                    t_c2w = -R_c2w @ t_w2c
+
+                    tr = np.trace(R_c2w)
+                    if tr > 0:
+                        S = math.sqrt(tr + 1.0) * 2.0
+                        qw_c = 0.25 * S
+                        qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
+                        qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
+                        qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
+                    else:
+                        qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+
+                    poses.append({
+                        "name": os.path.basename(raw_img_path),
+                        "pos": t_c2w.astype(np.float32),
+                        "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                    })
+    except Exception as e:
+        print(f"[Warning] Failed to parse ACE0 pose file {ace0_path}: {e}")
+    return poses
+
+
+def load_cameras_from_cameras_csv(csv_path: str) -> List[Dict]:
+    """Loads camera positions from RealityCapture / Postshot cameras.csv."""
+    poses = []
+    if not os.path.isfile(csv_path):
+        return poses
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            header = None
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("#") or header is None:
+                    header = [h.strip().lstrip("#").lower() for h in line.split(",")]
+                    continue
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) != len(header):
+                    continue
+                row = dict(zip(header, parts))
+                name = row.get("name", "cam")
+                if "x" in row and "y" in row and "alt" in row:
+                    x = float(row["x"])
+                    y = float(row["y"])
+                    z = float(row["alt"])
+                    poses.append({
+                        "name": os.path.basename(name),
+                        "pos": np.array([x, y, z], dtype=np.float32),
+                        "wxyz": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                    })
+    except Exception as e:
+        print(f"[Warning] Failed to parse cameras.csv {csv_path}: {e}")
+    return poses
+
+
 def parse_run_report(run_dir: str) -> Dict[str, str]:
     """Extracts metadata from reconstruction_report.txt if available."""
     meta = {
@@ -282,32 +475,54 @@ def parse_run_report(run_dir: str) -> Dict[str, str]:
 # Run Discovery & Workspace Resolution
 # =========================================================================
 
-def resolve_project_structure(target_dir: str) -> Tuple[str, str, Dict[str, str]]:
+def resolve_project_structure(target_dir: str) -> Tuple[str, str, Dict[str, str], Optional[str]]:
     """
-    Resolves project name, dataset root path, and dictionary of all runs in results/.
-    Returns (project_title, dataset_dir, runs_dict).
+    Resolves project name, dataset root path, dictionary of all runs in results/,
+    and the initially selected run name.
+    Performs upward directory traversal so that passing any subfolder (e.g. 3dgs_models/lichtfeld_models)
+    properly identifies the results/ directory and discovers all alignment runs.
+    Returns (project_title, dataset_dir, runs_dict, initial_selected).
     """
     target_dir = os.path.abspath(target_dir)
 
-    # Detect if target_dir is a run folder inside results/
-    parent = os.path.dirname(target_dir)
-    grandparent = os.path.dirname(parent)
+    results_dir = None
+    dataset_dir = None
+    child_run_name = None
 
-    if os.path.basename(parent).lower() == "results":
-        dataset_dir = grandparent
-        results_dir = parent
-    elif os.path.isdir(os.path.join(target_dir, "results")):
-        dataset_dir = target_dir
-        results_dir = os.path.join(target_dir, "results")
-    else:
+    curr = target_dir
+    while True:
+        parent = os.path.dirname(curr)
+        if os.path.basename(curr).lower() == "results":
+            results_dir = curr
+            dataset_dir = parent
+            break
+        if parent and os.path.basename(parent).lower() == "results":
+            results_dir = parent
+            dataset_dir = os.path.dirname(parent)
+            child_run_name = os.path.basename(curr)
+            break
+        if not parent or parent == curr:
+            break
+        child_run_name = os.path.basename(curr)
+        curr = parent
+
+    # If upward traversal didn't find 'results', check if target_dir has a results/ subfolder
+    if not results_dir:
+        cand_results = os.path.join(target_dir, "results")
+        if os.path.isdir(cand_results):
+            dataset_dir = target_dir
+            results_dir = cand_results
+            child_run_name = None
+
+    # Fallback: treat target_dir as results_dir
+    if not results_dir:
         dataset_dir = target_dir
         results_dir = target_dir
+        child_run_name = None
 
     # Derive human-friendly project name from directory hierarchy
     parts = [p for p in dataset_dir.replace("\\", "/").split("/") if p]
-    if len(parts) >= 2:
-        project_title = f"{parts[-2]} / {parts[-1]}"
-    elif parts:
+    if parts:
         project_title = parts[-1]
     else:
         project_title = "Active Project"
@@ -317,52 +532,118 @@ def resolve_project_structure(target_dir: str) -> Tuple[str, str, Dict[str, str]
     if os.path.isdir(results_dir):
         for entry in os.listdir(results_dir):
             p = os.path.join(results_dir, entry)
-            if os.path.isdir(p) and any(tag in entry.lower() for tag in ["sparse", "dvo", "vggt", "opensfm", "ace", "cusfm"]):
+            # Skip hidden files/directories (like .abu_cache) and standalone 3dgs_models dirs
+            if not os.path.isdir(p) or entry.startswith(".") or entry.lower() == "3dgs_models":
+                continue
+            is_candidate = any(tag in entry.lower() for tag in ["sparse", "dvo", "vggt", "opensfm", "ace", "cusfm", "align", "colmap"])
+            if not is_candidate:
+                has_assets = any(f.endswith((".ply", ".txt", ".bin", ".json")) for f in os.listdir(p)) if os.path.isdir(p) else False
+                if has_assets:
+                    is_candidate = True
+
+            if is_candidate:
                 runs[entry] = p
 
-    # If no results subfolder, check if target_dir itself contains reconstruction data
+    # If no runs found inside results_dir, check if target_dir itself contains reconstruction data
     if not runs:
         has_direct_ply = any(f.endswith(".ply") for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f)))
-        if has_direct_ply:
+        if has_direct_ply or any(f.endswith((".bin", ".txt", ".json")) for f in os.listdir(target_dir) if os.path.isfile(os.path.join(target_dir, f))):
             runs[os.path.basename(target_dir)] = target_dir
 
     # Sort runs by directory modification time descending (latest first)
     sorted_runs = dict(sorted(runs.items(), key=lambda item: os.path.getmtime(item[1]), reverse=True))
-    return project_title, dataset_dir, sorted_runs
+
+    # Determine initial selected run
+    initial_selected = None
+    if child_run_name and child_run_name in sorted_runs:
+        initial_selected = child_run_name
+    elif sorted_runs:
+        initial_selected = list(sorted_runs.keys())[0]
+
+    return project_title, dataset_dir, sorted_runs, initial_selected
 
 
-def find_run_assets(run_dir: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
-    """Finds best point cloud (.ply), TUM trajectory, COLMAP images.txt, and transforms.json in run_dir."""
+def find_run_assets(run_dir: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """
+    Finds best point cloud (.ply) and camera files across all supported photogrammetry engines.
+    Excludes 3DGS model training checkpoints and weights from point cloud selection.
+    Returns:
+    (best_ply, tum_traj, colmap_images_txt, colmap_images_bin, tf_json, opensfm_json, ace0_poses)
+    """
     ply_files = glob.glob(os.path.join(run_dir, "*.ply")) + glob.glob(os.path.join(run_dir, "**", "*.ply"), recursive=True)
 
     def score_ply(path):
+        norm_p = path.replace("\\", "/").lower()
+        if "/3dgs_models/" in norm_p or "/checkpoints/" in norm_p or "/weights/" in norm_p:
+            return -1000.0
+        try:
+            sz = os.path.getsize(path)
+            if sz == 0:
+                return -1000.0
+        except Exception:
+            return -1000.0
+
         name = os.path.basename(path).lower()
-        score = 0
-        if "splat" in name: score = 50
-        elif "360dvo_points" in name: score = 40
-        elif name == "points.ply": score = 30
-        elif name == "points3d.ply": score = 20
-        return (score, os.path.getmtime(path))
+        score = 10.0
+        if name == "points3d.ply": score = 100.0
+        elif name == "points.ply": score = 95.0
+        elif "360dvo_points" in name: score = 90.0
+        elif "reconstruction.ply" in name: score = 85.0
+        elif "pc_final" in name or "point_cloud" in name: score = 80.0
+        return score + (os.path.getmtime(path) / 1e12)
 
-    best_ply = max(ply_files, key=score_ply) if ply_files else None
+    valid_plys = [p for p in ply_files if score_ply(p) > 0]
+    best_ply = max(valid_plys, key=score_ply) if valid_plys else None
 
-    # Camera sources
-    tum_traj = os.path.join(run_dir, "360dvo_trajectory.txt")
-    tum_traj = tum_traj if os.path.isfile(tum_traj) else None
+    # Camera sources in order of preference
+    # 1. 360DVO TUM Trajectory
+    tum_traj = None
+    for cand in ["360dvo_trajectory.txt", "trajectory.txt", "poses.txt"]:
+        p = os.path.join(run_dir, cand)
+        if os.path.isfile(p):
+            tum_traj = p
+            break
 
+    # 2. COLMAP images.txt
     colmap_images = None
     colmap_cands = [
         os.path.join(run_dir, "COLMAP_Lichtfield", "images.txt"),
         os.path.join(run_dir, "3dgs_dataset", "sparse", "0", "images.txt"),
         os.path.join(run_dir, "sparse", "0", "images.txt"),
+        os.path.join(run_dir, "colmap", "images.txt"),
     ]
     for c in colmap_cands:
         if os.path.isfile(c):
             colmap_images = c
             break
+    if not colmap_images:
+        for p in glob.glob(os.path.join(run_dir, "**", "images.txt"), recursive=True):
+            if "/3dgs_models/" not in p.replace("\\", "/").lower():
+                colmap_images = p
+                break
 
+    # 3. COLMAP images.bin
+    colmap_bin = None
+    bin_cands = [
+        os.path.join(run_dir, "COLMAP_Lichtfield", "images.bin"),
+        os.path.join(run_dir, "3dgs_dataset", "sparse", "0", "images.bin"),
+        os.path.join(run_dir, "sparse", "0", "images.bin"),
+        os.path.join(run_dir, "colmap", "images.bin"),
+    ]
+    for c in bin_cands:
+        if os.path.isfile(c):
+            colmap_bin = c
+            break
+    if not colmap_bin:
+        for p in glob.glob(os.path.join(run_dir, "**", "images.bin"), recursive=True):
+            if "/3dgs_models/" not in p.replace("\\", "/").lower():
+                colmap_bin = p
+                break
+
+    # 4. transforms.json
     tf_json = None
     tf_cands = [
+        os.path.join(run_dir, "Postshot_RealityCapture", "transforms.json"),
         os.path.join(run_dir, "transforms.json"),
         os.path.join(run_dir, "3dgs_dataset", "transforms.json"),
     ]
@@ -371,7 +652,78 @@ def find_run_assets(run_dir: str) -> Tuple[Optional[str], Optional[str], Optiona
             tf_json = tf
             break
 
-    return best_ply, tum_traj, colmap_images, tf_json
+    # 5. OpenSfM reconstruction.json
+    opensfm_json = None
+    osfm_cands = [
+        os.path.join(run_dir, "reconstruction.json"),
+        os.path.join(run_dir, "opensfm", "reconstruction.json"),
+    ]
+    for c in osfm_cands:
+        if os.path.isfile(c):
+            opensfm_json = c
+            break
+
+    # 6. ACE0 poses_final.txt
+    ace0_poses = None
+    ace_cands = [
+        os.path.join(run_dir, "acezero_work", "poses_final.txt"),
+        os.path.join(run_dir, "poses_final.txt"),
+        os.path.join(run_dir, "poses_subpixel.txt"),
+    ]
+    for c in ace_cands:
+        if os.path.isfile(c):
+            ace0_poses = c
+            break
+
+    return best_ply, tum_traj, colmap_images, colmap_bin, tf_json, opensfm_json, ace0_poses
+
+
+def load_run_cameras(run_dir: str) -> Tuple[List[Dict], str]:
+    """
+    Discovers and parses camera poses from any supported Abu Align engine format.
+    Priority:
+    1. 360DVO TUM Trajectory
+    2. COLMAP images.txt
+    3. COLMAP images.bin
+    4. transforms.json
+    5. OpenSfM reconstruction.json
+    6. ACE0 poses_final.txt
+    7. Postshot / RealityCapture cameras.csv
+    Returns (cameras, source_label).
+    """
+    _, tum_traj, colmap_images, colmap_bin, tf_json, opensfm_json, ace0_poses = find_run_assets(run_dir)
+
+    if tum_traj:
+        cams = load_cameras_from_tum(tum_traj)
+        if cams: return cams, "360DVO Trajectory (TUM)"
+
+    if colmap_images:
+        cams = load_cameras_from_colmap_images(colmap_images)
+        if cams: return cams, "COLMAP images.txt"
+
+    if colmap_bin:
+        cams = load_cameras_from_colmap_bin(colmap_bin)
+        if cams: return cams, "COLMAP images.bin"
+
+    if tf_json:
+        cams = load_cameras_from_transforms(tf_json)
+        if cams: return cams, "transforms.json"
+
+    if opensfm_json:
+        cams = load_cameras_from_opensfm(opensfm_json)
+        if cams: return cams, "OpenSfM reconstruction.json"
+
+    if ace0_poses:
+        cams = load_cameras_from_ace0(ace0_poses)
+        if cams: return cams, "ACE0 poses"
+
+    # Fallback to cameras.csv
+    for csv_cand in [os.path.join(run_dir, "Postshot_RealityCapture", "cameras.csv"), os.path.join(run_dir, "cameras.csv")]:
+        if os.path.isfile(csv_cand):
+            cams = load_cameras_from_cameras_csv(csv_cand)
+            if cams: return cams, "cameras.csv"
+
+    return [], "None"
 
 
 # =========================================================================
@@ -389,13 +741,14 @@ def main():
     target_dir = args.results_dir or args.input or args.path or os.getcwd()
     target_dir = os.path.abspath(target_dir)
 
-    project_title, dataset_dir, runs = resolve_project_structure(target_dir)
+    project_title, dataset_dir, runs, initial_selected = resolve_project_structure(target_dir)
 
     print("=" * 72)
     print("   Abu Align & Train - Interactive 3D Inspection Viewer (Viser)")
     print(f"   * Project Name:     {project_title}")
     print(f"   * Dataset Root:     {dataset_dir}")
     print(f"   * Discovered Runs:  {len(runs)}")
+    print(f"   * Initial Run:      {initial_selected}")
     print(f"   * Preferred Port:   {args.port}")
     print("=" * 72)
 
@@ -431,7 +784,7 @@ def main():
         runs[os.path.basename(target_dir)] = target_dir
 
     run_names = list(runs.keys())
-    current_run_name = run_names[0]
+    current_run_name = initial_selected if (initial_selected and initial_selected in runs) else run_names[0]
 
     # --- TOP GUI: Project & Provenance Card ---
     server.gui.add_markdown(f"## Scene inspector\n{project_title}\n\nInspect geometry, cameras, and reconstruction runs.")
@@ -454,7 +807,7 @@ def main():
     # --- VIEW CONTROLS FOLDER ---
     with server.gui.add_folder("Display"):
         show_traj_check = server.gui.add_checkbox("Trajectory", initial_value=True)
-        show_cams_check = server.gui.add_checkbox("Camera frustums", initial_value=False)
+        show_cams_check = server.gui.add_checkbox("Camera frustums", initial_value=True)
         filter_outliers_check = server.gui.add_checkbox("Hide outliers beyond 30 m", initial_value=True)
         point_size_slider = server.gui.add_slider("Point size", min=0.001, max=0.05, step=0.001, initial_value=0.006)
         frustum_scale_slider = server.gui.add_slider("Camera size", min=0.01, max=0.3, step=0.01, initial_value=0.05)
@@ -469,12 +822,15 @@ def main():
     current_traj_handles = []
     current_pcd_handle = None
     latest_camera_center = np.zeros(3, dtype=np.float32)
+    current_look_at = np.zeros(3, dtype=np.float32)
+    current_eye_pos = np.array([0.0, -2.0, 1.0], dtype=np.float32)
 
     def load_and_render_run(run_name: str):
-        nonlocal current_camera_handles, current_traj_handles, current_pcd_handle, latest_camera_center
+        nonlocal current_camera_handles, current_traj_handles, current_pcd_handle, latest_camera_center, current_look_at, current_eye_pos
 
         run_path = runs.get(run_name, target_dir)
-        best_ply, tum_traj, colmap_images, tf_json = find_run_assets(run_path)
+        best_ply, _, _, _, _, _, _ = find_run_assets(run_path)
+        cameras, cam_source_label = load_run_cameras(run_path)
         report_meta = parse_run_report(run_path)
 
         # Clear previous cameras & trajectory
@@ -488,45 +844,55 @@ def main():
             except Exception: pass
         current_traj_handles.clear()
 
-        # 1. Load Camera Poses (Priority: TUM odometry -> COLMAP images.txt -> transforms.json)
-        cameras = []
-        cam_source_label = "None"
-        if tum_traj:
-            cameras = load_cameras_from_tum(tum_traj)
-            cam_source_label = "360DVO Trajectory (TUM)"
-        elif colmap_images:
-            cameras = load_cameras_from_colmap_images(colmap_images)
-            cam_source_label = "COLMAP images.txt"
-        elif tf_json:
-            cameras = load_cameras_from_transforms(tf_json)
-            cam_source_label = "transforms.json"
-
-        # Calculate camera trajectory center
+        # 1. Render Cameras & Trajectory
         if cameras:
             cam_positions = np.array([c["pos"] for c in cameras], dtype=np.float32)
             latest_camera_center = np.mean(cam_positions, axis=0)
+            cam_span = float(np.ptp(cam_positions, axis=0).max()) if len(cam_positions) > 1 else 1.0
 
-            # Render camera trajectory as smooth 3D Catmull-Rom spline with color gradient
+            # Render camera trajectory as smooth 3D Catmull-Rom spline with line fallback
             if show_traj_check.value and len(cam_positions) >= 2:
-                try:
-                    # Draw continuous spline tube connecting camera positions
-                    spline_handle = server.scene.add_spline_catmull_rom(
-                        name="/camera_trajectory/path",
-                        positions=cam_positions,
-                        line_width=2.5,
-                        color=(16, 185, 129),  # Emerald line
-                    )
-                    current_traj_handles.append(spline_handle)
-                except Exception:
-                    pass
+                filtered_cams = [cam_positions[0]]
+                for p in cam_positions[1:]:
+                    if np.linalg.norm(p - filtered_cams[-1]) > 1e-4:
+                        filtered_cams.append(p)
+                filtered_cams = np.array(filtered_cams, dtype=np.float32)
+
+                if len(filtered_cams) >= 2:
+                    spline_success = False
+                    try:
+                        spline_handle = server.scene.add_spline_catmull_rom(
+                            name="/camera_trajectory/path",
+                            positions=filtered_cams,
+                            line_width=3.0,
+                            color=(16, 185, 129),  # Emerald spline
+                        )
+                        current_traj_handles.append(spline_handle)
+                        spline_success = True
+                    except Exception:
+                        spline_success = False
+
+                    if not spline_success:
+                        try:
+                            segs = np.stack([filtered_cams[:-1], filtered_cams[1:]], axis=1)
+                            line_handle = server.scene.add_line_segments(
+                                name="/camera_trajectory/path",
+                                points=segs,
+                                colors=(16, 185, 129),
+                                line_width=3.0
+                            )
+                            current_traj_handles.append(line_handle)
+                        except Exception:
+                            pass
 
             # Render frustums
             if show_cams_check.value:
-                # If there are many cameras (>150), sample keyframe frustums to keep viewport super fluid
-                step = 1 if len(cameras) <= 100 else 2
+                auto_scale = float(np.clip(cam_span * 0.035, 0.015, 0.35))
+                effective_scale = frustum_scale_slider.value if frustum_scale_slider.value != 0.05 else auto_scale
+
+                step = 1 if len(cameras) <= 120 else (2 if len(cameras) <= 300 else 3)
                 for i in range(0, len(cameras), step):
                     cam = cameras[i]
-                    # Color code: first camera green, last camera red
                     pct = float(i) / max(1, len(cameras) - 1)
                     r = int(pct * 255)
                     g = int((1.0 - pct) * 255)
@@ -537,7 +903,7 @@ def main():
                             name=f"/cameras/{cam['name']}",
                             fov=np.radians(60.0),
                             aspect=1.5,
-                            scale=frustum_scale_slider.value,
+                            scale=effective_scale,
                             wxyz=cam["wxyz"],
                             position=cam["pos"],
                             color=(r, g, b)
@@ -556,6 +922,7 @@ def main():
             pts, cols = read_ply_data(best_ply)
             ply_label = os.path.basename(best_ply)
 
+        pts_render = None
         if pts is not None and len(pts) > 0:
             total_pts = len(pts)
 
@@ -564,7 +931,6 @@ def main():
                 ref_center = latest_camera_center if len(cameras) > 0 else np.median(pts, axis=0)
                 dists = np.linalg.norm(pts - ref_center, axis=1)
 
-                # Use adaptive 90th percentile * 2.0 or 35m max
                 dist_cutoff = min(35.0, max(8.0, float(np.percentile(dists, 90) * 1.8)))
                 valid_mask = dists < dist_cutoff
                 pts_render = pts[valid_mask]
@@ -609,10 +975,37 @@ def main():
             except Exception:
                 pass
 
-        # 3. Update Provenance & Metadata Info Card
+        # 3. Auto-fit Scene Viewport Bounds
+        coords_list = []
+        if len(cameras) > 0:
+            coords_list.append(np.array([c["pos"] for c in cameras], dtype=np.float32))
+        if pts_render is not None and len(pts_render) > 0:
+            sub = pts_render[::max(1, len(pts_render) // 1000)]
+            coords_list.append(sub)
+
+        if coords_list:
+            all_coords = np.concatenate(coords_list, axis=0)
+            p_min = np.percentile(all_coords, 2, axis=0)
+            p_max = np.percentile(all_coords, 98, axis=0)
+            center = (p_min + p_max) / 2.0
+            diag = max(float(np.linalg.norm(p_max - p_min)), 0.5)
+
+            current_look_at = center.astype(np.float32)
+            current_eye_pos = (center + np.array([0.0, -diag * 1.3, diag * 0.7], dtype=np.float32)).astype(np.float32)
+
+            for client in server.get_clients().values():
+                try:
+                    client.camera.look_at = current_look_at
+                    client.camera.position = current_eye_pos
+                except Exception:
+                    pass
+
+        # 4. Update Provenance & Metadata Info Card
         eng = report_meta.get("engine", "Auto-Detected")
         date_str = report_meta.get("date", "Recent Alignment")
-        tag_status = "🟢 Current Latest Run" if run_name == run_names[0] else "📁 Previous Run"
+        tag_status = "🟢 Current Run" if run_name == initial_selected else "📁 Alignment Run"
+        if inlier_pts == 0 and len(cameras) == 0:
+            tag_status = "⚠️ Incomplete / Empty Run"
 
         log_f = report_meta.get("log_file", "N/A")
         log_row = f"| **Log File** | `{log_f}` |\n" if (log_f and log_f != "N/A") else ""
@@ -629,6 +1022,15 @@ def main():
             f"| **Folder** | `{os.path.basename(run_path)}` |\n\n"
             f"<small style='color:#94a3b8;'>Source: {run_path}</small>"
         )
+
+    # Client connection listener: immediately auto-frame new tabs
+    @server.on_client_connect
+    def _(client: viser.ClientHandle) -> None:
+        try:
+            client.camera.look_at = current_look_at
+            client.camera.position = current_eye_pos
+        except Exception:
+            pass
 
     # Initial Render
     load_and_render_run(current_run_name)
@@ -665,7 +1067,7 @@ def main():
     @refresh_btn.on_click
     def _(_) -> None:
         nonlocal runs, run_names
-        _, _, new_runs = resolve_project_structure(target_dir)
+        _, _, new_runs, _ = resolve_project_structure(target_dir)
         if new_runs:
             runs = new_runs
             run_names = list(runs.keys())
@@ -676,8 +1078,13 @@ def main():
 
     @focus_btn.on_click
     def _(_) -> None:
-        server.scene.reset()
-        print("[Viewer] Camera view reset to center.")
+        for client in server.get_clients().values():
+            try:
+                client.camera.look_at = current_look_at
+                client.camera.position = current_eye_pos
+            except Exception:
+                pass
+        print("[Viewer] Camera view reframed to scene bounds.")
 
     @folder_btn.on_click
     def _(_) -> None:

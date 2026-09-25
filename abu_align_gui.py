@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.7.0
+Abu Align & Train Version 0.0.7.1
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -215,7 +215,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.7.0 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.7.1 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -264,6 +264,8 @@ class AbuAlignApp:
         self.is_running = False
         self.is_paused = False
         self.latest_output_dir = None
+        self.latest_alignment_dir = None
+        self.latest_train_dir = None
         self.active_log_path = None
         self._ensure_logs_dir()
 
@@ -3692,7 +3694,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.7.0 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.7.1 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3734,15 +3736,20 @@ class AbuAlignApp:
                         if "Output Directory:" in line:
                             parts = line.split("Output Directory:")
                             if len(parts) > 1:
-                                self.latest_output_dir = parts[1].strip()
+                                out_p = parts[1].strip()
+                                self.latest_output_dir = out_p
+                                self.latest_alignment_dir = out_p
                         elif "Target Output:" in line:
                             parts = line.split("Target Output:")
                             if len(parts) > 1:
-                                self.latest_output_dir = parts[1].strip()
+                                out_p = parts[1].strip()
+                                self.latest_output_dir = out_p
+                                self.latest_alignment_dir = out_p
                         elif "Output Dir:" in line:
                             parts = line.split("Output Dir:")
                             if len(parts) > 1:
-                                self.latest_output_dir = parts[1].strip()
+                                out_p = parts[1].strip()
+                                self.latest_train_dir = out_p
 
                 self.worker_process.stdout.close()
                 exit_code = self.worker_process.wait()
@@ -4211,7 +4218,9 @@ class AbuAlignApp:
         except Exception:
             pass
 
-        target_arg = self.latest_output_dir if self.latest_output_dir and os.path.isdir(self.latest_output_dir) else dataset
+        target_arg = self.latest_alignment_dir if (self.latest_alignment_dir and os.path.isdir(self.latest_alignment_dir)) else (
+            self.latest_output_dir if (self.latest_output_dir and os.path.isdir(self.latest_output_dir)) else dataset
+        )
         cmd = [self.conda_python, fast_viewer_script, "--input", target_arg]
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
 
@@ -4221,7 +4230,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.7.0 - {title}")
+        doc_win.title(f"Abu Align v0.0.7.1 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4499,7 +4508,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.7.0\n"
+            "Abu Align & Train - Version 0.0.7.1\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
