@@ -135,26 +135,47 @@ def load_cameras_from_tum(traj_path: str) -> List[Dict]:
 
 
 def load_cameras_from_colmap_images(images_txt_path: str) -> List[Dict]:
-    """Loads camera poses from standard COLMAP images.txt format: IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME."""
+    """
+    Loads camera poses from standard COLMAP images.txt format.
+    COLMAP images.txt uses 2 lines per image:
+    Line 1: IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
+    Line 2: POINTS2D[] as (X, Y, POINT3D_ID)...
+    """
     poses = []
     if not os.path.isfile(images_txt_path):
         return poses
     try:
         with open(images_txt_path, "r", encoding="utf-8") as f:
-            for line in f:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
+
                 parts = line.split()
+                # Skip the following 2D points measurement line in standard COLMAP format
+                f.readline()
+
                 if len(parts) >= 10:
-                    qw = float(parts[1])
-                    qx = float(parts[2])
-                    qy = float(parts[3])
-                    qz = float(parts[4])
-                    tx = float(parts[5])
-                    ty = float(parts[6])
-                    tz = float(parts[7])
-                    name = parts[9]
+                    try:
+                        qw = float(parts[1])
+                        qx = float(parts[2])
+                        qy = float(parts[3])
+                        qz = float(parts[4])
+                        tx = float(parts[5])
+                        ty = float(parts[6])
+                        tz = float(parts[7])
+                        name = " ".join(parts[9:])
+                    except (ValueError, IndexError):
+                        continue
+
+                    # Validate and normalize quaternion
+                    q_norm = math.sqrt(qw*qw + qx*qx + qy*qy + qz*qz)
+                    if q_norm < 1e-4:
+                        continue
+                    qw, qx, qy, qz = qw / q_norm, qx / q_norm, qy / q_norm, qz / q_norm
 
                     # Convert w2c to c2w
                     R_w2c = np.array([
@@ -166,6 +187,9 @@ def load_cameras_from_colmap_images(images_txt_path: str) -> List[Dict]:
 
                     R_c2w = R_w2c.T
                     t_c2w = -R_c2w @ t_w2c
+
+                    if not np.all(np.isfinite(t_c2w)) or np.linalg.norm(t_c2w) > 50000.0:
+                        continue
 
                     # R_c2w to quaternion wxyz
                     tr = np.trace(R_c2w)
@@ -928,10 +952,10 @@ def main():
 
             # Filter distant outliers if enabled
             if filter_outliers_check.value and len(pts) > 100:
-                ref_center = latest_camera_center if len(cameras) > 0 else np.median(pts, axis=0)
+                ref_center = np.median(pts, axis=0)
                 dists = np.linalg.norm(pts - ref_center, axis=1)
 
-                dist_cutoff = min(35.0, max(8.0, float(np.percentile(dists, 90) * 1.8)))
+                dist_cutoff = min(35.0, max(8.0, float(np.percentile(dists, 90) * 2.0)))
                 valid_mask = dists < dist_cutoff
                 pts_render = pts[valid_mask]
                 cols_render = cols[valid_mask] if cols is not None else None
@@ -952,7 +976,7 @@ def main():
                 cols_render[:, 1] = ((1.0 - z_norm) * 200).astype(np.uint8)
                 cols_render[:, 2] = 220
             elif mode == "Distance Ramp":
-                ref_center = latest_camera_center if len(cameras) > 0 else np.median(pts_render, axis=0)
+                ref_center = np.median(pts_render, axis=0)
                 d = np.linalg.norm(pts_render - ref_center, axis=1)
                 d_norm = d / max(1e-6, d.max())
                 cols_render = np.zeros((len(pts_render), 3), dtype=np.uint8)
@@ -991,36 +1015,34 @@ def main():
             diag = max(float(np.linalg.norm(p_max - p_min)), 0.5)
 
             current_look_at = center.astype(np.float32)
-            current_eye_pos = (center + np.array([0.0, -diag * 1.3, diag * 0.7], dtype=np.float32)).astype(np.float32)
+            current_eye_pos = (center + np.array([0.0, -diag * 1.5, diag * 0.8], dtype=np.float32)).astype(np.float32)
 
             for client in server.get_clients().values():
                 try:
                     client.camera.look_at = current_look_at
                     client.camera.position = current_eye_pos
+                    client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
                 except Exception:
                     pass
 
-        # 4. Update Provenance & Metadata Info Card
+        # 4. Update Provenance & Metadata Info Card (Bulletproof React Markdown format)
         eng = report_meta.get("engine", "Auto-Detected")
         date_str = report_meta.get("date", "Recent Alignment")
-        tag_status = "🟢 Current Run" if run_name == initial_selected else "📁 Alignment Run"
+        tag_status = "Active Run (Selected)" if run_name == initial_selected else "Alignment Run"
         if inlier_pts == 0 and len(cameras) == 0:
-            tag_status = "⚠️ Incomplete / Empty Run"
+            tag_status = "Incomplete / Empty Run"
 
         log_f = report_meta.get("log_file", "N/A")
-        log_row = f"| **Log File** | `{log_f}` |\n" if (log_f and log_f != "N/A") else ""
+        log_line = f"\n- **Log**: `{log_f}`" if (log_f and log_f != "N/A") else ""
 
         info_card.content = (
-            f"**Status**: {tag_status}\n\n"
-            f"| Attribute | Value |\n"
-            f"| :--- | :--- |\n"
-            f"| **Engine** | `{eng}` |\n"
-            f"| **Timestamp** | `{date_str}` |\n"
-            f"{log_row}"
-            f"| **Cameras** | **{len(cameras)} tracked** ({cam_source_label}) |\n"
-            f"| **3D Points** | **{inlier_pts:,}** / {total_pts:,} vertices ({ply_label}) |\n"
-            f"| **Folder** | `{os.path.basename(run_path)}` |\n\n"
-            f"<small style='color:#94a3b8;'>Source: {run_path}</small>"
+            f"**Status**: `{tag_status}`\n\n"
+            f"- **Engine**: {eng}\n"
+            f"- **Timestamp**: {date_str}"
+            f"{log_line}\n"
+            f"- **Cameras**: **{len(cameras)} tracked** ({cam_source_label})\n"
+            f"- **3D Points**: **{inlier_pts:,}** / {total_pts:,} vertices (`{ply_label}`)\n"
+            f"- **Folder**: `{os.path.basename(run_path)}`"
         )
 
     # Client connection listener: immediately auto-frame new tabs
@@ -1029,6 +1051,7 @@ def main():
         try:
             client.camera.look_at = current_look_at
             client.camera.position = current_eye_pos
+            client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         except Exception:
             pass
 
@@ -1082,6 +1105,7 @@ def main():
             try:
                 client.camera.look_at = current_look_at
                 client.camera.position = current_eye_pos
+                client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
             except Exception:
                 pass
         print("[Viewer] Camera view reframed to scene bounds.")

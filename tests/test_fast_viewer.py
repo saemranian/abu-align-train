@@ -125,5 +125,29 @@ class TestFastViewer(unittest.TestCase):
         np.testing.assert_allclose(cams[0]["pos"], [-0.5, -1.5, 2.5], atol=1e-5)
 
 
+    def test_colmap_images_txt_parser(self):
+        """Verifies COLMAP images.txt parser properly skips alternating 2D point measurement lines."""
+        txt_path = os.path.join(self.test_dir, "images.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write("# Image list with two lines of data per image:\n")
+            f.write("# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
+            f.write("# POINTS2D[] as (X, Y, POINT3D_ID)\n")
+            # Image 1
+            f.write("1 1.0 0.0 0.0 0.0 0.0 0.0 0.0 1 frame000001.png\n")
+            # 2D points for image 1 (must be skipped, NOT parsed as camera)
+            f.write("100.5 200.5 1 300.2 400.1 2 500.0 600.0 3 700.0 800.0 4\n")
+            # Image 2
+            f.write("2 1.0 0.0 0.0 0.0 1.0 2.0 3.0 1 frame000002.png\n")
+            # 2D points for image 2
+            f.write("150.0 250.0 1\n")
+
+        cams = fast_viewer.load_cameras_from_colmap_images(txt_path)
+        self.assertEqual(len(cams), 2)
+        self.assertEqual(cams[0]["name"], "frame000001.png")
+        self.assertEqual(cams[1]["name"], "frame000002.png")
+        np.testing.assert_allclose(cams[0]["pos"], [0.0, 0.0, 0.0], atol=1e-5)
+        np.testing.assert_allclose(cams[1]["pos"], [-1.0, -2.0, -3.0], atol=1e-5)
+
+
 if __name__ == "__main__":
     unittest.main()

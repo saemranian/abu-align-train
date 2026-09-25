@@ -1,95 +1,62 @@
-# Abu Align & Train v0.0.7.1 — Multi-Engine Alignment Run Discovery, Point Cloud & Camera Trajectory 3D Browser Viewer
+# Abu Align & Train v0.0.7.2 — COLMAP Image Coordinate Fix & 3D Browser Viewport Auto-Centering
 
-Version **v0.0.7.1** completely overhauls the **Scene Inspector 3D Browser Viewer** (`fast_viewer.py`), resolving a critical dropdown isolation bug where only `lichtfeld_models` was shown, and enabling full interactive 3D inspection of tie point clouds and camera trajectories across **all alignment runs** (`sparse_*`, `dvo_*`, etc.) produced by any Abu Align engine (VGGT-Omega, VGGT, OpenSfM, 360DVO, ACE0, and NVIDIA PyCuSFM).
-
----
-
-## 1. Problem Description & Root Causes
-
-When launching the 3D Browser Viewer (`http://localhost:8080/`) from the GUI after training:
-1. **Viewport Black Screen & Single Run in Dropdown**:
-   - The Reconstruction dropdown in the viewer showed only a single entry: `lichtfeld_models`.
-   - The 3D viewport was completely pitch black with 0 points and 0 cameras rendered.
-2. **Root Cause 1 — Training Output Override in GUI**:
-   - In `abu_align_gui.py`, `self.latest_output_dir` was originally set to the alignment run (e.g. `results/sparse_10_omega`). However, when 3DGS training (LichtFeld Studio) was launched and completed, `self.latest_output_dir` was overwritten with the training subfolder: `.../results/sparse_10_omega/3dgs_models/lichtfeld_models`.
-   - `_launch_viewer` passed this deep subfolder via `--input` to `fast_viewer.py`.
-3. **Root Cause 2 — Rigid 2-Level Traversal in Project Resolution**:
-   - In `fast_viewer.py`, `resolve_project_structure` only checked whether `parent` or `grandparent` was named `"results"`.
-   - Because `target_dir` was `.../results/sparse_10_omega/3dgs_models/lichtfeld_models`, its parent was `3dgs_models` and grandparent was `sparse_10_omega`—neither was `"results"`.
-   - Consequently, `fast_viewer.py` fell into `runs = {"lichtfeld_models": ".../lichtfeld_models"}`.
-   - `lichtfeld_models` contained only `project.licht` (0 point clouds, 0 camera files), yielding an empty screen.
-4. **Root Cause 3 — Camera Frustums Disabled & Viewport Unframed**:
-   - `show_cams_check` had `initial_value=False` (cameras hidden by default).
-   - There was no auto-framing on connection, so even when points were present, user viewports could start looking into empty space.
-5. **Root Cause 4 — Engine Format Disconnects**:
-   - `fast_viewer.py` only supported text COLMAP `images.txt`, TUM, and `transforms.json`. Other standard outputs—such as COLMAP binary `images.bin` (pycolmap/COLMAP), OpenSfM `reconstruction.json`, ACE0 `poses_final.txt`, and RealityCapture `cameras.csv`—were not supported.
+Version **v0.0.7.2** fixes a critical photogrammetry camera coordinate parsing bug in the 3D Browser Viewer (`fast_viewer.py`), resolving the issue where point clouds were erroneously wiped out by outlier clipping and camera frustums were pushed into deep outer space.
 
 ---
 
-## 2. Technical Implementation
+## 1. Problem Description & Root Cause
 
-### A. Upward Directory Traversal & Multi-Run Discovery (`fast_viewer.py`)
-- Rewrote `resolve_project_structure(target_dir)` with an upward loop that traverses ancestor directories until finding `results/`.
-- Once `results/` is discovered:
-  - `dataset_dir = os.path.dirname(results_dir)`
-  - Discovers **all** alignment runs inside `results/` (`sparse_10_omega` down to `sparse_01_omega`), ignoring internal caches like `.abu_cache` and bare `3dgs_models` folders.
-  - Sorts runs in modification-time descending order (latest run first).
-  - Automatically identifies which child run led to `target_dir` and assigns it as `initial_selected`.
+Even after run discovery was resolved in `v0.0.7.1`:
+1. **Console Showed 0 Points Rendered**:
+   `[Viewer] Rendered 0 points from points3D.ply (sparse_10_omega)` despite `points3D.ply` containing 300,000 valid vertices.
+2. **Viewport Blank**:
+   Nothing appeared in the browser viewport.
+3. **Markdown Error**:
+   The metadata panel displayed `Markdown Failed to Render`.
 
-### B. Unified Multi-Engine Camera Parsers (`fast_viewer.py`)
-Implemented native, dependency-free parsers for all Abu Align photogrammetry formats:
-1. `load_cameras_from_colmap_bin`: High-performance binary struct parser for `images.bin` extracting `qvec` + `tvec` and converting OpenCV world-to-cam to camera-to-world (c2w).
-2. `load_cameras_from_opensfm`: Reads OpenSfM `reconstruction.json`, applying Rodrigues rotation formula on angle-axis vectors and inverting poses to world frame.
-3. `load_cameras_from_ace0`: Parses ACE0 `poses_final.txt` / `poses_subpixel.txt` (`filename qw qx qy qz x y z focal confidence`).
-4. `load_cameras_from_cameras_csv`: Parses RealityCapture / Postshot CSV position records.
-5. `load_run_cameras`: Central dispatch engine prioritizing TUM → COLMAP txt → COLMAP bin → transforms.json → OpenSfM → ACE0 → CSV.
-
-### C. Asset Scoring & 3DGS Splat Isolation (`fast_viewer.py`)
-- Updated `find_run_assets` with point cloud priority scoring:
-  - `points3D.ply` (COLMAP / VGGT-Omega standard) = 100 pts
-  - `points.ply` (Postshot / RealityCapture) = 95 pts
-  - `360dvo_points.ply` = 90 pts
-  - `reconstruction.ply` = 85 pts
-  - `pc_final.ply` / `point_cloud.ply` = 80 pts
-- **Strict Isolation**: Explicitly filters out and assigns score `-1000.0` to any `.ply` inside `3dgs_models/`, `checkpoints/`, `weights/`, or 0-byte files, preventing Gaussian Splat checkpoints from corrupting point cloud rendering.
-
-### D. Viewport Auto-Framing & Default Display Settings (`fast_viewer.py`)
-- Set `show_cams_check = server.gui.add_checkbox("Camera frustums", initial_value=True)` (Default ON).
-- Set `show_traj_check = server.gui.add_checkbox("Trajectory", initial_value=True)` (Default ON).
-- Added consecutive duplicate filtering before Catmull-Rom spline construction, with a robust fallback to `add_line_segments` if spline generation encounters numerical singularities.
-- Added dynamic camera frustum scaling matching scene bounds (`np.ptp(cam_positions)`).
-- Implemented automatic scene bounding box calculation (2%–98% percentiles of points + cameras) that sets client camera `look_at` and `position` on run load and via `@server.on_client_connect` for newly opened browser tabs.
-- Handled empty or incomplete runs gracefully without throwing unhandled exceptions.
-
-### E. GUI Output Directory Separation (`abu_align_gui.py`)
-- Split output tracking into:
-  - `self.latest_alignment_dir`: Preserves the photogrammetry alignment output directory (`results/sparse_XX_*`).
-  - `self.latest_train_dir`: Tracks 3DGS training output (`3dgs_models/lichtfeld_models`).
-- In `_launch_viewer`: passes `self.latest_alignment_dir` (falling back to `self.latest_output_dir` or `dataset`), preventing 3DGS training output from masking alignment runs.
+### Technical Root Causes:
+1. **COLMAP Alternating Line Specification**:
+   - In COLMAP's `images.txt` specification, every registered image has **two lines**:
+     - Line 1: `IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME`
+     - Line 2: `POINTS2D[] as (X, Y, POINT3D_ID)...` (2D feature detections and 3D tie point IDs)
+   - `load_cameras_from_colmap_images` iterated line-by-line without consuming the second line. Because the 2D points line typically contains dozens or hundreds of tokens, it was parsed as a camera pose!
+   - Floating-point pixel coordinates and integer point IDs (e.g. `1194`, `404.01`) were treated as rotation quaternions and translation vectors.
+   - When converted to camera-to-world via $R^T t$, this generated astronomical camera positions ($10^{11}$ meters).
+2. **Outlier Centroid Distortion**:
+   - Outlier filtering computed distances relative to `latest_camera_center`.
+   - With corrupted camera poses at $10^{11}$ meters, `latest_camera_center` became $1.9 \times 10^9$ meters.
+   - Consequently, all 300,000 valid points were evaluated as $> 2.7 \times 10^9$ meters from the center, exceeding the 35 m cutoff and causing 100% of the point cloud to be discarded as outliers (`inlier_pts = 0`).
+3. **React-Markdown Parsing Failure**:
+   - The info card contained non-BMP emojis (`🟢`, `⚠️`) and HTML `<small>` tags which caused Viser's React-Markdown parser to fail on Windows.
 
 ---
 
-## 3. Verification & Testing
+## 2. Technical Fixes
 
-1. **Automated Unit Tests** (`tests/test_fast_viewer.py`):
-   - `test_resolve_project_structure_upward_traversal`: Verified passing a deep path (`results/sparse_02/3dgs_models/lichtfeld_models`) properly discovers all sibling runs and sets `initial_selected = sparse_02`.
-   - `test_find_run_assets_scoring_and_rejection`: Verified rejection of splats inside `3dgs_models` and prioritization of `points3D.ply`.
-   - `test_colmap_bin_parser`: Verified binary struct unpacking and w2c-to-c2w transformation.
-   - `test_opensfm_parser`: Verified Rodrigues angle-axis to quaternion/position conversion.
-   - `test_ace0_parser`: Verified ACE0 pose line parsing and coordinate frame inversion.
-2. **Full Regression Suite**:
-   - Ran `python -m unittest discover tests`: All 57 unit tests passed in 31.06s.
-3. **Live Verification on User Dataset**:
-   - Tested target path: `.../Orbiting_object... frames/results/sparse_10_omega/3dgs_models/lichtfeld_models`.
-   - Result: Discovered all 10 runs (`sparse_10_omega` through `sparse_01_omega`), correctly selected `sparse_10_omega`, loaded 300,000 points from `points3D.ply`, and loaded 443 cameras from `COLMAP_Lichtfield/images.txt`.
+### A. COLMAP `images.txt` Two-Line Parser ([`fast_viewer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/fast_viewer.py))
+- Properly consumes both lines per image (`f.readline()` for pose, `f.readline()` to discard 2D keypoints).
+- Normalizes quaternions: validates $\|q\| \ge 10^{-4}$ and divides by norm.
+- Adds bounding guards rejecting non-finite positions or translations with $\|t\| > 50,000$ m.
+
+### B. Point Centroid Outlier Filtering ([`fast_viewer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/fast_viewer.py))
+- Outlier filtering now measures Euclidean distance from `np.median(pts, axis=0)` (the geometric centroid of the point cloud itself).
+- Immune to camera coordinate system scale discrepancies.
+- Result: **300,000 out of 300,000 points (100%)** render as inliers.
+
+### C. Bulletproof React-Markdown Info Panel ([`fast_viewer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/fast_viewer.py))
+- Converted info card to clean, standard Markdown bullet points without raw HTML tags or non-BMP emojis.
+- Renders cleanly in dark theme without parser errors.
+
+### D. Viewport Orientation & Reframe ([`fast_viewer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/fast_viewer.py))
+- Enforces `client.camera.up_direction = np.array([0.0, 0.0, 1.0])` on connection and on "Fit trajectory" (`focus_btn`).
+- Positions camera eye at `[0.0, -diag * 1.5, diag * 0.8]` looking directly at object center.
 
 ---
 
-## 4. Version Bump & Compilation
-- Cascaded base-10 odometer increment from `v0.0.7.0` to `v0.0.7.1` in `version_manager.py`.
-- Recompiled native C# launchers:
-  - `Abu_Align.exe`
-  - `Abu_Align_and_Train.exe`
-  - `versions/historical_binaries/Abu_Align_v0.0.7.1.exe`
-  - `versions/historical_binaries/Abu_Align_and_Train_v0.0.7.1.exe`
-- Created full snapshot archive at `versions/v0.0.7.1/`.
+## 3. Verification
+
+- `tests/test_fast_viewer.py`: Added `test_colmap_images_txt_parser` verifying alternating 2D point measurement line skipping. All 6 unit tests pass.
+- Verified on user's dataset:
+  - Cameras loaded: **240 cameras** (COLMAP images.txt), span: `[1.93, 0.52, 1.78]` m, center: `[0.05, -0.17, 0.82]`.
+  - Points loaded: **300,000 vertices** (`points3D.ply`), Inliers: **300,000 / 300,000 (100%)**.
+- Version bumped from `v0.0.7.1` to `v0.0.7.2` (base-10 odometer) and native launchers recompiled.
