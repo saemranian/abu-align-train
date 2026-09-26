@@ -429,7 +429,20 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    label(header, "v0.0.7.6", 9, muted=True).pack(side="left", padx=12)
+    app.version_label = label(header, "v0.0.7.7", 9, muted=True)
+    app.version_label.pack(side="left", padx=(12, 6))
+
+    # Upstream GitHub Engine Update Monitor Badge / Button
+    app.engine_update_btn = tk.Button(
+        header, text="⏳ Checking engines...", bg=FIELD, fg=MUTED,
+        activebackground=BORDER, activeforeground=TEXT, relief="flat", bd=0,
+        highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+        padx=10, pady=4, font=("Segoe UI", 9), cursor="hand2",
+        command=app._open_engine_updates_dialog
+    )
+    app.engine_update_btn.pack(side="left", padx=6)
+    tooltip(app.engine_update_btn, "Engine Repositories Tracker:\nCheck upstream GitHub repositories for updates across all 10 engines.\nClick to view full comparison report.")
+
     button(header, "User guide", app._open_user_guide).pack(side="right")
     prepare = tk.Menubutton(header, text="Prepare input ▾", bg=BG, fg=MUTED,
         activebackground=FIELD, activeforeground=TEXT, relief="flat", padx=14, pady=8,

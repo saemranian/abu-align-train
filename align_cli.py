@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.7.6 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.7.7 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1472,8 +1472,16 @@ def load_prior_poses_from_transforms(scan_dir: str, image_paths: list):
 
 
 def main():
+    if "--check_updates" in sys.argv or "--check_engines" in sys.argv:
+        from engine_tracker import check_all_engines, generate_report_text
+        print("\nChecking upstream GitHub repositories for Abu Align engines...\n")
+        data = check_all_engines()
+        print(generate_report_text(data))
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
-    parser.add_argument("--input", "-i", type=str, required=True, help="Path to photoscan folder or image directory")
+    parser.add_argument("--check_updates", "--check_engines", action="store_true", help="Check upstream GitHub repositories for updates across all 10 engines and print a diagnostic report")
+    parser.add_argument("--input", "-i", type=str, required=False, default=None, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
     parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
     # Video Frame Extraction Options
@@ -1601,6 +1609,16 @@ def main():
     parser.add_argument("--log_file", "--log_path", type=str, default=None, help="Path to current session telemetry and diagnostic log file")
 
     args = parser.parse_args()
+
+    if getattr(args, "check_updates", False):
+        from engine_tracker import check_all_engines, generate_report_text
+        print("\nChecking upstream GitHub repositories for Abu Align engines...\n")
+        data = check_all_engines()
+        print(generate_report_text(data))
+        sys.exit(0)
+
+    if not args.input:
+        parser.error("the following arguments are required: --input/-i")
 
     input_path = os.path.abspath(args.input)
     if os.path.isfile(input_path):

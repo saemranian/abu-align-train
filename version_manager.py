@@ -108,6 +108,7 @@ def create_version_snapshot(version_str: str) -> None:
         "video_extractor.py",
         "panoramic_splitter.py",
         "equirectangular_transcoder.py",
+        "engine_tracker.py",
         "version_manager.py",
         "VERSION.txt",
         "Abu_Align_and_Train.bat",

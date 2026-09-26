@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.7.6
+Abu Align & Train Version 0.0.7.7
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -23,6 +23,7 @@ import math
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
+import webbrowser
 
 # Ensure parent directory is on sys.path so vggt and dependencies can be imported from any subfolder
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -215,7 +216,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.7.6 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.7.7 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -400,6 +401,11 @@ class AbuAlignApp:
         self._check_queue()
         self.root.after(500, self._update_hardware_telemetry)
 
+        # Background GitHub Upstream Engine Version Tracker
+        self.engine_tracker_data = None
+        self._checking_engine_updates = False
+        self.root.after(800, self._start_background_engine_check)
+
     def _preset_path(self, name):
         name = name.strip()
         if (not name or len(name) > 100 or name.endswith(".")
@@ -527,6 +533,24 @@ class AbuAlignApp:
         tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
         tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="🔄 Check Engine Repository Updates...", command=self._open_engine_updates_dialog)
+
+        # Engines Menu (Repository Tracker & Upstream Docs)
+        engines_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
+        menubar.add_cascade(label="Engines", menu=engines_menu)
+        engines_menu.add_command(label="🔄 Check GitHub Updates for All Engines...", command=self._open_engine_updates_dialog)
+        engines_menu.add_separator()
+        engines_menu.add_command(label="⚡ VGGT-Omega (Facebook Research)", command=lambda: self._open_engine_link("vggt_omega"))
+        engines_menu.add_command(label="🎯 Niantic Labs ACE0 (ECCV 2024 Oral)", command=lambda: self._open_engine_link("ace0"))
+        engines_menu.add_command(label="✨ NVIDIA 3DGRUT (Ray Traced GS)", command=lambda: self._open_engine_link("3dgrut"))
+        engines_menu.add_command(label="🌐 PFGS360 (CVPR 2026 Pose-Free)", command=lambda: self._open_engine_link("pfgs360"))
+        engines_menu.add_command(label="⚡ NVIDIA Isaac pyCuSFM", command=lambda: self._open_engine_link("pycusfm"))
+        engines_menu.add_command(label="🌍 Mapillary OpenSfM", command=lambda: self._open_engine_link("opensfm"))
+        engines_menu.add_command(label="🔄 360DVO (IEEE RA-L 2026)", command=lambda: self._open_engine_link("360dvo"))
+        engines_menu.add_command(label="💡 LichtFeld Studio (Real-Time GUT)", command=lambda: self._open_engine_link("lichtfeld"))
+        engines_menu.add_command(label="🎓 Nerfstudio Splatfacto", command=lambda: self._open_engine_link("nerfstudio"))
+        engines_menu.add_command(label="🔮 VGGT (Original Architecture)", command=lambda: self._open_engine_link("vggt_base"))
 
         # Help Menu
         help_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
@@ -3696,7 +3720,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.7.6 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.7.7 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4232,7 +4256,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.7.6 - {title}")
+        doc_win.title(f"Abu Align v0.0.7.7 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4508,9 +4532,358 @@ class AbuAlignApp:
                 return
         messagebox.showinfo("Architecture Whitepaper", "Architecture document (AI_VS_TRADITIONAL_PIPELINE_ARCHITECTURE.md) not found.")
 
+    def _safe_open_url(self, url):
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showwarning("Open Browser", f"Could not open link:\n{e}", parent=self.root)
+
+    def _safe_open_folder(self, folder_path):
+        try:
+            if os.path.isdir(folder_path):
+                os.startfile(folder_path)
+            elif os.path.isfile(folder_path):
+                os.startfile(os.path.dirname(folder_path))
+        except Exception as e:
+            messagebox.showwarning("Open Folder", f"Could not open directory:\n{e}", parent=self.root)
+
+    def _open_engine_link(self, engine_id):
+        from engine_tracker import ENGINE_REGISTRY
+        eng = next((e for e in ENGINE_REGISTRY if e["id"] == engine_id), None)
+        if eng:
+            url = eng.get("doc_url") or eng.get("repo_url")
+            if url:
+                self._safe_open_url(url)
+
+    def _start_background_engine_check(self):
+        """Asynchronously checks upstream GitHub repositories for engine updates."""
+        if getattr(self, "_checking_engine_updates", False):
+            return
+        self._checking_engine_updates = True
+        if hasattr(self, "engine_update_btn") and self.engine_update_btn.winfo_exists():
+            self.engine_update_btn.configure(
+                text="⏳ Checking engines...",
+                bg="#242d32",
+                fg="#a0adb5"
+            )
+
+        def worker():
+            try:
+                from engine_tracker import check_all_engines
+                data = check_all_engines()
+            except Exception as e:
+                data = {
+                    "has_internet": False,
+                    "update_count": 0,
+                    "total_engines": 10,
+                    "error": str(e),
+                    "engines": []
+                }
+            try:
+                if self.root and self.root.winfo_exists():
+                    self.root.after(0, lambda: self._on_engine_updates_checked(data))
+            except Exception:
+                pass
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _on_engine_updates_checked(self, data):
+        self._checking_engine_updates = False
+        self.engine_tracker_data = data
+        if not hasattr(self, "engine_update_btn") or not self.engine_update_btn.winfo_exists():
+            return
+
+        has_net = data.get("has_internet", False)
+        up_count = data.get("update_count", 0)
+
+        if not has_net:
+            self.engine_update_btn.configure(
+                text="⚡ Offline (Engines)",
+                bg="#242d32",
+                fg="#a0adb5",
+                font=("Segoe UI", 9)
+            )
+        elif up_count > 0:
+            self.engine_update_btn.configure(
+                text=f"🔔 Update Available ({up_count})",
+                bg="#d97706",
+                fg="#ffffff",
+                font=("Segoe UI", 9, "bold")
+            )
+        else:
+            self.engine_update_btn.configure(
+                text="✓ Engines Up to Date",
+                bg="#242d32",
+                fg="#10b981",
+                font=("Segoe UI", 9)
+            )
+
+    def _open_engine_updates_dialog(self):
+        """Displays an interactive modal dialog showing all engine repository versions, commit statuses, and update actions."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Abu Align & Train - Engine Repositories & Update Monitor")
+        dialog.configure(bg=self.bg_dark)
+        dialog.geometry("980x680")
+        dialog.minsize(860, 520)
+        dialog.transient(self.root)
+
+        # Header Frame
+        hdr = tk.Frame(dialog, bg=self.panel_bg, padx=20, pady=16)
+        hdr.pack(fill=tk.X)
+
+        title_lbl = tk.Label(
+            hdr, text="📦 Engine Repositories & Upstream Tracking",
+            font=("Segoe UI", 16, "bold"), fg=self.text_primary, bg=self.panel_bg
+        )
+        title_lbl.pack(anchor="w")
+
+        sub_lbl = tk.Label(
+            hdr, text="Monitors upstream GitHub repositories and compares local commits across all photogrammetry, SfM, and 3DGS engines.",
+            font=("Segoe UI", 9), fg=self.text_secondary, bg=self.panel_bg
+        )
+        sub_lbl.pack(anchor="w", pady=(3, 8))
+
+        # Status summary banner inside header
+        summary_frame = tk.Frame(hdr, bg=self.bg_dark, padx=12, pady=8)
+        summary_frame.pack(fill=tk.X, pady=(4, 0))
+
+        net_status_lbl = tk.Label(summary_frame, text="Internet: Checking...", font=("Segoe UI", 9, "bold"), fg=self.accent_blue, bg=self.bg_dark)
+        net_status_lbl.pack(side=tk.LEFT, padx=(0, 16))
+
+        up_status_lbl = tk.Label(summary_frame, text="", font=("Segoe UI", 9, "bold"), fg="#fbbf24", bg=self.bg_dark)
+        up_status_lbl.pack(side=tk.LEFT, padx=(0, 16))
+
+        time_status_lbl = tk.Label(summary_frame, text="", font=("Segoe UI", 9), fg=self.text_secondary, bg=self.bg_dark)
+        time_status_lbl.pack(side=tk.RIGHT)
+
+        # Main Table Container
+        content_frame = tk.Frame(dialog, bg=self.bg_dark, padx=16, pady=12)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        table_frame = tk.Frame(content_frame, bg=self.panel_bg, padx=2, pady=2)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("name", "category", "applied", "remote", "status")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=10, selectmode="browse")
+        tree.heading("name", text="Engine Name")
+        tree.heading("category", text="Category")
+        tree.heading("applied", text="Local Applied Version")
+        tree.heading("remote", text="GitHub Upstream (HEAD)")
+        tree.heading("status", text="Status")
+
+        tree.column("name", width=170, anchor="w")
+        tree.column("category", width=150, anchor="w")
+        tree.column("applied", width=150, anchor="w")
+        tree.column("remote", width=180, anchor="w")
+        tree.column("status", width=140, anchor="w")
+
+        tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        tree.tag_configure("update", background="#382512", foreground="#fbbf24")
+        tree.tag_configure("uptodate", background="#12281e", foreground="#34d399")
+        tree.tag_configure("custom", background="#142436", foreground="#38bdf8")
+        tree.tag_configure("offline", background="#1a2024", foreground="#9ca3af")
+
+        # Detail Card
+        detail_card = tk.Frame(content_frame, bg=self.panel_bg, padx=16, pady=12, relief="flat", bd=1)
+        detail_card.pack(fill=tk.X, pady=(12, 0))
+
+        detail_title = tk.Label(detail_card, text="Select an engine above to inspect repository details", font=("Segoe UI", 11, "bold"), fg=self.text_primary, bg=self.panel_bg)
+        detail_title.pack(anchor="w")
+
+        detail_desc = tk.Label(detail_card, text="", font=("Segoe UI", 9), fg=self.text_secondary, bg=self.panel_bg, wraplength=850, justify="left")
+        detail_desc.pack(anchor="w", pady=(3, 6))
+
+        detail_info_lbl = tk.Label(detail_card, text="", font=("Consolas", 9), fg=self.accent_blue, bg=self.panel_bg, justify="left")
+        detail_info_lbl.pack(anchor="w")
+
+        detail_btn_row = tk.Frame(detail_card, bg=self.panel_bg)
+        detail_btn_row.pack(anchor="w", pady=(8, 0))
+
+        github_btn = tk.Button(
+            detail_btn_row, text="🌐 View GitHub Repository", bg="#242d32", fg=self.text_primary,
+            activebackground="#344149", relief="flat", padx=10, pady=4, font=("Segoe UI", 9), cursor="hand2",
+            state=tk.DISABLED
+        )
+        github_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        folder_btn = tk.Button(
+            detail_btn_row, text="📁 Open Local Directory", bg="#242d32", fg=self.text_primary,
+            activebackground="#344149", relief="flat", padx=10, pady=4, font=("Segoe UI", 9), cursor="hand2",
+            state=tk.DISABLED
+        )
+        folder_btn.pack(side=tk.LEFT)
+
+        selected_engine_ref = [None]
+
+        def on_select_engine(event):
+            sel = tree.selection()
+            if not sel:
+                return
+            eng_id = sel[0]
+            if not self.engine_tracker_data:
+                return
+            eng = next((e for e in self.engine_tracker_data.get("engines", []) if e["id"] == eng_id), None)
+            if not eng:
+                return
+
+            selected_engine_ref[0] = eng
+            detail_title.configure(text=f"{eng['name']}  ·  {eng['category']}")
+            detail_desc.configure(text=eng.get("role", ""))
+
+            loc = eng.get("local", {})
+            rem = eng.get("remote")
+
+            loc_path = loc.get("path") or "Integrated in Abu Align / Conda"
+            loc_msg = loc.get("message") or ""
+            rem_msg = rem.get("message") if rem else "N/A"
+            rem_sha = rem.get("short_sha") if rem else "N/A"
+            rem_date = rem.get("date") if rem else ""
+
+            info_text = (
+                f"• Local Path:    {loc_path}\n"
+                f"• Local Commit:  {loc.get('short_sha', 'N/A')} ({loc.get('date', 'N/A')}) - {loc_msg[:65]}\n"
+                f"• Remote HEAD:   {rem_sha} ({rem_date}) - {rem_msg[:65]}"
+            )
+            detail_info_lbl.configure(text=info_text)
+
+            repo_url = eng.get("repo_url") or eng.get("doc_url")
+            if repo_url:
+                github_btn.configure(state=tk.NORMAL, command=lambda u=repo_url: self._safe_open_url(u))
+            else:
+                github_btn.configure(state=tk.DISABLED)
+
+            if loc.get("found") and loc.get("path") and os.path.exists(loc["path"]):
+                folder_btn.configure(state=tk.NORMAL, command=lambda p=loc["path"]: self._safe_open_folder(p))
+            else:
+                folder_btn.configure(state=tk.DISABLED)
+
+        tree.bind("<<TreeviewSelect>>", on_select_engine)
+
+        def populate_tree(data):
+            for item in tree.get_children():
+                tree.delete(item)
+
+            if not data:
+                return
+
+            has_net = data.get("has_internet", False)
+            up_count = data.get("update_count", 0)
+
+            net_status_lbl.configure(
+                text="Internet: Connected" if has_net else "Internet: Offline / Local Only",
+                fg="#10b981" if has_net else "#ef4444"
+            )
+            up_status_lbl.configure(
+                text=f"🔔 {up_count} Update{'s' if up_count != 1 else ''} Available!" if up_count > 0 else "✓ All Engines Up to Date",
+                fg="#fbbf24" if up_count > 0 else "#10b981"
+            )
+            time_status_lbl.configure(text=f"Last Checked: {data.get('timestamp', 'N/A')}")
+
+            for eng in data.get("engines", []):
+                loc = eng.get("local", {})
+                rem = eng.get("remote")
+
+                if loc.get("is_git") and loc.get("short_sha"):
+                    applied_str = f"{loc['short_sha']} ({loc.get('date', '')})"
+                elif eng.get("pinned_version"):
+                    applied_str = eng["pinned_version"]
+                elif loc.get("found"):
+                    applied_str = "Local Directory"
+                else:
+                    applied_str = "Integrated Package"
+
+                if rem and rem.get("short_sha"):
+                    remote_str = f"{rem['short_sha']} ({rem.get('date', '')})"
+                elif not has_net:
+                    remote_str = "Offline"
+                elif not eng.get("repo_slug"):
+                    remote_str = "Native Engine"
+                else:
+                    remote_str = "Unreachable"
+
+                status_tag = "uptodate"
+                st = eng.get("status", "")
+                if st == "update_available":
+                    status_tag = "update"
+                elif st == "custom_ahead":
+                    status_tag = "custom"
+                elif "offline" in st:
+                    status_tag = "offline"
+
+                tree.insert(
+                    "", tk.END, iid=eng["id"],
+                    values=(eng["name"], eng["category"], applied_str, remote_str, eng.get("status_label", "Unknown")),
+                    tags=(status_tag,)
+                )
+
+            children = tree.get_children()
+            if children:
+                update_items = [c for c in children if "update" in tree.item(c, "tags")]
+                first_target = update_items[0] if update_items else children[0]
+                tree.selection_set(first_target)
+                tree.focus(first_target)
+                on_select_engine(None)
+
+        # Bottom Action Bar
+        bottom_bar = tk.Frame(dialog, bg=self.bg_dark, padx=16, pady=12)
+        bottom_bar.pack(fill=tk.X)
+
+        def do_refresh():
+            refresh_btn.configure(state=tk.DISABLED, text="⏳ Checking...")
+            def bg_check():
+                from engine_tracker import check_all_engines
+                new_data = check_all_engines()
+                def update_ui():
+                    self._on_engine_updates_checked(new_data)
+                    populate_tree(new_data)
+                    refresh_btn.configure(state=tk.NORMAL, text="🔄 Refresh Now")
+                dialog.after(0, update_ui)
+            threading.Thread(target=bg_check, daemon=True).start()
+
+        refresh_btn = tk.Button(
+            bottom_bar, text="🔄 Refresh Now", bg="#242d32", fg=self.text_primary,
+            activebackground="#344149", relief="flat", padx=14, pady=6,
+            font=("Segoe UI", 9, "bold"), cursor="hand2", command=do_refresh
+        )
+        refresh_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        def copy_report():
+            if not self.engine_tracker_data:
+                return
+            from engine_tracker import generate_report_text
+            rpt = generate_report_text(self.engine_tracker_data)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(rpt)
+            copy_btn.configure(text="✓ Copied to Clipboard!")
+            dialog.after(2500, lambda: copy_btn.configure(text="📋 Copy Diagnostic Report"))
+
+        copy_btn = tk.Button(
+            bottom_bar, text="📋 Copy Diagnostic Report", bg="#242d32", fg=self.accent_blue,
+            activebackground="#344149", relief="flat", padx=14, pady=6,
+            font=("Segoe UI", 9), cursor="hand2", command=copy_report
+        )
+        copy_btn.pack(side=tk.LEFT)
+
+        close_btn = tk.Button(
+            bottom_bar, text="Close", bg="#242d32", fg=self.text_primary,
+            activebackground="#344149", relief="flat", padx=18, pady=6,
+            font=("Segoe UI", 9), cursor="hand2", command=dialog.destroy
+        )
+        close_btn.pack(side=tk.RIGHT)
+
+        if self.engine_tracker_data:
+            populate_tree(self.engine_tracker_data)
+        else:
+            do_refresh()
+
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.7.6\n"
+            "Abu Align & Train - Version 0.0.7.7\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
