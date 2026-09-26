@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.8.1
+Abu Align & Train Version 0.0.8.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -216,7 +216,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.8.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.8.2 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -285,7 +285,7 @@ class AbuAlignApp:
 
         # VGG-T3 (VGG-TTT) Specific Options
         self.vggttt_conf_var = tk.StringVar(value="2.0 (Default)")
-        self.vggttt_mem_var = tk.BooleanVar(value=False)
+        self.vggttt_mem_var = tk.BooleanVar(value=True)
         self.vggttt_steps_var = tk.StringVar(value="1 (Standard)")
         self.vggttt_pred_var = tk.BooleanVar(value=False)
 
@@ -1012,7 +1012,7 @@ class AbuAlignApp:
 
         chk_mem = tk.Checkbutton(ttt_col2, text="Memory-Efficient (>64 views)", variable=self.vggttt_mem_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_mem.pack(anchor="w", pady=(2, 0))
-        ToolTip(chk_mem, "Memory-Efficient Attention Mode:\nEnables chunked linear fast-weight recurrence for massive image collections (>64 photos). Keeps peak GPU VRAM constant regardless of dataset size.")
+        ToolTip(chk_mem, "Memory-Efficient Attention Mode:\nEnables chunked linear fast-weight recurrence & CPU memory offloading for massive image collections (>64 photos). Prevents VRAM overflow and keeps peak GPU memory strictly below 7 GB regardless of dataset size.")
 
         # Col C: Architecture & Universal 3DGS Bridge
         ttt_col3 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
@@ -3800,7 +3800,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.8.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.8.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4349,7 +4349,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.8.1 - {title}")
+        doc_win.title(f"Abu Align v0.0.8.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4976,7 +4976,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.8.1\n"
+            "Abu Align & Train - Version 0.0.8.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

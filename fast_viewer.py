@@ -15,6 +15,7 @@ import argparse
 import webbrowser
 import subprocess
 import numpy as np
+from scipy.spatial.transform import Rotation
 from typing import List, Dict, Tuple, Optional
 
 # =========================================================================
@@ -34,7 +35,10 @@ def read_ply_data(ply_path: str) -> Tuple[Optional[np.ndarray], Optional[np.ndar
         with open(ply_path, 'rb') as f:
             header = []
             while True:
-                line = f.readline().decode('utf-8', errors='ignore').strip()
+                raw = f.readline()
+                if not raw:
+                    return None, None
+                line = raw.decode('utf-8', errors='ignore').strip()
                 header.append(line)
                 if line == 'end_header':
                     break
@@ -192,18 +196,10 @@ def load_cameras_from_colmap_images(images_txt_path: str) -> List[Dict]:
                         continue
 
                     # R_c2w to quaternion wxyz
-                    tr = np.trace(R_c2w)
-                    if tr > 0:
-                        S = math.sqrt(tr + 1.0) * 2.0
-                        qw_c = 0.25 * S
-                        qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
-                        qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
-                        qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
-                    else:
-                        qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+                    qx_c, qy_c, qz_c, qw_c = Rotation.from_matrix(R_c2w).as_quat()
 
                     poses.append({
-                        "name": os.path.basename(name),
+                        "name": name.replace("\\", "/").removeprefix("./"),
                         "pos": t_c2w.astype(np.float32),
                         "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
                     })
@@ -223,20 +219,11 @@ def load_cameras_from_transforms(tf_path: str) -> List[Dict]:
         frames = data.get("frames", [])
         for idx, frame in enumerate(frames):
             c2w = np.array(frame.get("transform_matrix", np.eye(4)), dtype=np.float32)
-            R = c2w[:3, :3]
+            # NeRF transforms use OpenGL (-Z forward, +Y up); Viser uses OpenCV.
+            R = c2w[:3, :3] @ np.diag([1.0, -1.0, -1.0])
             t = c2w[:3, 3]
-
-            tr = np.trace(R)
-            if tr > 0:
-                S = np.sqrt(tr + 1.0) * 2.0
-                qw = 0.25 * S
-                qx = (R[2, 1] - R[1, 2]) / S
-                qy = (R[0, 2] - R[2, 0]) / S
-                qz = (R[1, 0] - R[0, 1]) / S
-            else:
-                qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
-
-            name = os.path.basename(frame.get("file_path", f"frame_{idx:04d}"))
+            qx, qy, qz, qw = Rotation.from_matrix(R).as_quat()
+            name = frame.get("file_path", f"frame_{idx:04d}").replace("\\", "/").removeprefix("./")
             poses.append({
                 "name": name,
                 "pos": t,
@@ -281,18 +268,10 @@ def load_cameras_from_colmap_bin(images_bin_path: str) -> List[Dict]:
                 R_c2w = R_w2c.T
                 t_c2w = -R_c2w @ t_w2c
 
-                tr = np.trace(R_c2w)
-                if tr > 0:
-                    S = math.sqrt(tr + 1.0) * 2.0
-                    qw_c = 0.25 * S
-                    qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
-                    qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
-                    qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
-                else:
-                    qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+                qx_c, qy_c, qz_c, qw_c = Rotation.from_matrix(R_c2w).as_quat()
 
                 poses.append({
-                    "name": os.path.basename(name),
+                    "name": name.replace("\\", "/").removeprefix("./"),
                     "pos": t_c2w.astype(np.float32),
                     "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
                 })
@@ -336,18 +315,10 @@ def load_cameras_from_opensfm(opensfm_path: str) -> List[Dict]:
                 R_c2w = R_w2c.T
                 t_c2w = -R_c2w @ t_w2c
 
-                tr = np.trace(R_c2w)
-                if tr > 0:
-                    S = math.sqrt(tr + 1.0) * 2.0
-                    qw_c = 0.25 * S
-                    qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
-                    qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
-                    qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
-                else:
-                    qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+                qx_c, qy_c, qz_c, qw_c = Rotation.from_matrix(R_c2w).as_quat()
 
                 poses.append({
-                    "name": os.path.basename(name),
+                    "name": name.replace("\\", "/").removeprefix("./"),
                     "pos": t_c2w.astype(np.float32),
                     "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
                 })
@@ -385,15 +356,7 @@ def load_cameras_from_ace0(ace0_path: str) -> List[Dict]:
                     R_c2w = R_w2c.T
                     t_c2w = -R_c2w @ t_w2c
 
-                    tr = np.trace(R_c2w)
-                    if tr > 0:
-                        S = math.sqrt(tr + 1.0) * 2.0
-                        qw_c = 0.25 * S
-                        qx_c = (R_c2w[2, 1] - R_c2w[1, 2]) / S
-                        qy_c = (R_c2w[0, 2] - R_c2w[2, 0]) / S
-                        qz_c = (R_c2w[1, 0] - R_c2w[0, 1]) / S
-                    else:
-                        qw_c, qx_c, qy_c, qz_c = 1.0, 0.0, 0.0, 0.0
+                    qx_c, qy_c, qz_c, qw_c = Rotation.from_matrix(R_c2w).as_quat()
 
                     poses.append({
                         "name": os.path.basename(raw_img_path),
@@ -430,7 +393,7 @@ def load_cameras_from_cameras_csv(csv_path: str) -> List[Dict]:
                     y = float(row["y"])
                     z = float(row["alt"])
                     poses.append({
-                        "name": os.path.basename(name),
+                        "name": name.replace("\\", "/").removeprefix("./"),
                         "pos": np.array([x, y, z], dtype=np.float32),
                         "wxyz": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
                     })
@@ -783,7 +746,7 @@ def main():
     for offset in range(10):
         try:
             port_to_try = active_port + offset
-            server = viser.ViserServer(host="0.0.0.0", port=port_to_try)
+            server = viser.ViserServer(host="127.0.0.1", port=port_to_try)
             active_port = port_to_try
             break
         except Exception:
@@ -801,7 +764,9 @@ def main():
         dark_mode=True,
         brand_color=(112, 219, 192),  # Shared mint accent.
         show_logo=False,
-        show_share_button=False
+        # Viser 0.2.23 conditionally calls a React hook when this is false,
+        # crashing the entire frontend as the initial theme arrives.
+        show_share_button=True
     )
 
     if not runs:
@@ -810,314 +775,17 @@ def main():
     run_names = list(runs.keys())
     current_run_name = initial_selected if (initial_selected and initial_selected in runs) else run_names[0]
 
-    # --- TOP GUI: Project & Provenance Card ---
-    server.gui.add_markdown(f"## Scene inspector\n{project_title}\n\nInspect geometry, cameras, and reconstruction runs.")
+    from viewer_workspace import InspectionWorkspace
 
-    # Run selection dropdown
-    run_dropdown = server.gui.add_dropdown(
-        "Reconstruction",
-        options=run_names,
-        initial_value=current_run_name
-    )
+    def load_workspace_run(path):
+        asset, *_ = find_run_assets(path)
+        points, colors = read_ply_data(asset) if asset else (None, None)
+        cameras, source = load_run_cameras(path)
+        return dict(points=points, colors=colors, cameras=cameras, source=source,
+                    asset=os.path.basename(asset) if asset else "No point cloud found")
 
-    # Dynamic run info card
-    info_card = server.gui.add_markdown(content="*Inspecting run...*")
-
-    # Action Toolbar
-    refresh_btn = server.gui.add_button("Refresh runs")
-    focus_btn = server.gui.add_button("Fit trajectory")
-    folder_btn = server.gui.add_button("Open run folder")
-
-    # --- VIEW CONTROLS FOLDER ---
-    with server.gui.add_folder("Display"):
-        show_traj_check = server.gui.add_checkbox("Trajectory", initial_value=True)
-        show_cams_check = server.gui.add_checkbox("Camera frustums", initial_value=True)
-        filter_outliers_check = server.gui.add_checkbox("Hide outliers beyond 30 m", initial_value=True)
-        point_size_slider = server.gui.add_slider("Point size", min=0.001, max=0.05, step=0.001, initial_value=0.006)
-        frustum_scale_slider = server.gui.add_slider("Camera size", min=0.01, max=0.3, step=0.01, initial_value=0.05)
-        color_mode_dropdown = server.gui.add_dropdown(
-            "Color",
-            options=["Original RGB", "Height Ramp (Z-axis)", "Distance Ramp", "Solid Emerald"],
-            initial_value="Original RGB"
-        )
-
-    # State tracking
-    current_camera_handles = []
-    current_traj_handles = []
-    current_pcd_handle = None
-    latest_camera_center = np.zeros(3, dtype=np.float32)
-    current_look_at = np.zeros(3, dtype=np.float32)
-    current_eye_pos = np.array([0.0, -2.0, 1.0], dtype=np.float32)
-
-    def load_and_render_run(run_name: str):
-        nonlocal current_camera_handles, current_traj_handles, current_pcd_handle, latest_camera_center, current_look_at, current_eye_pos
-
-        run_path = runs.get(run_name, target_dir)
-        best_ply, _, _, _, _, _, _ = find_run_assets(run_path)
-        cameras, cam_source_label = load_run_cameras(run_path)
-        report_meta = parse_run_report(run_path)
-
-        # Clear previous cameras & trajectory
-        for h in current_camera_handles:
-            try: h.remove()
-            except Exception: pass
-        current_camera_handles.clear()
-
-        for h in current_traj_handles:
-            try: h.remove()
-            except Exception: pass
-        current_traj_handles.clear()
-
-        # 1. Render Cameras & Trajectory
-        if cameras:
-            cam_positions = np.array([c["pos"] for c in cameras], dtype=np.float32)
-            latest_camera_center = np.mean(cam_positions, axis=0)
-            cam_span = float(np.ptp(cam_positions, axis=0).max()) if len(cam_positions) > 1 else 1.0
-
-            # Render camera trajectory as smooth 3D Catmull-Rom spline with line fallback
-            if show_traj_check.value and len(cam_positions) >= 2:
-                filtered_cams = [cam_positions[0]]
-                for p in cam_positions[1:]:
-                    if np.linalg.norm(p - filtered_cams[-1]) > 1e-4:
-                        filtered_cams.append(p)
-                filtered_cams = np.array(filtered_cams, dtype=np.float32)
-
-                if len(filtered_cams) >= 2:
-                    spline_success = False
-                    try:
-                        spline_handle = server.scene.add_spline_catmull_rom(
-                            name="/camera_trajectory/path",
-                            positions=filtered_cams,
-                            line_width=3.0,
-                            color=(16, 185, 129),  # Emerald spline
-                        )
-                        current_traj_handles.append(spline_handle)
-                        spline_success = True
-                    except Exception:
-                        spline_success = False
-
-                    if not spline_success:
-                        try:
-                            segs = np.stack([filtered_cams[:-1], filtered_cams[1:]], axis=1)
-                            line_handle = server.scene.add_line_segments(
-                                name="/camera_trajectory/path",
-                                points=segs,
-                                colors=(16, 185, 129),
-                                line_width=3.0
-                            )
-                            current_traj_handles.append(line_handle)
-                        except Exception:
-                            pass
-
-            # Render frustums
-            if show_cams_check.value:
-                auto_scale = float(np.clip(cam_span * 0.035, 0.015, 0.35))
-                effective_scale = frustum_scale_slider.value if frustum_scale_slider.value != 0.05 else auto_scale
-
-                step = 1 if len(cameras) <= 120 else (2 if len(cameras) <= 300 else 3)
-                for i in range(0, len(cameras), step):
-                    cam = cameras[i]
-                    pct = float(i) / max(1, len(cameras) - 1)
-                    r = int(pct * 255)
-                    g = int((1.0 - pct) * 255)
-                    b = 100
-
-                    try:
-                        handle = server.scene.add_camera_frustum(
-                            name=f"/cameras/{cam['name']}",
-                            fov=np.radians(60.0),
-                            aspect=1.5,
-                            scale=effective_scale,
-                            wxyz=cam["wxyz"],
-                            position=cam["pos"],
-                            color=(r, g, b)
-                        )
-                        current_camera_handles.append(handle)
-                    except Exception:
-                        pass
-
-        # 2. Load Point Cloud
-        pts, cols = (None, None)
-        ply_label = "None found"
-        total_pts = 0
-        inlier_pts = 0
-
-        if best_ply and os.path.isfile(best_ply):
-            pts, cols = read_ply_data(best_ply)
-            ply_label = os.path.basename(best_ply)
-
-        pts_render = None
-        if pts is not None and len(pts) > 0:
-            total_pts = len(pts)
-
-            # Filter distant outliers if enabled
-            if filter_outliers_check.value and len(pts) > 100:
-                ref_center = np.median(pts, axis=0)
-                dists = np.linalg.norm(pts - ref_center, axis=1)
-
-                dist_cutoff = min(35.0, max(8.0, float(np.percentile(dists, 90) * 2.0)))
-                valid_mask = dists < dist_cutoff
-                pts_render = pts[valid_mask]
-                cols_render = cols[valid_mask] if cols is not None else None
-                inlier_pts = len(pts_render)
-            else:
-                pts_render = pts
-                cols_render = cols
-                inlier_pts = total_pts
-
-            # Apply Color Modes
-            mode = color_mode_dropdown.value
-            if mode == "Height Ramp (Z-axis)":
-                zs = pts_render[:, 2]
-                z_min, z_max = zs.min(), zs.max()
-                z_norm = (zs - z_min) / max(1e-6, z_max - z_min)
-                cols_render = np.zeros((len(pts_render), 3), dtype=np.uint8)
-                cols_render[:, 0] = (z_norm * 255).astype(np.uint8)
-                cols_render[:, 1] = ((1.0 - z_norm) * 200).astype(np.uint8)
-                cols_render[:, 2] = 220
-            elif mode == "Distance Ramp":
-                ref_center = np.median(pts_render, axis=0)
-                d = np.linalg.norm(pts_render - ref_center, axis=1)
-                d_norm = d / max(1e-6, d.max())
-                cols_render = np.zeros((len(pts_render), 3), dtype=np.uint8)
-                cols_render[:, 0] = (d_norm * 255).astype(np.uint8)
-                cols_render[:, 1] = 120
-                cols_render[:, 2] = ((1.0 - d_norm) * 255).astype(np.uint8)
-            elif mode == "Solid Emerald":
-                cols_render = np.full((len(pts_render), 3), (16, 185, 129), dtype=np.uint8)
-
-            current_pcd_handle = server.scene.add_point_cloud(
-                name="/reconstruction/points",
-                points=pts_render,
-                colors=cols_render if cols_render is not None else np.full((len(pts_render), 3), 180, dtype=np.uint8),
-                point_size=point_size_slider.value,
-            )
-            print(f"[Viewer] Rendered {inlier_pts:,} points from {ply_label} ({run_name})")
-        else:
-            try:
-                server.scene.remove("/reconstruction/points")
-            except Exception:
-                pass
-
-        # 3. Auto-fit Scene Viewport Bounds
-        coords_list = []
-        if len(cameras) > 0:
-            coords_list.append(np.array([c["pos"] for c in cameras], dtype=np.float32))
-        if pts_render is not None and len(pts_render) > 0:
-            sub = pts_render[::max(1, len(pts_render) // 1000)]
-            coords_list.append(sub)
-
-        if coords_list:
-            all_coords = np.concatenate(coords_list, axis=0)
-            p_min = np.percentile(all_coords, 2, axis=0)
-            p_max = np.percentile(all_coords, 98, axis=0)
-            center = (p_min + p_max) / 2.0
-            diag = max(float(np.linalg.norm(p_max - p_min)), 0.5)
-
-            current_look_at = center.astype(np.float32)
-            current_eye_pos = (center + np.array([0.0, -diag * 1.5, diag * 0.8], dtype=np.float32)).astype(np.float32)
-
-            for client in server.get_clients().values():
-                try:
-                    client.camera.look_at = current_look_at
-                    client.camera.position = current_eye_pos
-                    client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-                except Exception:
-                    pass
-
-        # 4. Update Provenance & Metadata Info Card (Bulletproof React Markdown format)
-        eng = report_meta.get("engine", "Auto-Detected")
-        date_str = report_meta.get("date", "Recent Alignment")
-        tag_status = "Active Run (Selected)" if run_name == initial_selected else "Alignment Run"
-        if inlier_pts == 0 and len(cameras) == 0:
-            tag_status = "Incomplete / Empty Run"
-
-        log_f = report_meta.get("log_file", "N/A")
-        log_line = f"\n- **Log**: `{log_f}`" if (log_f and log_f != "N/A") else ""
-
-        info_card.content = (
-            f"**Status**: `{tag_status}`\n\n"
-            f"- **Engine**: {eng}\n"
-            f"- **Timestamp**: {date_str}"
-            f"{log_line}\n"
-            f"- **Cameras**: **{len(cameras)} tracked** ({cam_source_label})\n"
-            f"- **3D Points**: **{inlier_pts:,}** / {total_pts:,} vertices (`{ply_label}`)\n"
-            f"- **Folder**: `{os.path.basename(run_path)}`"
-        )
-
-    # Client connection listener: immediately auto-frame new tabs
-    @server.on_client_connect
-    def _(client: viser.ClientHandle) -> None:
-        try:
-            client.camera.look_at = current_look_at
-            client.camera.position = current_eye_pos
-            client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        except Exception:
-            pass
-
-    # Initial Render
-    load_and_render_run(current_run_name)
-
-    # Setup Dynamic Callbacks
-    @run_dropdown.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @point_size_slider.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @frustum_scale_slider.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @show_traj_check.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @show_cams_check.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @filter_outliers_check.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @color_mode_dropdown.on_update
-    def _(_) -> None:
-        load_and_render_run(run_dropdown.value)
-
-    @refresh_btn.on_click
-    def _(_) -> None:
-        nonlocal runs, run_names
-        _, _, new_runs, _ = resolve_project_structure(target_dir)
-        if new_runs:
-            runs = new_runs
-            run_names = list(runs.keys())
-            run_dropdown.options = run_names
-            run_dropdown.value = run_names[0]
-            load_and_render_run(run_names[0])
-            print(f"[Viewer] Refreshed runs: {len(runs)} found. Loaded latest: {run_names[0]}")
-
-    @focus_btn.on_click
-    def _(_) -> None:
-        for client in server.get_clients().values():
-            try:
-                client.camera.look_at = current_look_at
-                client.camera.position = current_eye_pos
-                client.camera.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-            except Exception:
-                pass
-        print("[Viewer] Camera view reframed to scene bounds.")
-
-    @folder_btn.on_click
-    def _(_) -> None:
-        active_path = runs.get(run_dropdown.value, target_dir)
-        if os.path.isdir(active_path):
-            if sys.platform == "win32":
-                os.startfile(active_path)
-            else:
-                subprocess.Popen(["xdg-open", active_path])
+    workspace = InspectionWorkspace(server, runs, current_run_name, project_title,
+        load_workspace_run, lambda: resolve_project_structure(target_dir)[2])
 
     url = f"http://localhost:{active_port}"
     print(f"\n[READY] Interactive 3D Viewer running at: {url}")

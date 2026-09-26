@@ -96,6 +96,7 @@ def create_version_snapshot(version_str: str) -> None:
         "rig_designer_ui.py",
         "rig_viewport.py",
         "fast_viewer.py",
+        "viewer_workspace.py",
         "align_cli.py",
         "train_engine.py",
         "opensfm_engine.py",

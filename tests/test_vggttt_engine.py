@@ -82,28 +82,65 @@ class TestVGGTTTEngine(unittest.TestCase):
 
     def test_intrinsics_rescaling(self):
         """
-        VGG-T³ operates at 518px preprocessed canvas.
-        Intrinsics must upscale proportionally to original image aspect and dimensions.
+        VGG-T³ operates at aspect-ratio preserved dimensions (e.g. 518 x 294 for 16:9).
+        Intrinsics must upscale proportionally to original image content dimensions.
         """
-        model_w, model_h = 518, 518
         orig_w, orig_h = 3840, 2160
+        # For 16:9 image, target_size 518: new_w = 518, new_h = round(2160 * 518 / 3840 / 14) * 14 = 294
+        new_w, new_h = 518, 294
+        pad_left, pad_top = 0, 0
 
-        scale_x = orig_w / float(model_w)
-        scale_y = orig_h / float(model_h)
+        scale_x = orig_w / float(new_w)
+        scale_y = orig_h / float(new_h)
 
         fx_model = 400.0
         fy_model = 400.0
         cx_model = 259.0
-        cy_model = 259.0
+        cy_model = 147.0
 
         fx_orig = fx_model * scale_x
         fy_orig = fy_model * scale_y
-        cx_orig = cx_model * scale_x
-        cy_orig = cy_model * scale_y
+        cx_orig = (cx_model - pad_left) * scale_x
+        cy_orig = (cy_model - pad_top) * scale_y
 
         self.assertAlmostEqual(cx_orig, orig_w / 2.0, places=1)
         self.assertAlmostEqual(cy_orig, orig_h / 2.0, places=1)
-        self.assertAlmostEqual(fx_orig, 400.0 * (3840.0 / 518.0), places=3)
+        # Verify focal lengths scale proportionally with true aspect ratio
+        self.assertAlmostEqual(fx_orig / fy_orig, 1.0, delta=0.02)
+
+    def test_aspect_ratio_unpadding_and_focal_parity(self):
+        """
+        Verifies that when mixed portrait and landscape images are padded,
+        the unpadding formula restores square focal lengths (fx/fy approx 1.0)
+        and centers the optical center on both orientations.
+        """
+        # Portrait view: 853 x 1280 padded inside 518 x 518 (content: 350 x 518, pad_left=84, pad_top=0)
+        p_orig_w, p_orig_h = 853, 1280
+        p_new_w, p_new_h = 350, 518
+        p_pad_left, p_pad_top = 84, 0
+        p_scale_x = p_orig_w / float(p_new_w)
+        p_scale_y = p_orig_h / float(p_new_h)
+        p_fx = 400.0 * p_scale_x
+        p_fy = 400.0 * p_scale_y
+        p_cx = (259.0 - p_pad_left) * p_scale_x
+        p_cy = (259.0 - p_pad_top) * p_scale_y
+        self.assertAlmostEqual(p_fx / p_fy, 1.0, delta=0.02)
+        self.assertAlmostEqual(p_cx, p_orig_w / 2.0, delta=1.5)
+        self.assertAlmostEqual(p_cy, p_orig_h / 2.0, delta=1.5)
+
+        # Landscape view: 1280 x 853 padded inside 518 x 518 (content: 518 x 350, pad_left=0, pad_top=84)
+        l_orig_w, l_orig_h = 1280, 853
+        l_new_w, l_new_h = 518, 350
+        l_pad_left, l_pad_top = 0, 84
+        l_scale_x = l_orig_w / float(l_new_w)
+        l_scale_y = l_orig_h / float(l_new_h)
+        l_fx = 400.0 * l_scale_x
+        l_fy = 400.0 * l_scale_y
+        l_cx = (259.0 - l_pad_left) * l_scale_x
+        l_cy = (259.0 - l_pad_top) * l_scale_y
+        self.assertAlmostEqual(l_fx / l_fy, 1.0, delta=0.02)
+        self.assertAlmostEqual(l_cx, l_orig_w / 2.0, delta=1.5)
+        self.assertAlmostEqual(l_cy, l_orig_h / 2.0, delta=1.5)
 
     def test_export_vggttt_packages(self):
         """

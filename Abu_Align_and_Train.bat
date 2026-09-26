@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Abu Align & Train Version 0.0.8.1
+title Abu Align & Train Version 0.0.8.2
 cd /d "%~dp0"
 
 set "CONDA_PYTHON="
