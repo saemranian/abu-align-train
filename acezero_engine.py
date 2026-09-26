@@ -201,8 +201,6 @@ def run_acezero_reconstruction(
 
     input_target = str(stage_dir)
     ace_zero_script = find_acezero_script("ace_zero.py")
-
-    import re
     def handle_ace_line(raw_line, prefix="[ACE0-WSL]"):
         line_str = raw_line.strip()
         if not line_str:
