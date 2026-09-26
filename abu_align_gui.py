@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.7.7
+Abu Align & Train Version 0.0.7.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -216,7 +216,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.7.7 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.7.8 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -282,6 +282,12 @@ class AbuAlignApp:
         self.align_var = tk.StringVar(value="ultra")
         self.lens_var = tk.StringVar(value="brown")
         self.vggt_preprocess_var = tk.StringVar(value="max_size")
+
+        # VGG-T3 (VGG-TTT) Specific Options
+        self.vggttt_conf_var = tk.StringVar(value="2.0 (Default)")
+        self.vggttt_mem_var = tk.BooleanVar(value=False)
+        self.vggttt_steps_var = tk.StringVar(value="1 (Standard)")
+        self.vggttt_pred_var = tk.BooleanVar(value=False)
 
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
@@ -542,6 +548,7 @@ class AbuAlignApp:
         engines_menu.add_command(label="🔄 Check GitHub Updates for All Engines...", command=self._open_engine_updates_dialog)
         engines_menu.add_separator()
         engines_menu.add_command(label="⚡ VGGT-Omega (Facebook Research)", command=lambda: self._open_engine_link("vggt_omega"))
+        engines_menu.add_command(label="🚀 NVIDIA VGG-T³ (CVPR 2026 Linear SfM)", command=lambda: self._open_engine_link("vggttt"))
         engines_menu.add_command(label="🎯 Niantic Labs ACE0 (ECCV 2024 Oral)", command=lambda: self._open_engine_link("ace0"))
         engines_menu.add_command(label="✨ NVIDIA 3DGRUT (Ray Traced GS)", command=lambda: self._open_engine_link("3dgrut"))
         engines_menu.add_command(label="🌐 PFGS360 (CVPR 2026 Pose-Free)", command=lambda: self._open_engine_link("pfgs360"))
@@ -965,6 +972,54 @@ class AbuAlignApp:
         tk.Label(dvo_col3, text="⚡ Auto-Exports All 3DGS Formats", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 1))
         tk.Label(dvo_col3, text="• 9x Dense Micro-Cloud (700k+ pts)\n• TUM Odometry (tx, ty, tz, qx, qy, qz, qw)\n• COLMAP cameras.txt, images.txt, points3D.txt\n• Universal transforms.json (EQUIRECTANGULAR)\n• OpenSfM reconstruction.json + metadata.json\n• 100% GPU training in PFGS360 & LichtFeld", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
 
+        # =========================================================================
+        # 6. NVIDIA VGG-T3 (VGG-TTT) Subpanel (Linear SfM - CVPR 2026)
+        # =========================================================================
+        self.panel_align_vggttt = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Density & Confidence
+        ttt_col1 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
+        ttt_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ttt_col1, text="Point Cloud & Confidence:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        ttt_conf_frame = tk.Frame(ttt_col1, bg=self.panel_bg)
+        ttt_conf_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
+        lbl_ttt_conf = tk.Label(ttt_conf_frame, text="Confidence Thresh:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
+        lbl_ttt_conf.pack(side=tk.LEFT)
+        cb_ttt_conf = ttk.Combobox(ttt_conf_frame, textvariable=self.vggttt_conf_var, values=["1.0", "1.5", "2.0 (Default)", "2.5", "3.0", "4.0"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_ttt_conf.pack(side=tk.LEFT)
+        ToolTip(lbl_ttt_conf, "Minimum depth confidence threshold for 3D point cloud generation. Lower values produce denser points; higher values yield cleaner surfaces.")
+        ToolTip(cb_ttt_conf, "Depth Confidence Filter (VGG-T3):\nFilters out noisy and low-certainty depth pixels during point cloud reconstruction. 2.0 is optimal for crisp, artifact-free 3D tie points.")
+
+        chk_pred = tk.Checkbutton(ttt_col1, text="Use Global Point Head", variable=self.vggttt_pred_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_pred.pack(anchor="w", pady=(2, 0))
+        ToolTip(chk_pred, "Global Point Head:\nWhen enabled, extracts 3D points directly from the global transformer point prediction head rather than backprojecting depth and camera intrinsics.")
+
+        # Col B: Test-Time Training (TTT) & Attention Mode
+        ttt_col2 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
+        ttt_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ttt_col2, text="Test-Time Training (TTT):", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        ttt_steps_frame = tk.Frame(ttt_col2, bg=self.panel_bg)
+        ttt_steps_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
+        lbl_ttt_steps = tk.Label(ttt_steps_frame, text="TTT Inner Steps:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
+        lbl_ttt_steps.pack(side=tk.LEFT)
+        cb_ttt_steps = ttk.Combobox(ttt_steps_frame, textvariable=self.vggttt_steps_var, values=["1 (Standard)", "2", "3", "5"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_ttt_steps.pack(side=tk.LEFT)
+        ToolTip(lbl_ttt_steps, "Number of Test-Time Training optimization steps per layer during feedforward alignment.")
+        ToolTip(cb_ttt_steps, "TTT Steps:\nNumber of fast-weight gradient updates applied to the memory weights during inference. 1 step provides linear O(N) performance with state-of-the-art accuracy.")
+
+        chk_mem = tk.Checkbutton(ttt_col2, text="Memory-Efficient (>64 views)", variable=self.vggttt_mem_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_mem.pack(anchor="w", pady=(2, 0))
+        ToolTip(chk_mem, "Memory-Efficient Attention Mode:\nEnables chunked linear fast-weight recurrence for massive image collections (>64 photos). Keeps peak GPU VRAM constant regardless of dataset size.")
+
+        # Col C: Architecture & Universal 3DGS Bridge
+        ttt_col3 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
+        ttt_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(ttt_col3, text="NVIDIA VGG-T³ Architecture:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+        tk.Label(ttt_col3, text="⚡ Linear O(N) SfM Transformer (CVPR 2026)", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 1))
+        tk.Label(ttt_col3, text="• Fast-Weight Attention + Muon Optimizer\n• Aligns 1,000 photos in <1 minute on GPU\n• Linear complexity without quadratic bottleneck\n• Native COLMAP, transforms.json, points.ply\n• Automatic handoff to Abu Train (LichtFeld / 3DGRUT)", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
+
     def _update_align_panel(self):
         engine = self.engine_var.get()
         self.panel_align_vggt.pack_forget()
@@ -974,6 +1029,8 @@ class AbuAlignApp:
             self.panel_align_opensfm.pack_forget()
         if hasattr(self, "panel_align_360dvo"):
             self.panel_align_360dvo.pack_forget()
+        if hasattr(self, "panel_align_vggttt"):
+            self.panel_align_vggttt.pack_forget()
 
         if engine in ["vggt_omega", "vggt"]:
             self.panel_align_vggt.pack(fill=tk.BOTH, expand=True)
@@ -983,7 +1040,10 @@ class AbuAlignApp:
             if hasattr(self, "vggt_cache_frame"):
                 self.vggt_cache_frame.pack_forget()
 
-            if engine == "ace0":
+            if engine in ["vggttt", "vgg-ttt", "vggt3"]:
+                if hasattr(self, "panel_align_vggttt"):
+                    self.panel_align_vggttt.pack(fill=tk.BOTH, expand=True)
+            elif engine == "ace0":
                 self.panel_align_ace0.pack(fill=tk.BOTH, expand=True)
             elif engine == "pycusfm":
                 self.panel_align_pycusfm.pack(fill=tk.BOTH, expand=True)
@@ -3329,6 +3389,17 @@ class AbuAlignApp:
                 cmd.extend(["--conf_thresh", "1.5", "--max_points", "800000"])
             elif density == "max":
                 cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
+        elif align_engine in ["vggttt", "vgg-ttt", "vggt3"]:
+            conf_str = str(self.vggttt_conf_var.get()).split()[0]
+            steps_str = str(self.vggttt_steps_var.get()).split()[0]
+            cmd.extend([
+                "--vggttt_conf", conf_str,
+                "--vggttt_ttt_steps", steps_str,
+            ])
+            if self.vggttt_mem_var.get():
+                cmd.append("--vggttt_mem_eff")
+            if self.vggttt_pred_var.get():
+                cmd.append("--vggttt_global_pred")
         elif align_engine == "ace0":
             cmd.extend([
                 "--ace_iterations", str(self.ace_iter_var.get()),
@@ -3720,7 +3791,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.7.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.7.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4256,7 +4327,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.7.7 - {title}")
+        doc_win.title(f"Abu Align v0.0.7.8 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4883,7 +4954,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.7.7\n"
+            "Abu Align & Train - Version 0.0.7.8\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

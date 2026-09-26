@@ -1,159 +1,131 @@
-# Engine Repository Version Tracker & VGGT-Omega Upstream Verification Walkthrough (v0.0.7.7)
+# NVIDIA VGG-T³ Engine Integration & Abu Train Auto-Pipeline Walkthrough (v0.0.7.8)
 
 ## Overview & Objectives
 
 In response to the user's request:
-1. **VGGT-Omega Upstream Inspection & Sync**:
-   Checked the official upstream repository (`facebookresearch/vggt-omega`). Synchronized local repository (`..\vggt-omega`) to commit `48b23c8` (100% up to date with latest GitHub `origin/main`).
-2. **Automated Multi-Engine GitHub Version Tracker (`engine_tracker.py`)**:
-   Engineered an automated version tracking module covering all 10 photogrammetry, Structure-from-Motion, and 3D Gaussian Splatting engines in Abu Align & Train.
-3. **Background Auto-Check & UI Update Badge**:
-   Integrated non-blocking background query on application launch when internet connectivity is available. Displays a dynamic badge next to the version label in the UI (`🔔 Update Available (N)`, `✓ Engines Up to Date`, or `⚡ Offline Mode`). Clicking the badge opens a comprehensive interactive dialog.
-4. **Interactive Administrator Report Dialog**:
-   Full modal dialog with dark styling matching Abu Align:
-   - Live color-coded Treeview table of all 10 engines.
-   - Selected engine inspection card (local path, commit message, upstream HEAD, commit link).
-   - "🌐 View GitHub Repository" and "📁 Open Local Directory" buttons.
-   - "🔄 Refresh Now" (runs concurrent background check) and "📋 Copy Diagnostic Report to Clipboard" (enables easy copy-pasting for requesting updates).
-5. **CLI Integration**:
-   Added `--check_updates` / `--check_engines` flag to `align_cli.py` to print a structured diagnostic table directly to the console.
-6. **Version Bump & Executable Compilation**:
-   Bumped from `v0.0.7.6` to `v0.0.7.7` via `version_manager.py`, recompiled standalone launchers `Abu_Align.exe` and `Abu_Align_and_Train.exe`, and created archive snapshot `versions/v0.0.7.7/`.
+> *"I want to add 'VGG-T³' Engine, to abu align. Do a complete research and make it work and align it with aouto pipline to abu train."*
+
+We conducted an in-depth research and integration of NVIDIA's state-of-the-art **VGG-T³** (`vgg-ttt`, CVPR 2026: *"Offline Feed-Forward 3D Reconstruction at Scale"*) by NVIDIA Research (DVL), University of Toronto, and Vector Institute. We delivered a complete, production-grade engine adapter in Abu Align with an automated, seamless handoff to Abu Train (3DGS training engines: LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360).
 
 ---
 
-## 1. VGGT-Omega Upstream Inspection & Verification
+## 1. Deep Research: What is VGG-T³?
 
-- **Repository**: `https://github.com/facebookresearch/vggt-omega.git`
-- **Initial Local Commit**: `a3ab014`
-- **Remote `origin/main` Commit**: `48b23c8`
-- **Diff Analysis (`git diff a3ab014..48b23c8`)**:
-  - The core `vggt_omega` model code, coordinate transformers, and forward pipeline are completely unchanged.
-  - The upstream commit updated `eval/model.py` to change the default eval resolution to `512` (which Abu Align already leverages by default).
-- **Action Taken**:
-  Executed `git -C "..\vggt-omega" pull --ff-only` to bring the local repository to `48b23c8`.
-  Abu Align's VGGT-Omega engine is now **100% up to date** with upstream GitHub HEAD.
+- **Paper Title**: *Offline Feed-Forward 3D Reconstruction at Scale* (CVPR 2026)
+- **Official Repository**: `https://github.com/nv-dvl/vgg-ttt` (Cloned & synced to `5b2d02d`)
+- **Project Page**: `https://research.nvidia.com/labs/dvl/projects/vgg-ttt/`
+- **Hugging Face Model**: `nvidia/vgg-ttt` (`model.safetensors` 4.84 GB, public, ungated)
 
----
-
-## 2. All 10 Tracked Engines
-
-The tracker engine monitors the following 10 photogrammetry and 3DGS engines:
-
-| Engine | Category | Role | Upstream Repository / Integration |
-| :--- | :--- | :--- | :--- |
-| **VGGT-Omega** | Alignment Engine | Neural Foundation Transformer | [facebookresearch/vggt-omega](https://github.com/facebookresearch/vggt-omega) |
-| **Niantic Labs ACE0** | Alignment Engine | Scene Coordinate Regression & 25k Refit SfM | [nianticlabs/acezero](https://github.com/nianticlabs/acezero) |
-| **NVIDIA 3DGRUT** | 3DGS Training Engine | Ray Traced Gaussian Splatting & BVH | [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) |
-| **PFGS360** | 3DGS Training Engine | CVPR 2026 Pose-Free Gaussian Splatting | [zcq15/PFGS360](https://github.com/zcq15/PFGS360) |
-| **NVIDIA Isaac pyCuSFM** | Alignment Engine | GPU Structure-from-Motion | [nvidia-isaac/pyCuSFM](https://github.com/nvidia-isaac/pyCuSFM) |
-| **Mapillary OpenSfM** | Alignment Engine | Native 360° Spherical & $S^2$ Bundle Adjustment | [mapillary/OpenSfM](https://github.com/mapillary/OpenSfM) |
-| **360DVO** | Alignment Engine | Deep Omnidirectional Visual Odometry | Native DAS-Feat & ODBA (IEEE RA-L 2026) |
-| **LichtFeld Studio** | 3DGS Training Engine | Real-time Vulkan 3DGS GUI + GUT Optics | [MrNeRF/LichtFeld-Studio](https://github.com/MrNeRF/LichtFeld-Studio) |
-| **Nerfstudio** | 3DGS Training Engine | Splatfacto Optimization Pipeline | [nerfstudio-project/nerfstudio](https://github.com/nerfstudio-project/nerfstudio) |
-| **VGGT (Original)** | Foundation Model | Original Vision Geometry Transformer | [facebookresearch/vggt](https://github.com/facebookresearch/vggt) |
+### Key Technical Breakthroughs
+1. **$O(N)$ Linear-Scaling Attention via Test-Time Training (TTT)**:
+   - Standard Vision Geometry Transformers (VGGT, VGGT-Omega) rely on quadratic-complexity softmax attention ($O(N^2)$), causing execution time and VRAM requirements to explode when processing hundreds or thousands of photos.
+   - VGG-T³ replaces global softmax layers with **linear fast-weight attention** optimized via **Test-Time Training (TTT)** using a single Muon optimizer step.
+   - **Reconstructs 1,000 images in <1 minute on an RTX 4090**, compared to 10+ minutes for standard VGGT.
+2. **Native Feedforward Predictions**:
+   - Camera extrinsics (camera-to-world rotation $R_{c2w}$ and translation $t_{c2w}$ in OpenCV frame: $+X$ right, $+Y$ down, $+Z$ forward).
+   - Camera intrinsics ($f_x, f_y, c_x, c_y$ normalized to the 518px processing canvas).
+   - Dense metric point cloud unprojection with pixel-wise depth and confidence maps.
+3. **Pure PyTorch Architecture**:
+   - Zero custom C++ or CUDA kernel compilation is required, allowing 100% native execution on Windows without MSVC or Ninja build errors.
 
 ---
 
-## 3. Engine Tracker Architecture (`engine_tracker.py`)
+## 2. Engine Adapter Architecture (`vggttt_engine.py`)
 
-- **Concurrent Multi-Threading**: Uses `ThreadPoolExecutor` to evaluate all 10 engines concurrently within 2–3 seconds.
-- **Dual Query Strategy (API + ls-remote)**:
-  1. Primary: Fast GitHub REST API (`api.github.com/repos/.../commits/HEAD`) providing commit SHA, ISO timestamp, and commit message.
-  2. Fallback: `git ls-remote <url> HEAD` if the unauthenticated GitHub API rate limit is reached.
-- **Offline Safety**: Performs initial socket connectivity test to `github.com:443` with a 2-second timeout; if offline, displays local versions without stalling or throwing exceptions.
-- **Windows CP1252 Encoding Protection**: Formats output using clean ASCII tags (`[OK]`, `[UPDATE]`, `[OFFLINE]`) to prevent `UnicodeEncodeError` in standard Windows cmd/PowerShell consoles.
+We built a dedicated adapter module `vggttt_engine.py` following the architectural patterns of Abu Align:
+
+- **Dynamic Weight Resolution (`find_vggttt_weights`)**:
+  Searches sibling repositories (`..\vgg-ttt\checkpoints`), local directories (`checkpoints\vggttt`), and automatically falls back to Hugging Face's hub (`nvidia/vgg-ttt`), storing weights in standard Hugging Face cache.
+- **Model Loader (`load_vggttt_model`)**:
+  Instantiates `VGGT(global_attn_class=FastWeightAttention)` and loads weights safely into CUDA memory with eval mode and half/bfloat16 precision.
+- **Linear Inference Execution (`run_vggttt_reconstruction`)**:
+  Calls `model.infer()` with configurable TTT inner steps (default 1) and memory-efficient chunked recurrence. For large datasets (>64 photos), automatically activates `memory_efficient_inference` to keep peak VRAM constant.
+- **Strict Coordinate Conversions**:
+  - **OpenCV $\rightarrow$ COLMAP**: Converts camera-to-world ($R_{c2w}, t_{c2w}$) to COLMAP world-to-camera ($R_{cw} = R_{c2w}^T$, $t_{cw} = -R_{cw} t_{c2w}$). Uses `add_camera_with_trivial_rig` and `add_image_with_trivial_frame` for compatibility across all pycolmap versions.
+  - **OpenCV $\rightarrow$ NeRF / 3DGS**: Multiplies by `opencv_to_nerf = np.diag([1.0, -1.0, -1.0, 1.0])` to export authentic OpenGL/NeRF poses ($+X$ right, $+Y$ up, $-Z$ back).
+- **Intrinsics Rescaling**:
+  Upscales model 518px focal length and principal points to the full native resolution of each source image ($s_x = W / 518.0$, $s_y = H / 518.0$).
+- **Confidence Point Cloud Filtering**:
+  Filters unprojected 3D points using `conf_threshold` (default 2.0). If confidence filtering results in too few points (<1,000), dynamically relaxes to median confidence, preventing empty point clouds. Caps exported points at `max_points` (default 300,000) using uniform random sampling.
+- **Standardized Export Packages**:
+  Outputs to:
+  1. `3dgs_dataset/` (`sparse/0/`, `transforms.json`, `points.ply`, `images/`)
+  2. `COLMAP_Lichtfield/`
+  3. `Postshot_RealityCapture/` (`cameras.csv`)
 
 ---
 
-## 4. UI & CLI Features
+## 3. Automated 3DGS Training Pipeline Handoff
 
-### A. Desktop UI Header Badge
-In [desktop_ui.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/desktop_ui.py#L430-L445), an interactive update monitor button is positioned directly next to the version label `v0.0.7.7`:
-- On launch: `⏳ Checking engines...`
-- When an update exists: `🔔 Update Available (1)` in bold amber (`#d97706`) with white text.
-- When up to date: `✓ Engines Up to Date` in emerald green (`#10b981`).
-- When offline: `⚡ Offline (Engines)` in muted slate (`#a0adb5`).
+The integration seamlessly connects VGG-T³ alignment with Abu Train's 3DGS training suite:
 
-### B. Interactive Administrator Report Dialog
-In [abu_align_gui.py](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/abu_align_gui.py#L4610-L4840), clicking the badge (or selecting `Tools -> Check Engine Repository Updates...` / `Engines -> Check GitHub Updates...`) opens a modal dialog:
-- Displays summary status (Internet connection, last checked time, update count).
-- Full table showing Engine Name, Category, Local Applied Version, GitHub Upstream (HEAD), and Status.
-- Clicking any row loads detailed local and remote metadata into the detail card.
-- One-click buttons to open the GitHub repository or the local engine folder.
-- `🔄 Refresh Now` button with live background checking.
-- `📋 Copy Diagnostic Report` button to copy the formatted text to the Windows clipboard.
-
-### C. Menus
-- **Tools Menu**: Added `🔄 Check Engine Repository Updates...`.
-- **Engines Menu**: Added dedicated menu cascade with update check and direct links to upstream repositories for all 10 engines.
-
-### D. CLI Diagnostic Report (`--check_updates`)
-Command:
-```bash
-python align_cli.py --check_updates
-```
-Example Output:
-```
-Checking upstream GitHub repositories for Abu Align engines...
-
-==================================================================================
- ABU ALIGN & TRAIN - ENGINE REPOSITORY VERSION REPORT
-==================================================================================
- Check Time:          2026-09-26 12:34:54
- Internet Status:     CONNECTED
- Updates Available:   1 of 10 engines
-----------------------------------------------------------------------------------
-ENGINE             | CATEGORY             | APPLIED VERSION  | STATUS              
-----------------------------------------------------------------------------------
-VGGT-Omega         | Alignment Engine     | 48b23c8          | [OK] Up to Date     
-Niantic Labs ACE0  | Alignment Engine     | 821762f          | [OK] Custom Commits 
-NVIDIA 3DGRUT      | 3DGS Training Engine | 7397cc9          | [UPDATE] Available  
-PFGS360            | 3DGS Training Engine | e79413f          | [OK] Up to Date     
-NVIDIA Isaac pyCuSFM | Alignment Engine     | v0.1.3 (0c97a..  | [OK] v0.1.3 (0c97a67
-Mapillary OpenSfM  | Alignment Engine     | v0.5.2 / Nati..  | [OK] v0.5.2 / Native
-360DVO             | Alignment Engine     | Native DAS-Fe..  | [OK] Native Engine  
-LichtFeld Studio   | 3DGS Training Engine | Integrated Li..  | [OK] Integrated Lich
-Nerfstudio         | 3DGS Training Engine | Conda Environ..  | [OK] Conda Environme
-VGGT (Original)    | Foundation Model     | e304eae          | [OK] Custom Commits 
-----------------------------------------------------------------------------------
-
-==================================================================================
- [!] AVAILABLE ENGINE UPDATES ON GITHUB:
-==================================================================================
-
->>> NVIDIA 3DGRUT (3DGS Training Engine)
-    * Role:            Differentiable Ray Tracing & Accelerated Gaussian Splatting
-    * Repository:      https://github.com/nv-tlabs/3dgrut.git
-    * Current Local:   7397cc9 (2026-09-17) - fix(playground): restore build after particleKernelMaxAlpha change (#267)
-    * Latest Remote:   e6f4552 (Latest) - Latest commit on GitHub HEAD
-    * Commit URL:      https://github.com/nv-tlabs/3dgrut/commit/e6f4552b408af020a96de09ab5757f9b57430aaa
-    * Action Required: Request agent or run git pull to update this engine.
-==================================================================================
+```mermaid
+flowchart TD
+    A[Image Dataset] --> B[VGG-T³ Linear SfM Engine]
+    B -->|model.infer: TTT Fast Weights| C[Metric Poses & Unprojected Points]
+    C -->|Coordinate Transform| D[Standardized 3dgs_dataset/]
+    D --> E{Abu Train Auto-Pipeline}
+    E --> F[LichtFeld Studio Real-Time GUI + GUT]
+    E --> G[Nerfstudio Splatfacto PyTorch SOTA]
+    E --> H[NVIDIA 3DGRUT Ray-Traced 3DGUT]
+    E --> I[PFGS360 CVPR 2026 Pose-Free]
 ```
 
+When `--train` (CLI) or "Align & train" (GUI) is active, the unified output folder `3dgs_dataset/` is passed directly into `train_engine.py`, requiring zero manual file conversion or intermediate steps.
+
 ---
 
-## 5. Verification Results
+## 4. Full UI & CLI Integration
 
-| Test / Command | Result | Notes |
+### A. CLI Options (`align_cli.py`)
+- `--engine vggttt` (also accepts aliases `vgg-ttt`, `vggt3`).
+- `--vggttt_weights`: Path to local safetensors/checkpoints.
+- `--vggttt_conf`: Confidence threshold (default `2.0`).
+- `--vggttt_mem_eff`: Enable memory-efficient linear chunked attention.
+- `--vggttt_ttt_steps`: Inner TTT optimization steps (default `1`).
+- `--vggttt_global_pred`: Use global transformer point head instead of unprojected depth.
+
+### B. Desktop GUI (`desktop_ui.py` & `abu_align_gui.py`)
+- **Engine Selection**: Added `⚡ VGG-T³ (NVIDIA Linear SfM - CVPR 2026)` radio card with hover tooltip.
+- **VGG-T³ Subpanel**:
+  - *Point Cloud & Confidence*: Confidence Threshold combo (`1.0`, `1.5`, `2.0 (Default)`, `2.5`, `3.0`, `4.0`), "Use Global Point Head" checkbutton.
+  - *Test-Time Training (TTT)*: TTT Inner Steps combo (`1 (Standard)`, `2`, `3`, `5`), "Memory-Efficient (>64 views)" checkbutton.
+  - *Architecture Card*: Explains $O(N)$ linear complexity, Muon optimizer, and automatic 3DGS handoff.
+- **Workflow Bar**: Automatically updates footer banner to `WORKFLOW  VGG-T³  →  LichtFeld Studio`.
+- **Engines Menu**: Added `🚀 NVIDIA VGG-T³ (CVPR 2026 Linear SfM)` direct documentation link.
+
+### C. Engine Repository Tracker (`engine_tracker.py`)
+- Updated total tracked engines from 10 to **11**.
+- Registered `vggttt` pointing to `https://github.com/nv-dvl/vgg-ttt.git` and project documentation.
+- Automatically tracks local commit `5b2d02d` and monitors upstream GitHub HEAD.
+
+---
+
+## 5. Test Suite Verification & Quality Assurance
+
+We executed comprehensive automated and manual verification:
+
+| Test / Command | Result | Details |
 | :--- | :--- | :--- |
-| `python -m unittest tests/test_engine_tracker.py` | **PASSED** (5 tests in 0.233s) | Verifies registry integrity, git SHA extraction, offline fallback, and report formatting |
-| `python -m unittest discover -s tests -p "test_desktop_ui.py"` | **PASSED** (13 tests in 13.1s) | Verifies GUI widgets, theme rendering, and engine update badge |
-| `python -m unittest discover tests` | **PASSED** (61 tests in 36.0s) | Entire test suite clean with zero regressions |
-| `python align_cli.py --check_updates` | **PASSED** (Code 0) | Correctly detected NVIDIA 3DGRUT update `e6f4552` and confirmed VGGT-Omega `48b23c8` |
-| `python version_manager.py --bump` | **PASSED** | Bumped version to `v0.0.7.7`, recompiled C# `.exe` launchers, and generated snapshot |
+| `python -m unittest tests/test_vggttt_engine.py` | **PASSED** (6 tests in 0.032s) | Weight fallback, custom paths, OpenCV $\rightarrow$ NeRF transform, COLMAP inversion, intrinsics rescaling, export packaging |
+| `python -m unittest tests/test_engine_tracker.py` | **PASSED** (5 tests in 0.239s) | 11 registered engines, local git SHA detection, offline safety, report formatting |
+| `python -m unittest discover tests` | **PASSED** (72 tests in 40.7s) | Full test suite clean with zero errors across all modules |
+| `python align_cli.py --help` | **PASSED** (Code 0) | Verified CLI parser recognizes `vggttt` choices and options |
+| `python align_cli.py --check_updates` | **PASSED** (Code 0) | Successfully reports all 11 engines with live GitHub check |
+| `python version_manager.py --bump` | **PASSED** | Bumped version to `v0.0.7.8`, recompiled C# executables, created archive snapshot |
 
 ---
 
-## 6. Files Modified & Created
+## 6. Files Created & Modified
 
-- **`engine_tracker.py`** [NEW]: Multi-threaded GitHub repository version comparison and reporting engine.
-- **`tests/test_engine_tracker.py`** [NEW]: Unit tests for repository checking, git extraction, and report formatting.
-- **`desktop_ui.py`** [MODIFIED]: Added `app.engine_update_btn` in header next to version label.
-- **`abu_align_gui.py`** [MODIFIED]: Added background auto-check thread on launch, badge updater, interactive report dialog, and Engines menu.
-- **`align_cli.py`** [MODIFIED]: Added `--check_updates` / `--check_engines` flag and updated banner.
-- **`version_manager.py`** [MODIFIED]: Added `engine_tracker.py` to snapshot archiving list.
-- **`VERSION.txt`** [MODIFIED]: Updated to `0.0.7.7`.
+- **`vggttt_engine.py`** [NEW]: NVIDIA VGG-T³ engine adapter with linear inference, coordinate conversion, and dataset export.
+- **`tests/test_vggttt_engine.py`** [NEW]: Dedicated unit test suite for VGG-T³ adapter.
+- **`engine_tracker.py`** [MODIFIED]: Added NVIDIA VGG-T³ to `ENGINE_REGISTRY` (11 engines total).
+- **`tests/test_engine_tracker.py`** [MODIFIED]: Updated test to assert 11 registered engines.
+- **`align_cli.py`** [MODIFIED]: Added `vggttt` to `--engine`, added CLI options, wired Stage 2 & 3 execution, added report section.
+- **`desktop_ui.py`** [MODIFIED]: Added VGG-T³ radiobutton card, hint tooltip, and workflow summary.
+- **`abu_align_gui.py`** [MODIFIED]: Added VGG-T³ options panel, state variables, CLI dispatch, and Engines menu link.
+- **`version_manager.py`** [MODIFIED]: Added `vggttt_engine.py` to snapshot archiving list.
+- **`VERSION.txt`** [MODIFIED]: Updated to `0.0.7.8`.
 - **`Abu_Align.exe` & `Abu_Align_and_Train.exe`** [RECOMPILED]: Recompiled standalone C# launcher executables.
-- **`versions/v0.0.7.7/`** [ARCHIVED]: Complete code and binary snapshot.
+- **`versions/v0.0.7.8/`** [ARCHIVED]: Complete code and binary snapshot.

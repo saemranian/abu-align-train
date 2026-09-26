@@ -52,6 +52,20 @@ ENGINE_REGISTRY: List[Dict[str, Any]] = [
         "doc_url": "https://github.com/facebookresearch/vggt-omega",
     },
     {
+        "id": "vggttt",
+        "name": "NVIDIA VGG-T3 (VGG-TTT)",
+        "category": "Alignment Engine",
+        "role": "Linear-Scaling Test-Time Training Transformer (CVPR 2026)",
+        "repo_slug": "nv-dvl/vgg-ttt",
+        "repo_url": "https://github.com/nv-dvl/vgg-ttt.git",
+        "local_candidates": [
+            PARENT_DIR / "vgg-ttt",
+            ROOT_DIR / "vgg-ttt",
+        ],
+        "default_branch": "main",
+        "doc_url": "https://research.nvidia.com/labs/dvl/projects/vgg-ttt/",
+    },
+    {
         "id": "ace0",
         "name": "Niantic Labs ACE0",
         "category": "Alignment Engine",

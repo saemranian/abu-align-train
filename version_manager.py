@@ -109,6 +109,7 @@ def create_version_snapshot(version_str: str) -> None:
         "panoramic_splitter.py",
         "equirectangular_transcoder.py",
         "engine_tracker.py",
+        "vggttt_engine.py",
         "version_manager.py",
         "VERSION.txt",
         "Abu_Align_and_Train.bat",

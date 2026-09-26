@@ -429,7 +429,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.7.7", 9, muted=True)
+    app.version_label = label(header, "v0.0.7.8", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -461,7 +461,7 @@ def build_workspace(app, tooltip):
     app.workflow_summary = label(footer, "", muted=True, anchor="w")
     app.workflow_summary.pack(fill="x", pady=(0, 10))
     def summarize_workflow(*_):
-        alignment = {"vggt_omega": "VGGT-Omega", "ace0": "ACE0", "pycusfm": "PyCuSFM",
+        alignment = {"vggt_omega": "VGGT-Omega", "vggttt": "VGG-T³", "ace0": "ACE0", "pycusfm": "PyCuSFM",
                      "opensfm": "OpenSfM", "360dvo": "360DVO"}.get(app.engine_var.get(), app.engine_var.get())
         training = {"lichtfeld": "LichtFeld Studio", "splatfacto": "Splatfacto",
                     "3dgrut": "3DGRUT", "pfgs360": "PFGS360"}.get(app.train_engine_var.get(), app.train_engine_var.get())
@@ -595,9 +595,9 @@ def build_workspace(app, tooltip):
     engines = tk.Frame(align, bg=SURFACE)
     engines.pack(fill="x", pady=(0, 14))
     engine_controls = []
-    for i, (name, value) in enumerate([("VGGT-Omega", "vggt_omega"), ("ACE0", "ace0"),
+    for i, (name, value) in enumerate([("VGGT-Omega", "vggt_omega"), ("VGG-T³", "vggttt"), ("ACE0", "ace0"),
             ("PyCuSFM", "pycusfm"), ("OpenSfM", "opensfm"), ("360DVO", "360dvo")]):
-        detail = {"vggt_omega": "Neural geometry", "ace0": "Pose refinement", "pycusfm": "GPU matching",
+        detail = {"vggt_omega": "Neural geometry", "vggttt": "Linear SfM (CVPR 2026)", "ace0": "Pose refinement", "pycusfm": "GPU matching",
                   "opensfm": "Photos & panoramas", "360dvo": "360° sequences"}[value]
         control = tk.Radiobutton(engines, text=f"{name}\n{detail}", variable=app.engine_var, value=value,
                                   indicatoron=False, padx=14, pady=8, justify="left", anchor="w")
@@ -606,6 +606,7 @@ def build_workspace(app, tooltip):
         engine_controls.append((control, app.engine_var))
     wrap_choices(engines)
     hints = {"vggt_omega": "General photos & drones · neural geometry prediction",
+             "vggttt": "NVIDIA Linear SfM · Fast-weight attention + Test-Time Training (1000+ photos in <1 min)",
              "ace0": "Scene coordinate regression · camera pose refinement",
              "pycusfm": "Perspective photos · GPU feature matching",
              "opensfm": "360° panoramas & perspective photos · feature-based reconstruction",

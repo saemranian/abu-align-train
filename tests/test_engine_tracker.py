@@ -18,11 +18,11 @@ from engine_tracker import (
 
 class TestEngineTracker(unittest.TestCase):
 
-    def test_registry_contains_all_10_engines(self):
-        """Ensure all 10 alignment, training, and foundation engines are registered."""
-        self.assertEqual(len(ENGINE_REGISTRY), 10)
+    def test_registry_contains_all_11_engines(self):
+        """Ensure all 11 alignment, training, and foundation engines are registered."""
+        self.assertEqual(len(ENGINE_REGISTRY), 11)
         expected_ids = {
-            "vggt_omega", "ace0", "3dgrut", "pfgs360",
+            "vggt_omega", "vggttt", "ace0", "3dgrut", "pfgs360",
             "pycusfm", "opensfm", "360dvo", "lichtfeld",
             "nerfstudio", "vggt_base"
         }

@@ -35,6 +35,8 @@ def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
         engine_suffix = "360dvo"
     elif "opensfm" in eng_lower:
         engine_suffix = "opensfm"
+    elif "ttt" in eng_lower or "vggt3" in eng_lower:
+        engine_suffix = "vggttt"
     else:
         engine_suffix = "vggt"
     if use_ba:
@@ -82,8 +84,8 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.7.7 - Neural Photogrammetry & 3DGS Training
-   Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
+   Abu Align & Train v0.0.7.8 - Neural Photogrammetry & 3DGS Training
+   Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
 """
@@ -1480,10 +1482,16 @@ def main():
         sys.exit(0)
 
     parser = argparse.ArgumentParser(description="Live Progress Alignment CLI for Photoscanning")
-    parser.add_argument("--check_updates", "--check_engines", action="store_true", help="Check upstream GitHub repositories for updates across all 10 engines and print a diagnostic report")
+    parser.add_argument("--check_updates", "--check_engines", action="store_true", help="Check upstream GitHub repositories for updates across all 11 engines and print a diagnostic report")
     parser.add_argument("--input", "-i", type=str, required=False, default=None, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
+    # NVIDIA VGG-T3 (VGG-TTT) Options
+    parser.add_argument("--vggttt_weights", type=str, default=None, help="Custom checkpoint path (.safetensors or .pt) for NVIDIA VGG-T3")
+    parser.add_argument("--vggttt_conf", type=float, default=2.0, help="Confidence threshold for VGG-T3 depth point extraction (default: 2.0; lower=denser)")
+    parser.add_argument("--vggttt_mem_eff", action="store_true", default=False, help="Enable memory-efficient linear attention inference in VGG-T3 for large sequences (>64 views)")
+    parser.add_argument("--vggttt_ttt_steps", type=int, default=1, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 1)")
+    parser.add_argument("--vggttt_global_pred", action="store_true", default=False, help="Use global transformer point head for 3D point cloud rather than unprojected depth")
     # Video Frame Extraction Options
     parser.add_argument("--video_fps", type=float, default=5.0, help="Target FPS when extracting from video input (default: 5.0)")
     parser.add_argument("--video_format", choices=["jpg", "png"], default="jpg", help="Format for extracted video frames (default: jpg)")
@@ -1842,6 +1850,13 @@ def main():
         print(f"      * Coarse Init:   {args.cusfm_init.upper()}")
         print(f"      * Max BA Iters:  {args.cusfm_ba_iterations}")
 
+    # NVIDIA VGG-T3 Engine initialization
+    if engine in ["vggttt", "vgg-ttt", "vggt3"]:
+        print(f"      * Engine:        NVIDIA VGG-T3 (Linear-Scaling SfM Transformer, CVPR 2026)")
+        print(f"      * Architecture:  Fast-Weight Attention + Test-Time Training (O(N) Complexity)")
+        print(f"      * Conf Thresh:   {getattr(args, 'vggttt_conf', 2.0)}")
+        print(f"      * Memory Mode:   {'Memory-Efficient (>64 Views)' if getattr(args, 'vggttt_mem_eff', False) else 'Standard Linear'}")
+
     print()
 
     # -------------------------------------------------------------
@@ -2098,6 +2113,29 @@ def main():
         inf_elapsed = time.time() - inf_start
         print()
         print(f"      * 360DVO Visual Odometry Finished in: {inf_elapsed:.2f}s ({inf_elapsed/max(num_frames, 1):.3f}s per view)")
+        print()
+    elif engine in ["vggttt", "vgg-ttt", "vggt3"]:
+        print("[3/5] Starting NVIDIA VGG-T3 Linear-Scaling Structure-from-Motion (CVPR 2026)...")
+        print(f"      * Confidence Threshold: {getattr(args, 'vggttt_conf', 2.0)}")
+        print(f"      * Memory Efficient:     {getattr(args, 'vggttt_mem_eff', False)}")
+        print(f"      * TTT Steps:            {getattr(args, 'vggttt_ttt_steps', 1)}")
+        inf_start = time.time()
+        from vggttt_engine import run_vggttt_reconstruction
+        reconstruction, dense_3d, dense_rgb = run_vggttt_reconstruction(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            weights_path=getattr(args, "vggttt_weights", None),
+            device=device,
+            dtype=dtype,
+            conf_threshold=getattr(args, "vggttt_conf", 2.0),
+            memory_efficient=getattr(args, "vggttt_mem_eff", False),
+            ttt_steps=getattr(args, "vggttt_ttt_steps", 1),
+            use_global_pred=getattr(args, "vggttt_global_pred", False),
+            progress_callback=print,
+        )
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * VGG-T3 Reconstruction Finished in: {inf_elapsed:.2f}s ({inf_elapsed/max(num_frames, 1):.3f}s per view)")
         print()
     else:
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
@@ -2391,6 +2429,9 @@ def main():
     engine_labels = {
         "vggt_omega": "VGGT-Omega (Fast, Low VRAM)",
         "vggt": "VGGT-Omega (Fast, Low VRAM)",
+        "vggttt": "NVIDIA VGG-T3 (Linear-Scaling SfM - CVPR 2026)",
+        "vgg-ttt": "NVIDIA VGG-T3 (Linear-Scaling SfM - CVPR 2026)",
+        "vggt3": "NVIDIA VGG-T3 (Linear-Scaling SfM - CVPR 2026)",
         "acezero": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
         "ace0": "Niantic Labs ACE0 (Scene Coordinate MLPs)",
         "pycusfm": "NVIDIA PyCuSFM (cuSFM GPU)",
@@ -2484,6 +2525,13 @@ def main():
             f"   * Gradient-Biased Sampling:{'Active (Edge-focused)' if getattr(args, 'dvo_gradient_bias', True) else 'Uniform Grid'}",
             f"   * Trajectory Format:       Robotics TUM (timestamp, SE3 pose) + Universal COLMAP/OpenSfM/Transforms",
             f"   * Real-Time Viser View:    {'Enabled' if args.dvo_viz else 'Headless'}",
+        ])
+    elif engine in ["vggttt", "vgg-ttt", "vggt3"]:
+        report_lines.extend([
+            f"   * Confidence Threshold:    {getattr(args, 'vggttt_conf', 2.0)}",
+            f"   * Memory Efficient Mode:   {'Active (>64 Views)' if getattr(args, 'vggttt_mem_eff', False) else 'Standard Linear'}",
+            f"   * TTT Inner Steps:         {getattr(args, 'vggttt_ttt_steps', 1)}",
+            f"   * 3D Point Head:           {'Global Transformer Point Head' if getattr(args, 'vggttt_global_pred', False) else 'Unprojected Depth & Intrinsics'}",
         ])
     else:
         report_lines.extend([
