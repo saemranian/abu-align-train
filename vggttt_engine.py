@@ -103,10 +103,10 @@ def load_vggttt_model(weights_path: Optional[str] = None, device: str = "cuda", 
         else:
             raise e
 
-    if dtype is not None and dtype in (torch.float16, torch.bfloat16):
-        model = model.to(device=device, dtype=dtype).eval()
-    else:
-        model = model.to(device=device).eval()
+    # VGG-T³ utilizes selective mixed precision (autocast) during inference.
+    # The network weights must remain in Float32 to ensure numerical stability in
+    # pose encoding, camera LayerNorm, and unprojection geometry heads.
+    model = model.to(device=device).eval()
     print(f"      * [VGG-T³] Model initialized in {time.time()-t_start:.1f}s on {device.upper()}")
     return model
 
