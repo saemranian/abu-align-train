@@ -82,7 +82,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.7.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.7.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | Niantic ACE0 | NVIDIA PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1519,16 +1519,20 @@ def main():
     parser.add_argument("--ace_iterations", "--ace_iter", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", "--ace_refine", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
-    parser.add_argument("--ace_try_seeds", "--ace_seeds", type=int, default=1, help="Number of candidate seeds to evaluate for ACE0 (default: 1 for fast SfM; 3-5 for complex scenes)")
+    parser.add_argument("--ace_try_seeds", "--ace_seeds", type=int, default=3, help="Number of candidate seeds to evaluate for ACE0 (default: 3; 3-5 recommended by official Niantic guidelines)")
     parser.add_argument("--ace_seed_iters", type=int, default=3000, help="Training iterations per candidate seed in ACE0 (default: 3000)")
     parser.add_argument("--ace_cooldown_iters", type=int, default=1500, help="Iterations during learning rate cooldown in ACE0 (default: 1500)")
     parser.add_argument("--ace_mapping_iters", type=int, default=8000, help="Max iterations per mapping round in ACE0 (default: 8000)")
+    parser.add_argument("--ace_refit_iters", type=int, default=25000, help="Training iterations for ACE0 final refit (default: 25000; official benchmark standard)")
+    parser.add_argument("--ace_refit_posewait", type=int, default=5000, help="Iterations to keep camera poses frozen during ACE0 final refit (default: 5000)")
     parser.add_argument("--ace_early_exit", type=float, default=0.75, help="Registration ratio threshold (0-1) to early-exit candidate seed search in ACE0 (default: 0.75)")
     parser.add_argument("--ace_refine_calib", dest="ace_refine_calib", action="store_true", default=True, help="Optimize camera focal length during ACE0 mapping (default: True)")
     parser.add_argument("--no_ace_refine_calib", dest="ace_refine_calib", action="store_false", help="Keep camera focal length fixed during ACE0 mapping")
     parser.add_argument("--ace_dense_pc", action="store_true", default=False, help="Export dense unfiltered point cloud in ACE0 (skips reprojection filter; default: False for clean surfaces)")
-    parser.add_argument("--ace_final_refit", action="store_true", default=False, help="Run final 25k iteration refit from scratch (academic benchmark mode; default: False for fast SfM)")
-    parser.add_argument("--ace_final_refine", action="store_true", default=False, help="Run an additional mapping round after stopping threshold is met (default: False)")
+    parser.add_argument("--ace_final_refit", dest="ace_final_refit", action="store_true", default=True, help="Run final 25k iteration refit from scratch (official Niantic benchmark mode; default: True)")
+    parser.add_argument("--no_ace_final_refit", dest="ace_final_refit", action="store_false", help="Disable final refit for fast draft SfM")
+    parser.add_argument("--ace_final_refine", dest="ace_final_refine", action="store_true", default=True, help="Run an additional mapping round after stopping threshold is met (default: True)")
+    parser.add_argument("--no_ace_final_refine", dest="ace_final_refine", action="store_false", help="Disable final refinement round")
     parser.add_argument("--ace_seed_workers", type=int, default=None, help="Parallel worker threads for evaluating candidate seeds (default: auto-detect)")
     parser.add_argument("--ace_stage_res", default="native", choices=["native", "original", "2k", "1k", "4k"], help="Staging resolution for ACE0 engine ('native' for full native quality, '2k' for 1920px max, '1k' for 1024px max, '4k' for 3840px max)")
     parser.add_argument("--cusfm_features", type=str, choices=["aliked", "superpoint", "sift"], default="aliked", help="Feature extractor for PyCuSFM engine (default: aliked)")
@@ -1842,12 +1846,14 @@ def main():
             export_point_cloud=True,
             dense_point_cloud=getattr(args, "ace_dense_pc", False),
             shared_camera=args.shared_camera,
-            final_refit=getattr(args, "ace_final_refit", False),
-            final_refine=getattr(args, "ace_final_refine", False),
+            final_refit=getattr(args, "ace_final_refit", True),
+            final_refine=getattr(args, "ace_final_refine", True),
             seed_parallel_workers=getattr(args, "ace_seed_workers", None),
             seed_iterations=getattr(args, "ace_seed_iters", 3000),
             cooldown_iterations=getattr(args, "ace_cooldown_iters", 1500),
             mapping_iterations=getattr(args, "ace_mapping_iters", 8000),
+            refit_iterations=getattr(args, "ace_refit_iters", 25000),
+            final_refit_posewait=getattr(args, "ace_refit_posewait", 5000),
             seed_threshold_early_exit=getattr(args, "ace_early_exit", 0.75),
             stage_res=getattr(args, "ace_stage_res", "native"),
             progress_callback=print,
@@ -2424,7 +2430,7 @@ def main():
             f"   * ACE0 Mapping Rounds:     {args.ace_iterations} rounds",
             f"   * Pose Refinement Mode:    {args.ace_refinement.upper()}",
             f"   * Initialization Seeds:    {args.ace_try_seeds} candidate seeds",
-            f"   * Fast SfM Reconstruction: {'Active (Skip 25k Refit)' if not getattr(args, 'ace_final_refit', False) else 'Refit Enabled (25k Academic Iter)'}",
+            f"   * ACE0 Refit Architecture: {'High-Precision Official Niantic Refit (25k Iter)' if getattr(args, 'ace_final_refit', True) else 'Fast Draft (Skip Refit)'}",
             f"   * Focal Calibration:       {'Refine Focal Length (Active)' if getattr(args, 'ace_refine_calib', True) else 'Fixed Initial Heuristic'}",
             f"   * Point Cloud Filter:      {'Dense Unfiltered' if getattr(args, 'ace_dense_pc', False) else 'Filtered Reprojection Points'}",
         ])
@@ -2551,7 +2557,6 @@ def main():
     # Archive session log into the output directory
     if log_path and os.path.isfile(log_path):
         try:
-            import shutil
             dest_log = os.path.join(output_dir, log_name if log_name else "abu_align_session.log")
             if os.path.abspath(log_path) != os.path.abspath(dest_log):
                 shutil.copy2(log_path, dest_log)
@@ -2603,7 +2608,6 @@ def main():
                 with open(report_file, "a", encoding="utf-8") as rf:
                     rf.write(f"\n[3DGS TRAINING COMPLETED]\n   * Exported Model:    {trained_model_path}\n   * Final Iterations:  {args.train_iterations:,}\n   * Max Gaussians:     {max_g_str}\n   * Log File:          {log_display_name}\n   * Log Location:      {log_display_path}\n======================================================================\n")
                 if log_path and os.path.isfile(log_path):
-                    import shutil
                     dest_log = os.path.join(output_dir, log_name if log_name else "abu_align_session.log")
                     if os.path.abspath(log_path) != os.path.abspath(dest_log):
                         shutil.copy2(log_path, dest_log)

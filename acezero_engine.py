@@ -61,19 +61,21 @@ def run_acezero_reconstruction(
     output_dir,
     iterations_max=30,
     refinement="mlp",
-    try_seeds=1,
+    try_seeds=3,
     external_focal_length=-1.0,
     refine_calibration=True,
     image_resolution=480,
     export_point_cloud=True,
     dense_point_cloud=False,
     shared_camera=True,
-    final_refit=False,
-    final_refine=False,
-    seed_parallel_workers=None,
+    final_refit=True,
+    final_refine=True,
+    seed_parallel_workers=3,
     seed_iterations=3000,
     cooldown_iterations=1500,
     mapping_iterations=8000,
+    refit_iterations=25000,
+    final_refit_posewait=5000,
     seed_threshold_early_exit=0.75,
     stage_res="native",
     progress_callback=None,
@@ -85,7 +87,7 @@ def run_acezero_reconstruction(
     :param output_dir: Destination directory for alignment results.
     :param iterations_max: Maximum rounds of alternating mapping and relocalization.
     :param refinement: Camera pose refinement strategy ('mlp', 'naive', 'none').
-    :param try_seeds: Number of candidate seeds evaluated (1 is fast & optimal for standard scans; 3-5 for complex).
+    :param try_seeds: Number of candidate seeds evaluated (3 is default; 3-5 for complex scenes).
     :param external_focal_length: Initial focal length guess (-1 to auto-estimate from image diagonal).
     :param refine_calibration: Whether to optimize focal length during mapping.
     :param image_resolution: Resolution for feature extraction / scene coordinate regression.
@@ -93,13 +95,15 @@ def run_acezero_reconstruction(
     :param dense_point_cloud: If True, skips reprojection filtering (only for ultra-dense datasets >2000 photos).
                               If False (default), applies strict 1-3px reprojection filtering for clean surfaces.
     :param shared_camera: Whether all views share a single camera intrinsic parameter set.
-    :param final_refit: Whether to run a 25k iteration blind refit from scratch after registration.
-                       Defaults to False for fast, stable photogrammetry and avoids focal collapse.
+    :param final_refit: Whether to run a 25k iteration refit from scratch after registration.
+                       Defaults to True (official Niantic benchmark mode) for pristine global geometry.
     :param final_refine: Whether to execute an additional mapping round after 100% registration.
     :param seed_parallel_workers: Number of concurrent workers for candidate seed evaluation.
     :param seed_iterations: Training iterations per candidate seed (default: 3000 for fast convergence).
     :param cooldown_iterations: Training iterations during learning rate cooldown (default: 1500).
     :param mapping_iterations: Maximum training iterations per mapping round (default: 8000).
+    :param refit_iterations: Training iterations for the final refit (default: 25000).
+    :param final_refit_posewait: Iterations to keep camera poses frozen during refit (default: 5000).
     :param seed_threshold_early_exit: Registration ratio (0-1) to early-exit candidate seed search (default: 0.75).
     :param stage_res: Staging resolution for ACE0 ('native' for 100% full res, '2k' for 1920px max, '1k' for 1024px max).
     :param progress_callback: Optional callable(str) for real-time console updates.
@@ -235,6 +239,9 @@ def run_acezero_reconstruction(
                 reg_p = float(m.group(1))
                 log(f"[TELEMETRY:STAGE4] pct={reg_p:.1f} status=registered")
 
+    if seed_parallel_workers is None or seed_parallel_workers <= 0:
+        seed_parallel_workers = 3
+
     use_wsl = wsl_bridge is not None and wsl_bridge.is_abu_linux_env_ready()
     if use_wsl:
         log("      [*] Engaging Native Linux Niantic ACE0 via WSL2 Ubuntu (GCC + OpenMP C++ DSAC*)...")
@@ -264,6 +271,8 @@ def run_acezero_reconstruction(
             f"--seed_threshold_early_exit {seed_threshold_early_exit} "
             f"--cooldown_iterations {cooldown_iterations} "
             f"--mapping_iterations {mapping_iterations} "
+            f"--refit_iterations {refit_iterations} "
+            f"--final_refit_posewait {final_refit_posewait} "
             f"--final_refit {final_refit} "
             f"--final_refine {final_refine} "
             f"--render_visualization False"
@@ -293,6 +302,8 @@ def run_acezero_reconstruction(
             "--seed_threshold_early_exit", str(seed_threshold_early_exit),
             "--cooldown_iterations", str(cooldown_iterations),
             "--mapping_iterations", str(mapping_iterations),
+            "--refit_iterations", str(refit_iterations),
+            "--final_refit_posewait", str(final_refit_posewait),
             "--final_refit", str(final_refit),
             "--final_refine", str(final_refine),
             "--render_visualization", "False",
@@ -490,7 +501,7 @@ def run_acezero_reconstruction(
     # Add points3D into reconstruction
     if len(points_3d) > 0:
         log(f"      * Incorporating {len(points_3d):,} 3D tie points into COLMAP reconstruction...")
-        step = max(1, len(points_3d) // 50000)  # Sparse representation in COLMAP
+        step = 1  # Preserve all valid authentic points from ACE0 for 3DGS training & visualization
         for i in range(0, len(points_3d), step):
             xyz = np.asarray(points_3d[i], dtype=np.float64)
             rgb = np.asarray(points_rgb[i] if len(points_rgb) > i else [200, 200, 200], dtype=np.uint8)
