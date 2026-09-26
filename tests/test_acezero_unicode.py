@@ -58,5 +58,11 @@ class TestACEZeroUnicode(unittest.TestCase):
         )
         self.assertEqual(len(stream.content), 1)
 
+    def test_ace_zero_util_run_cmd(self):
+        """Verify that ace_zero_util.run_cmd executes without NameError: name 'os' is not defined."""
+        from acezero import ace_zero_util
+        ret = ace_zero_util.run_cmd(["python", "-c", "import sys; sys.exit(0)"], verbose=False)
+        self.assertEqual(ret, 0)
+
 if __name__ == "__main__":
     unittest.main()
