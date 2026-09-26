@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.7 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.8 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -483,7 +483,132 @@ def _process_single_image_vggt_omega(p, mode="max_size", image_resolution=512, p
         return rgb_arr, (orig_w, orig_h), (target_h, target_w)
 
 
-def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512, img_load_res=1024, device="cuda"):
+def determine_global_vggt_canvas(image_paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512, patch_size=16):
+    """
+    Computes a canonical dataset-wide canvas (H, W) for VGGT-Omega so all windowed
+    chunks and downstream tracking/unprojection operate on identical spatial dimensions.
+    """
+    if engine != "vggt_omega" or preprocess_mode not in ["max_size", "balanced"]:
+        return (vggt_res, vggt_res)
+
+    if not image_paths or len(image_paths) == 0:
+        return (vggt_res, vggt_res)
+
+    from concurrent.futures import ThreadPoolExecutor
+    from PIL import Image
+
+    def _get_shape(path):
+        try:
+            with Image.open(path) as im:
+                w, h = im.size
+        except Exception:
+            return (vggt_res, vggt_res)
+        ar = h / max(w, 1)
+        if ar < 0.5:
+            crop_w = min(w, max(1, int(round(h / 0.5))))
+            eff_ar = h / max(crop_w, 1)
+        elif ar > 2.0:
+            crop_h = min(h, max(1, int(round(w * 2.0))))
+            eff_ar = crop_h / max(w, 1)
+        else:
+            eff_ar = ar
+        if preprocess_mode == "balanced":
+            from vggt_omega.utils.load_fn import _balanced_target_shape
+            return _balanced_target_shape(eff_ar, vggt_res, patch_size)
+        else:
+            from vggt_omega.utils.load_fn import _max_size_target_shape
+            return _max_size_target_shape(eff_ar, vggt_res, patch_size)
+
+    num_workers = min(16, max(4, os.cpu_count() or 8))
+    with ThreadPoolExecutor(max_workers=num_workers) as ex:
+        shapes = list(ex.map(_get_shape, image_paths))
+
+    shapes_set = set(shapes)
+    max_h = max(s[0] for s in shapes_set)
+    max_w = max(s[1] for s in shapes_set)
+    return (max_h, max_w)
+
+
+def safe_harmonize_chunk_resolutions(all_depth_maps, all_depth_confs, all_rgb_uint8, all_intrinsics=None, all_orig_coords=None):
+    """
+    Defensive spatial harmonizer for windowed batch outputs.
+    Guarantees that all chunk depth maps, confidence maps, and rgb arrays have identical
+    spatial dimensions (max_H, max_W) before np.concatenate, adjusting camera intrinsics
+    principal point (cx, cy) and original coords to preserve 100% geometric projection accuracy.
+    """
+    if not all_depth_maps or len(all_depth_maps) == 0:
+        return all_depth_maps, all_depth_confs, all_rgb_uint8, all_intrinsics, all_orig_coords
+
+    shapes = [(d.shape[1], d.shape[2]) for d in all_depth_maps]
+    if len(set(shapes)) <= 1:
+        return all_depth_maps, all_depth_confs, all_rgb_uint8, all_intrinsics, all_orig_coords
+
+    max_H = max(s[0] for s in shapes)
+    max_W = max(s[1] for s in shapes)
+
+    print(f"      * [Smart Resolution Harmonizer] Detected mixed chunk dimensions: {set(shapes)}. Harmonizing to canonical {max_W}x{max_H}...")
+
+    harmonized_depth = []
+    harmonized_conf = []
+    harmonized_rgb = []
+    harmonized_int = []
+    harmonized_coord = []
+
+    for i in range(len(all_depth_maps)):
+        d = all_depth_maps[i]
+        c = all_depth_confs[i]
+        rgb = all_rgb_uint8[i]
+        k_mat = all_intrinsics[i].copy() if all_intrinsics is not None and i < len(all_intrinsics) else None
+        coord = all_orig_coords[i].copy() if all_orig_coords is not None and i < len(all_orig_coords) else None
+
+        cur_H, cur_W = d.shape[1], d.shape[2]
+        if cur_H == max_H and cur_W == max_W:
+            harmonized_depth.append(d)
+            harmonized_conf.append(c)
+            harmonized_rgb.append(rgb)
+            if k_mat is not None:
+                harmonized_int.append(k_mat)
+            if coord is not None:
+                harmonized_coord.append(coord)
+            continue
+
+        pad_h = max_H - cur_H
+        pad_w = max_W - cur_W
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        d_padded = np.pad(d, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=0.0)
+        c_padded = np.pad(c, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=0.0)
+        
+        if rgb.ndim == 4:
+            rgb_padded = np.pad(rgb, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=255)
+        elif rgb.ndim == 3:
+            rgb_padded = np.pad(rgb, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=255)
+        else:
+            rgb_padded = rgb
+
+        if k_mat is not None:
+            # Shift principal point cx, cy to match image padding
+            k_mat[:, 0, 2] += pad_left
+            k_mat[:, 1, 2] += pad_top
+            harmonized_int.append(k_mat)
+
+        if coord is not None:
+            # Update target canvas resolution in original coordinates [..., 2] and [..., 3]
+            coord[:, 2] = float(max_W)
+            coord[:, 3] = float(max_H)
+            harmonized_coord.append(coord)
+
+        harmonized_depth.append(d_padded)
+        harmonized_conf.append(c_padded)
+        harmonized_rgb.append(rgb_padded)
+
+    return harmonized_depth, harmonized_conf, harmonized_rgb, harmonized_int, harmonized_coord
+
+
+def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512, img_load_res=1024, device="cuda", target_canvas_size=None):
     """
     Unified high-performance hardware-accelerated image preprocessor for VGGT and VGGT-Omega.
     Features:
@@ -491,6 +616,7 @@ def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode=
       2. Native libjpeg-turbo DCT draft scaling (decodes at 1/2 or 1/4 size directly in C/AVX2).
       3. Strict adherence to Meta VGGT-Omega crop aspect ratio [0.5, 2.0] & patch multiple rules.
       4. Single-pass metadata extraction (no redundant re-opening of images).
+      5. Canonical dataset canvas harmonization for windowed chunk processing.
     Returns:
         imgs_tensor: torch.Tensor on device
         orig_coords: np.ndarray of shape (N, 6) containing [0, 0, target_w, target_h, orig_w, orig_h]
@@ -509,8 +635,11 @@ def load_and_preprocess_vggt_images(paths, engine="vggt_omega", preprocess_mode=
         orig_sizes = [r[1] for r in results]
         target_shapes = [r[2] for r in results]
         shapes_set = set(target_shapes)
+        if target_canvas_size is not None:
+            shapes_set.add(target_canvas_size)
 
-        if len(shapes_set) > 1:
+        needs_padding = len(shapes_set) > 1 or (target_canvas_size is not None and any(s != target_canvas_size for s in target_shapes))
+        if needs_padding:
             from vggt_omega.utils.load_fn import _pad_images_to_common_size
             tensor_list = [torch.from_numpy(arr).permute(2, 0, 1).float().div_(255.0) for arr in rgb_arr_list]
             padded_tensors = _pad_images_to_common_size(tensor_list, shapes_set)
@@ -706,6 +835,13 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         prev_chunk_conf = None
         prev_overlap_start = 0
 
+        # Compute canonical dataset canvas across all image paths for VGGT-Omega
+        target_canvas = determine_global_vggt_canvas(
+            image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res
+        )
+        if engine == "vggt_omega":
+            print(f"      * Canonical Dataset Canvas: {target_canvas[1]}x{target_canvas[0]} ({vggt_preprocess_mode.upper()} mode)")
+
         # Asynchronous batch prefetching pipeline:
         # Pre-loads the next chunk on CPU worker threads while GPU is busy with forward inference
         from concurrent.futures import ThreadPoolExecutor
@@ -716,7 +852,8 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             sub_paths = image_paths[s_i:e_i]
             return load_and_preprocess_vggt_images(
                 sub_paths, engine=engine, preprocess_mode=vggt_preprocess_mode,
-                vggt_res=vggt_res, img_load_res=img_load_res, device="cpu"
+                vggt_res=vggt_res, img_load_res=img_load_res, device="cpu",
+                target_canvas_size=target_canvas
             )
 
         future_batch = prefetch_executor.submit(_fetch_chunk_data, 0)
@@ -809,15 +946,27 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     grid_v_idx = np.array([], dtype=np.intp)
                     grid_u_idx = np.array([], dtype=np.intp)
 
+                prev_H, prev_W = prev_chunk_depth.shape[1], prev_chunk_depth.shape[2]
+                if prev_H == H_d and prev_W == W_d:
+                    grid_u_d, grid_v_d = grid_u, grid_v
+                    grid_u_idx_d, grid_v_idx_d = grid_u_idx, grid_v_idx
+                else:
+                    scale_u = prev_W / float(W_d)
+                    scale_v = prev_H / float(H_d)
+                    grid_u_d = np.clip(grid_u * scale_u, 0, prev_W - 1)
+                    grid_v_d = np.clip(grid_v * scale_v, 0, prev_H - 1)
+                    grid_u_idx_d = grid_u_d.astype(np.intp)
+                    grid_v_idx_d = grid_v_d.astype(np.intp)
+
                 for k in range(actual_overlap):
                     if len(grid_u) == 0:
                         break
                     prev_k = prev_chunk_centers.shape[0] - actual_overlap + k
 
                     c_s = c_conf[k, grid_v_idx, grid_u_idx]
-                    c_d = prev_chunk_conf[prev_k, grid_v_idx, grid_u_idx]
+                    c_d = prev_chunk_conf[prev_k, grid_v_idx_d, grid_u_idx_d]
                     z_s = c_depth[k, grid_v_idx, grid_u_idx].astype(np.float64)
-                    z_d = prev_chunk_depth[prev_k, grid_v_idx, grid_u_idx].astype(np.float64)
+                    z_d = prev_chunk_depth[prev_k, grid_v_idx_d, grid_u_idx_d].astype(np.float64)
 
                     valid = (c_s >= 1.5) & (c_d >= 1.5) & (z_s > 0.05) & (z_d > 0.05)
                     if not np.any(valid):
@@ -826,6 +975,9 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     val_u = grid_u[valid]
                     val_v = grid_v[valid]
                     val_zs = z_s[valid]
+
+                    val_u_d = grid_u_d[valid]
+                    val_v_d = grid_v_d[valid]
                     val_zd = z_d[valid]
 
                     # Source camera 3D points -> world
@@ -843,7 +995,7 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
                     R_dst = prev_chunk_ext[prev_k, :3, :3]
                     t_dst = prev_chunk_ext[prev_k, :3, 3]
 
-                    p_cam_d = np.stack([(val_u - cx_d) * val_zd / fx_d, (val_v - cy_d) * val_zd / fy_d, val_zd], axis=1)
+                    p_cam_d = np.stack([(val_u_d - cx_d) * val_zd / fx_d, (val_v_d - cy_d) * val_zd / fy_d, val_zd], axis=1)
                     p_w_d = (p_cam_d - t_dst) @ R_dst
 
                     src_pts_3d.append(p_w_s)
@@ -897,6 +1049,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
         prefetch_executor.shutdown(wait=False)
 
+        # Defensive spatial resolution harmonization before concatenation:
+        all_depth_maps, all_depth_confs, all_rgb_uint8, all_intrinsics, all_orig_coords = safe_harmonize_chunk_resolutions(
+            all_depth_maps, all_depth_confs, all_rgb_uint8, all_intrinsics, all_orig_coords
+        )
+
         extrinsic = np.concatenate(all_extrinsics, axis=0)
         intrinsic = np.concatenate(all_intrinsics, axis=0)
         depth_map = np.concatenate(all_depth_maps, axis=0)
@@ -917,8 +1074,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
         # Standard Single-Pass Inference for small/medium datasets (<= 48 frames)
         print(f"[3/5] Preprocessing Images ({vggt_preprocess_mode.upper()} mode)...")
         stage_start = time.time()
+        target_canvas = determine_global_vggt_canvas(
+            image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res
+        )
         images, original_coords, points_rgb, is_square_padded = load_and_preprocess_vggt_images(
-            image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device
+            image_paths, engine=engine, preprocess_mode=vggt_preprocess_mode, vggt_res=vggt_res, img_load_res=img_load_res, device=device, target_canvas_size=target_canvas
         )
         print(f"      * Batch Shape:   {tuple(images.shape)}")
         print()

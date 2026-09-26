@@ -480,14 +480,26 @@ def predict_tracks_windowed(
         # 1. Load window images on demand (Zero VRAM footprint outside window)
         if image_loader is not None:
             w_paths = image_paths[s:e]
-            win_imgs, _, win_rgb, _ = image_loader(
-                w_paths,
-                engine=engine,
-                preprocess_mode=preprocess_mode,
-                vggt_res=vggt_res,
-                img_load_res=img_load_res,
-                device=device,
-            )
+            target_canvas = (pts3d_np.shape[1], pts3d_np.shape[2]) if pts3d_np is not None else None
+            try:
+                win_imgs, _, win_rgb, _ = image_loader(
+                    w_paths,
+                    engine=engine,
+                    preprocess_mode=preprocess_mode,
+                    vggt_res=vggt_res,
+                    img_load_res=img_load_res,
+                    device=device,
+                    target_canvas_size=target_canvas,
+                )
+            except TypeError:
+                win_imgs, _, win_rgb, _ = image_loader(
+                    w_paths,
+                    engine=engine,
+                    preprocess_mode=preprocess_mode,
+                    vggt_res=vggt_res,
+                    img_load_res=img_load_res,
+                    device=device,
+                )
         else:
             win_imgs = images[s:e].to(device)
 

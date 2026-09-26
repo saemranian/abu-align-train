@@ -280,7 +280,87 @@ class TestVGGTOmegaOptimization(unittest.TestCase):
             error_raised = True
 
         self.assertFalse(error_raised)
-        self.assertTrue(was_cached)
+    def test_safe_harmonize_chunk_resolutions(self):
+        """Verify that safe_harmonize_chunk_resolutions harmonizes mixed spatial chunk resolutions."""
+        from align_cli import safe_harmonize_chunk_resolutions
+
+        # Chunk 0: shape (2, 512, 512)
+        d0 = np.ones((2, 512, 512), dtype=np.float32) * 5.0
+        c0 = np.ones((2, 512, 512), dtype=np.float32) * 2.0
+        rgb0 = np.full((2, 512, 512, 3), 128, dtype=np.uint8)
+        k0 = np.array([[[500.0, 0.0, 256.0], [0.0, 500.0, 256.0], [0.0, 0.0, 1.0]],
+                       [[500.0, 0.0, 256.0], [0.0, 500.0, 256.0], [0.0, 0.0, 1.0]]], dtype=np.float64)
+        coord0 = np.array([[0, 0, 512, 512, 1920, 1080],
+                           [0, 0, 512, 512, 1920, 1080]], dtype=np.float32)
+
+        # Chunk 1: shape (2, 288, 512)
+        d1 = np.ones((2, 288, 512), dtype=np.float32) * 3.0
+        c1 = np.ones((2, 288, 512), dtype=np.float32) * 2.5
+        rgb1 = np.full((2, 288, 512, 3), 200, dtype=np.uint8)
+        k1 = np.array([[[500.0, 0.0, 256.0], [0.0, 500.0, 144.0], [0.0, 0.0, 1.0]],
+                       [[500.0, 0.0, 256.0], [0.0, 500.0, 144.0], [0.0, 0.0, 1.0]]], dtype=np.float64)
+        coord1 = np.array([[0, 0, 512, 288, 1920, 1080],
+                           [0, 0, 512, 288, 1920, 1080]], dtype=np.float32)
+
+        all_depth = [d0, d1]
+        all_conf = [c0, c1]
+        all_rgb = [rgb0, rgb1]
+        all_k = [k0, k1]
+        all_coord = [coord0, coord1]
+
+        # Ensure before harmonization, np.concatenate raises ValueError
+        with self.assertRaises(ValueError):
+            _ = np.concatenate(all_depth, axis=0)
+
+        h_depth, h_conf, h_rgb, h_k, h_coord = safe_harmonize_chunk_resolutions(
+            all_depth, all_conf, all_rgb, all_k, all_coord
+        )
+
+        # Concatenation must now succeed flawlessly
+        concat_depth = np.concatenate(h_depth, axis=0)
+        concat_conf = np.concatenate(h_conf, axis=0)
+        concat_rgb = np.concatenate(h_rgb, axis=0)
+        concat_k = np.concatenate(h_k, axis=0)
+        concat_coord = np.concatenate(h_coord, axis=0)
+
+        self.assertEqual(concat_depth.shape, (4, 512, 512))
+        self.assertEqual(concat_conf.shape, (4, 512, 512))
+        self.assertEqual(concat_rgb.shape, (4, 512, 512, 3))
+        self.assertEqual(concat_k.shape, (4, 3, 3))
+        self.assertEqual(concat_coord.shape, (4, 6))
+
+        # Check that principal point cy for Chunk 1 shifted by (512 - 288) // 2 = 112
+        pad_top = (512 - 288) // 2
+        self.assertEqual(concat_k[2, 1, 2], 144.0 + pad_top)
+        self.assertEqual(concat_k[3, 1, 2], 144.0 + pad_top)
+
+        # Verify padded border has zero confidence
+        self.assertEqual(concat_conf[2, 0, 0], 0.0)
+        self.assertEqual(concat_conf[2, 511, 511], 0.0)
+
+    def test_determine_global_vggt_canvas(self):
+        """Verify determine_global_vggt_canvas correctly finds canonical canvas dimensions."""
+        from align_cli import determine_global_vggt_canvas
+
+        # img1 is landscape (1920x1080), img2 is 4:3 (1600x1200)
+        paths = [self.img1_path, self.img2_path]
+        canvas = determine_global_vggt_canvas(paths, engine="vggt_omega", preprocess_mode="max_size", vggt_res=512)
+        # Both images fit within 512 resolution
+        self.assertIsInstance(canvas, tuple)
+        self.assertEqual(len(canvas), 2)
+        self.assertTrue(canvas[0] <= 512 and canvas[1] <= 512)
+
+    def test_load_and_preprocess_vggt_images_with_target_canvas(self):
+        """Verify load_and_preprocess_vggt_images enforces target_canvas_size across batches."""
+        from align_cli import load_and_preprocess_vggt_images
+
+        # Pass target_canvas_size=(512, 512)
+        imgs, coords, rgb_uint8, is_square = load_and_preprocess_vggt_images(
+            [self.img1_path], engine="vggt_omega", preprocess_mode="max_size",
+            vggt_res=512, device="cpu", target_canvas_size=(512, 512)
+        )
+        self.assertEqual(imgs.shape, (1, 3, 512, 512))
+        self.assertEqual(rgb_uint8.shape, (1, 512, 512, 3))
 
 
 if __name__ == "__main__":

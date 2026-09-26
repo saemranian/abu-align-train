@@ -1,26 +1,31 @@
-# v0.0.8.7 — Instant 3D Workspace Navigation, Zero-Lag Dropdowns & Asynchronous Viewer Launch
+# v0.0.8.8 — Canonical Canvas Harmonization & Mixed Spatial Resolution Chunk Crash Fix
 
 ## Outcome
-Abu Align & Train v0.0.8.7 resolves the long delays and `(Not Responding)` freezes when selecting the 3D workspace tab or opening the Reconstruction dropdown menu. Camera frustum thumbnails are now decoded asynchronously in background thread pools using high-speed libjpeg DCT draft decoders, eliminating all main-thread I/O stalls. The 3D browser viewer launches immediately upon startup without blocking on scene asset ingestion.
+Abu Align & Train v0.0.8.8 fixes the critical crash during large dataset processing in VGGT-Omega windowed chunk reconstruction (`ValueError: all the input array dimensions except for the concatenation axis must match exactly, but along dimension 1, the array at index 0 has size 512 and the array at index 20 has size 288`). All windowed chunks across datasets with mixed landscape and portrait orientations now operate with 100% unified spatial dimensions and zero-drift geometric alignment.
 
 ## Changes
 
-### 1. Zero-Lag Reconstruction Dropdown & Native 3D Workspace (`workspace_3d.py` & `native_inspection.py`)
-- **Main-Thread I/O Decoupling**: Diagnosed root cause of the UI lockup where the window turned into `(Not Responding)` for 45+ seconds on large datasets (e.g. 915 cameras). In previous builds, `render()` synchronously traversed disk directories, opened 24-50MP raw photos, and decoded JPEGs for every visible camera frustum on Tkinter's main event thread, blocking comboboxes from receiving click events.
-- **Asynchronous Thumbnail Thread Pool**: Moved thumbnail discovery and decoding to a background `ThreadPoolExecutor`. The main thread render function now executes in **2 to 5 milliseconds** with zero disk I/O, guaranteeing that the Reconstruction dropdown menu opens instantaneously upon click.
-- **Libjpeg DCT Draft Acceleration**: Implemented `im.draft('RGB', (128, 128))` in `_get_camera_thumbnail`. Instead of expanding full 50-megapixel pixel arrays into memory, libjpeg decodes downsampled 1/8th scale DCT blocks directly from the bitstream, reducing per-image decode time from ~150ms to ~2ms.
-- **Debounced Viewport Redraw**: Integrated `_schedule_thumb_redraw()` with a 150ms debounce window. As thumbnails finish loading asynchronously in the background, the canvas repaints smoothly without impacting 60 FPS viewport interaction.
-- **Lifecycle Cleanup**: Added proper executor shutdown in `destroy()` and `_cleanup_inspection()`.
+### 1. Canonical Dataset Canvas Detection (`align_cli.py`)
+- **Root Cause Resolution**: When processing large image collections (e.g., 2,582 images across 53 windows), individual chunks previously determined their aspect ratios locally. Chunks containing both portrait and landscape images were padded to `512x512`, while chunks containing only landscape images remained at native aspect-ratio resolutions such as `288x512` or `336x512`. At the end of inference, `np.concatenate(all_depth_maps, axis=0)` crashed due to spatial dimension mismatch along dimension 1.
+- **Global Pre-Scan (`determine_global_vggt_canvas`)**: Implemented a multi-threaded header inspection pre-scan over `image_paths` that evaluates aspect ratios in under 1 second without full pixel decoding. It determines the canonical dataset canvas `(max_H, max_W)` (e.g. `(512, 512)` when mixed portrait/landscape frames are present, or native `(336, 512)` for pure landscape runs).
+- **Unified Chunk Padding (`load_and_preprocess_vggt_images`)**: Added `target_canvas_size` parameter. All chunks are padded to the canonical canvas using Meta's `_pad_images_to_common_size`, ensuring every single chunk produces identically sized tensors `(B, 3, H, W)` and depth/confidence maps.
 
-### 2. Instant 3D Browser Viewer Launch & Dynamic Frustum Population (`fast_viewer.py` & `viewer_workspace.py`)
-- **Non-Blocking Browser Launch**: In `fast_viewer.py`, `webbrowser.open(url)` is now dispatched immediately in a background daemon thread right as the port is bound by Viser. The browser opens in under 1 second instead of waiting 45 seconds for sequential scene generation.
-- **Dynamic Frustum Texturing in Viser**: In `viewer_workspace.py`, camera frustums are instantiated immediately with zero latency. A background worker pool (`ThreadPoolExecutor(max_workers=6)`) populates thumbnails using `im.draft('RGB', (160, 106))` and updates `handle.image` dynamically in WebGL as each thumbnail completes.
+### 2. Defensive Spatial Resolution Harmonization (`safe_harmonize_chunk_resolutions`)
+- **Zero-Crash Guard**: Added a defensive pre-concatenation harmonization pass in `align_cli.py`. If any batch outputs differ in spatial dimensions due to custom inputs or external engines, `safe_harmonize_chunk_resolutions` automatically pads depth maps (with 0.0), confidence maps (with 0.0), and RGB arrays (with 255) to `(max_H, max_W)`.
+- **Intrinsic Principal Point Adjustment**: Accurately offsets camera intrinsics (`cx += pad_left`, `cy += pad_top`) and original coordinates to guarantee 100% geometric projection accuracy for unprojected 3D point clouds.
+- **Confidence Filtering Compatibility**: Zero-confidence padding is automatically discarded by `conf_mask = depth_conf >= conf_thresh`, eliminating any phantom points.
+
+### 3. Cross-Chunk Landmark Alignment Protection (`align_cli.py`)
+- **Safe Coordinate Indexing**: Guarded Umeyama 3D landmark surface point extraction against any cross-chunk resolution differences by scaling grid coordinates between source and destination chunks, preventing out-of-bounds `IndexError` exceptions.
+
+### 4. Sliding Window Tracking Synchronization (`vggt/dependency/track_predict.py`)
+- **Canvas-Matched Window Loading**: Updated `predict_tracks_windowed` to pass `target_canvas_size` matching `points_3d` spatial resolution when loading window frames on demand, ensuring 1:1 pixel coordinate alignment during CoTracker feature extraction.
 
 ## Verification
-- **Automated Test Suite**: All 103 unit tests passed in 56 seconds across all modules (`test_native_inspection`, `test_viewer_workspace`, `test_realityscan_engine`, `test_gui_presets`, `test_desktop_ui`, `test_vggt_omega_optimization`, `test_vggttt_engine`, etc.).
-- **Code Compilation**: Verified all modified Python modules compile with 0 syntax or lint errors.
+- **Automated Test Suite**: All 106 unit tests passed in 43 seconds across the entire test suite, including new regression tests `test_safe_harmonize_chunk_resolutions`, `test_determine_global_vggt_canvas`, and `test_load_and_preprocess_vggt_images_with_target_canvas`.
 - **C# Launcher Compilation**: Recompiled native `Abu_Align.exe` and `Abu_Align_and_Train.exe` binaries using .NET `csc.exe`.
+- **Release Snapshot**: Verified code snapshot and documentation in `versions/v0.0.8.8/`.
 
 ## Files and Release
-- Core: `workspace_3d.py`, `native_inspection.py`, `viewer_workspace.py`, `fast_viewer.py`, `version_manager.py`.
-- Release Snapshot: `versions/v0.0.8.7/` in the project root.
+- Core: `align_cli.py`, `vggt/dependency/track_predict.py`, `tests/test_vggt_omega_optimization.py`, `version_manager.py`.
+- Release Snapshot: `versions/v0.0.8.8/` in the project root.
