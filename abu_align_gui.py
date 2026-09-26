@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.8.0
+Abu Align & Train Version 0.0.8.1
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -216,7 +216,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.8.0 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.8.1 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -538,6 +538,7 @@ class AbuAlignApp:
         menubar.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
         tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
+        tools_menu.add_command(label="📐 Open Native 3D Workspace", accelerator="Alt+4", command=self._show_3d_workspace)
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
         tools_menu.add_separator()
         tools_menu.add_command(label="🔄 Check Engine Repository Updates...", command=self._open_engine_updates_dialog)
@@ -1426,6 +1427,11 @@ class AbuAlignApp:
             self.train_target_run_cb["values"] = runs
             if self.train_target_run_var.get() not in runs:
                 self.train_target_run_var.set(runs[0])
+        if hasattr(self, "workspace_3d"):
+            try:
+                self.workspace_3d.refresh_runs()
+            except Exception:
+                pass
 
     def _open_video_extractor_dialog(self):
         """
@@ -3794,7 +3800,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.8.0 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.8.1 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3899,6 +3905,11 @@ class AbuAlignApp:
                         self.telemetry_lbl.config(text="Status: Pipeline Completed Successfully (100%)", fg=self.accent_green)
                         self.eta_lbl.config(text="Done")
                         self._log("\n[STATUS] Pipeline Job Completed.\n")
+                        if hasattr(self, "workspace_3d"):
+                            try:
+                                self.workspace_3d.refresh_runs()
+                            except Exception:
+                                pass
                     else:
                         self.pct_lbl.config(text="Failed", fg="#ff4d4d")
                         active_task = "3DGS Training" if getattr(self, "active_stage_idx", 0) == 5 else "Alignment"
@@ -4324,13 +4335,21 @@ class AbuAlignApp:
         cmd = [self.conda_python, fast_viewer_script, "--input", target_arg]
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
 
+    def _show_3d_workspace(self):
+        """Switches to the native 04 3D Workspace tab and refreshes/loads the latest reconstruction."""
+        if hasattr(self, "workspace_tabs") and hasattr(self, "workspace_3d"):
+            self.workspace_tabs.select(self.workspace_3d)
+            self.workspace_3d.refresh_runs()
+            if self.workspace_3d.points is None:
+                self.workspace_3d.load_selected_run()
+
     def _open_doc_window(self, title, doc_path):
         if not os.path.isfile(doc_path):
             messagebox.showerror("Error", f"Document file not found:\n{doc_path}")
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.8.0 - {title}")
+        doc_win.title(f"Abu Align v0.0.8.1 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4957,7 +4976,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.8.0\n"
+            "Abu Align & Train - Version 0.0.8.1\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

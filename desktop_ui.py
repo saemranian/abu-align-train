@@ -459,7 +459,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.8.0", 9, muted=True)
+    app.version_label = label(header, "v0.0.8.1", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -613,9 +613,12 @@ def build_workspace(app, tooltip):
     align_page = ScrollPage(app.workspace_tabs)
     train_page = ScrollPage(app.workspace_tabs)
     activity = tk.Frame(app.workspace_tabs, bg=SURFACE, padx=20, pady=16)
+    from workspace_3d import Workspace3DViewer
+    app.workspace_3d = Workspace3DViewer(app.workspace_tabs, dataset_provider=lambda: app.dataset_var.get())
     app.workspace_tabs.add(align_page, text="01  Alignment")
     app.workspace_tabs.add(train_page, text="02  Training")
     app.workspace_tabs.add(activity, text="03  Activity")
+    app.workspace_tabs.add(app.workspace_3d, text="04  3D Workspace")
     app.activity_tab = activity
     app.settings_pages = (align_page, train_page)
     app.workspace_tabs.enable_traversal()
@@ -702,6 +705,15 @@ def build_workspace(app, tooltip):
     toolbar = tk.Frame(activity, bg=SURFACE)
     toolbar.pack(fill="x", pady=(0, 14))
     label(toolbar, "Activity", 16).pack(side="left", padx=(0, 6))
+
+    def _show_3d_workspace():
+        app.workspace_tabs.select(app.workspace_3d)
+        app.workspace_3d.refresh_runs()
+        if app.workspace_3d.points is None:
+            app.workspace_3d.load_selected_run()
+
+    app._show_3d_workspace = _show_3d_workspace
+
     for name, attr, callback in [("Results", "open_folder_btn", app._open_results_folder),
             ("Models", "models_btn", app._open_models_folder), ("Logs", "logs_btn", app._open_logs_folder),
             ("3D viewer", "viewer_btn", app._launch_viewer)]:
@@ -782,8 +794,20 @@ def build_workspace(app, tooltip):
     # Tooltips remain available on engine parameters; keyboard users can reveal them too.
     root.bind("<Control-o>", lambda e: app._browse_dataset())
     root.bind("<Control-Shift-S>", lambda e: app._save_preset())
-    for i in range(3):
+    for i in range(4):
         root.bind(f"<Alt-Key-{i + 1}>", lambda e, index=i: app.workspace_tabs.select(index))
+
+    def on_tab_changed(event):
+        try:
+            sel = app.workspace_tabs.select()
+            if hasattr(app, "workspace_3d") and sel == str(app.workspace_3d):
+                app.workspace_3d.refresh_runs()
+                if app.workspace_3d.points is None:
+                    app.workspace_3d.load_selected_run()
+        except Exception:
+            pass
+
+    app.workspace_tabs.bind("<<NotebookTabChanged>>", on_tab_changed, add="+")
     def on_map(event):
         if (isinstance(event.widget, tk.Toplevel) and not event.widget.overrideredirect()
                 and not getattr(event.widget, "_custom_theme", False)):

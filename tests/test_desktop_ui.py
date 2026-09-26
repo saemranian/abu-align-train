@@ -1,8 +1,10 @@
-"""Layout and workflow interaction regressions; no GPU processes are launched."""
+import os
+import sys
 import tkinter as tk
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, os.path.dirname(__file__))
 import test_gui_presets
 
 
@@ -307,6 +309,36 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("ACE0 Scene MLP", raw_text)
         self.assertIn("[500/8000]", raw_text)
 
+    def test_native_3d_workspace_tab_integration(self):
+        """Verify the 04 3D Workspace tab is mounted, selectable, and responsive."""
+        self.root.deiconify()
+        self.assertTrue(hasattr(self.app, "workspace_3d"))
+        
+        # Test tab navigation
+        self.app.workspace_tabs.select(self.app.workspace_3d)
+        self.assertEqual(self.app.workspace_tabs.select(), str(self.app.workspace_3d))
+        
+        # Test show_3d_workspace callback
+        self.app.workspace_tabs.select(0)
+        self.assertEqual(self.app.workspace_tabs.index(self.app.workspace_tabs.select()), 0)
+        self.app._show_3d_workspace()
+        self.assertEqual(self.app.workspace_tabs.select(), str(self.app.workspace_3d))
+        
+        # Test 3D view controls and presets
+        ws = self.app.workspace_3d
+        ws.reset_view()
+        self.assertEqual(ws.yaw, -25.0)
+        self.assertEqual(ws.pitch, 20.0)
+        self.assertEqual(ws.distance, 5.0)
+        
+        ws.set_preset_view(0, 89.9)
+        self.assertEqual(ws.yaw, 0.0)
+        self.assertEqual(ws.pitch, 89.9)
+        
+        ws.reset_view()
+        self.assertEqual(ws.yaw, -25.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

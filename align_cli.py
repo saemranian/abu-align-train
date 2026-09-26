@@ -84,7 +84,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.0 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.1 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1490,6 +1490,8 @@ def main():
     parser.add_argument("--vggttt_weights", type=str, default=None, help="Custom checkpoint path (.safetensors or .pt) for NVIDIA VGG-T3")
     parser.add_argument("--vggttt_conf", type=float, default=2.0, help="Confidence threshold for VGG-T3 depth point extraction (default: 2.0; lower=denser)")
     parser.add_argument("--vggttt_mem_eff", action="store_true", default=False, help="Enable memory-efficient linear attention inference in VGG-T3 for large sequences (>64 views)")
+    parser.add_argument("--vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_true", default=None, help="Stream intermediate attention chunk outputs to CPU memory to prevent VRAM spill on large sequences")
+    parser.add_argument("--no_vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_false", help="Keep all attention states in GPU VRAM")
     parser.add_argument("--vggttt_ttt_steps", type=int, default=1, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 1)")
     parser.add_argument("--vggttt_global_pred", action="store_true", default=False, help="Use global transformer point head for 3D point cloud rather than unprojected depth")
     # Video Frame Extraction Options
@@ -2129,6 +2131,7 @@ def main():
             dtype=dtype,
             conf_threshold=getattr(args, "vggttt_conf", 2.0),
             memory_efficient=getattr(args, "vggttt_mem_eff", False),
+            offload_to_cpu=getattr(args, "vggttt_offload_cpu", None),
             ttt_steps=getattr(args, "vggttt_ttt_steps", 1),
             use_global_pred=getattr(args, "vggttt_global_pred", False),
             progress_callback=print,
@@ -2527,9 +2530,11 @@ def main():
             f"   * Real-Time Viser View:    {'Enabled' if args.dvo_viz else 'Headless'}",
         ])
     elif engine in ["vggttt", "vgg-ttt", "vggt3"]:
+        offload_str = "Enabled (CPU Streaming)" if getattr(args, 'vggttt_offload_cpu', None) else ("Auto (>64 Views)" if getattr(args, 'vggttt_offload_cpu', None) is None else "Disabled (GPU VRAM Only)")
         report_lines.extend([
             f"   * Confidence Threshold:    {getattr(args, 'vggttt_conf', 2.0)}",
             f"   * Memory Efficient Mode:   {'Active (>64 Views)' if getattr(args, 'vggttt_mem_eff', False) else 'Standard Linear'}",
+            f"   * CPU Memory Offload:      {offload_str}",
             f"   * TTT Inner Steps:         {getattr(args, 'vggttt_ttt_steps', 1)}",
             f"   * 3D Point Head:           {'Global Transformer Point Head' if getattr(args, 'vggttt_global_pred', False) else 'Unprojected Depth & Intrinsics'}",
         ])
