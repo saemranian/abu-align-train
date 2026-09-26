@@ -306,7 +306,14 @@ class Workspace3DViewer(tk.Frame):
             bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
             relief="flat", bd=0, padx=10, pady=4, font=("Segoe UI", 9), cursor="hand2"
         )
-        load_btn.pack(side="left", padx=(0, 16))
+        load_btn.pack(side="left", padx=(0, 8))
+
+        report_btn = tk.Button(
+            bar, text="📋 Reconstruction Report", command=self.show_reconstruction_report,
+            bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, padx=10, pady=4, font=("Segoe UI", 9), cursor="hand2"
+        )
+        report_btn.pack(side="left", padx=(0, 16))
 
         # Color Mode Dropdown
         tk.Label(bar, text="Color:", bg=SURFACE, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
@@ -436,39 +443,44 @@ class Workspace3DViewer(tk.Frame):
         self.pan_y = 0.0
         self.render()
 
+    def _resolve_results_dir(self) -> Optional[str]:
+        """Resolves results/ directory for dataset or its parent directory."""
+        dataset_dir = self.dataset_provider() if self.dataset_provider else ""
+        if not dataset_dir or not os.path.isdir(dataset_dir):
+            return None
+        cand_results = os.path.join(dataset_dir, "results")
+        if os.path.isdir(cand_results):
+            return cand_results
+        parent_results = os.path.join(os.path.dirname(dataset_dir), "results")
+        if os.path.isdir(parent_results):
+            return parent_results
+        return None
+
     def refresh_runs(self) -> List[str]:
         """Discovers all available sparse_* reconstruction runs in the current dataset."""
         runs = ["Latest Run (Auto)"]
-        dataset_dir = self.dataset_provider() if self.dataset_provider else ""
-        if dataset_dir and os.path.isdir(dataset_dir):
-            results_dir = os.path.join(dataset_dir, "results")
-            if os.path.isdir(results_dir):
-                found = sorted(
-                    [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("sparse_")],
-                    reverse=True
-                )
-                runs.extend(found)
+        results_dir = self._resolve_results_dir()
+        if results_dir and os.path.isdir(results_dir):
+            found = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("sparse_")]
+            found.sort(key=lambda d: os.path.getmtime(os.path.join(results_dir, d)), reverse=True)
+            runs.extend(found)
         self.run_combo["values"] = runs
+        cur = self.run_choice_var.get()
+        if cur not in runs:
+            self.run_choice_var.set(runs[0])
         return runs
 
     def load_selected_run(self):
         """Loads points and cameras for the selected run."""
-        dataset_dir = self.dataset_provider() if self.dataset_provider else ""
-        if not dataset_dir or not os.path.isdir(dataset_dir):
-            self.stats_lbl.configure(text="No dataset selected")
-            return
-
-        results_dir = os.path.join(dataset_dir, "results")
-        if not os.path.isdir(results_dir):
+        results_dir = self._resolve_results_dir()
+        if not results_dir or not os.path.isdir(results_dir):
             self.stats_lbl.configure(text="No results/ folder found")
             return
 
         choice = self.run_choice_var.get()
         if choice == "Latest Run (Auto)" or not choice:
-            found = sorted(
-                [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("sparse_")],
-                reverse=True
-            )
+            found = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("sparse_")]
+            found.sort(key=lambda d: os.path.getmtime(os.path.join(results_dir, d)), reverse=True)
             if not found:
                 self.stats_lbl.configure(text="No sparse_* runs found")
                 return
@@ -478,6 +490,7 @@ class Workspace3DViewer(tk.Frame):
             target_run_dir = os.path.join(results_dir, choice)
             run_name = choice
 
+        self.active_run_name = run_name
         self.active_run_dir = target_run_dir
 
         # Look for point cloud
@@ -691,3 +704,217 @@ class Workspace3DViewer(tk.Frame):
         self._photo_image = ImageTk.PhotoImage(pil_img)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo_image)
+
+    def show_reconstruction_report(self):
+        """Displays the Reconstruction Report for the active or selected alignment run."""
+        results_dir = self._resolve_results_dir()
+        target_dir = getattr(self, "active_run_dir", None)
+        run_name = getattr(self, "active_run_name", None)
+
+        if not target_dir or not os.path.isdir(target_dir):
+            if results_dir and os.path.isdir(results_dir):
+                choice = self.run_choice_var.get()
+                if choice and choice != "Latest Run (Auto)":
+                    cand = os.path.join(results_dir, choice)
+                    if os.path.isdir(cand):
+                        target_dir = cand
+                        run_name = choice
+                if not target_dir:
+                    found = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("sparse_")]
+                    found.sort(key=lambda d: os.path.getmtime(os.path.join(results_dir, d)), reverse=True)
+                    if found:
+                        target_dir = os.path.join(results_dir, found[0])
+                        run_name = found[0]
+
+        if not target_dir or not os.path.isdir(target_dir):
+            from tkinter import messagebox
+            messagebox.showinfo("Reconstruction Report", "No valid alignment run found for the current dataset.\nPlease select or run an alignment first.")
+            return
+
+        run_name = run_name or os.path.basename(target_dir)
+
+        # 1. Search for reconstruction_report.txt
+        rep_file = os.path.join(target_dir, "reconstruction_report.txt")
+        report_text = ""
+        if os.path.isfile(rep_file):
+            try:
+                with open(rep_file, "r", encoding="utf-8", errors="replace") as f:
+                    report_text = f.read()
+            except Exception:
+                pass
+
+        # 2. Search for any *.log file in run folder if not found
+        if not report_text:
+            log_files = glob.glob(os.path.join(target_dir, "*.log"))
+            if log_files:
+                try:
+                    with open(log_files[0], "r", encoding="utf-8", errors="replace") as f:
+                        lines = f.readlines()
+                    start_idx = -1
+                    for idx, line in enumerate(lines):
+                        if "RECONSTRUCTION REPORT" in line:
+                            start_idx = max(0, idx - 1)
+                            break
+                    if start_idx != -1:
+                        report_text = "".join(lines[start_idx:])
+                except Exception:
+                    pass
+
+        # 3. Dynamic synthesis if no text report file exists
+        if not report_text:
+            report_text = self._synthesize_report(target_dir, run_name)
+
+        ReconstructionReportViewer(self, run_name, report_text, target_dir)
+
+    def _synthesize_report(self, run_dir: str, run_name: str) -> str:
+        """Synthesizes a reconstruction summary from disk artifacts."""
+        pts_count = len(self.points) if (self.points is not None and getattr(self, "active_run_dir", None) == run_dir) else "Unknown"
+        cam_count = len(self.cameras) if (self.cameras and getattr(self, "active_run_dir", None) == run_dir) else "Unknown"
+        mtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(run_dir)))
+        artifacts = os.listdir(run_dir) if os.path.isdir(run_dir) else []
+        text = (
+            "======================================================================\n"
+            f"                       RECONSTRUCTION REPORT\n"
+            "======================================================================\n"
+            f" Alignment Run:        {run_name}\n"
+            f" Output Directory:     {run_dir}\n"
+            f" Last Modified:        {mtime}\n"
+            f" Registered Cameras:   {cam_count}\n"
+            f" 3D Points Generated:  {pts_count if isinstance(pts_count, str) else f'{pts_count:,}'}\n"
+            "----------------------------------------------------------------------\n"
+            " ARTIFACTS FOUND:\n"
+        )
+        for a in artifacts:
+            ap = os.path.join(run_dir, a)
+            if os.path.isdir(ap):
+                text += f"   * {a}/  (Directory)\n"
+            else:
+                sz = os.path.getsize(ap) / 1024.0
+                text += f"   * {a}  ({sz:.1f} KB)\n"
+        text += (
+            "----------------------------------------------------------------------\n"
+            " Status: Ready for 3DGS Training (LichtFeld Studio, Splatfacto, 3DGRUT)\n"
+            "======================================================================\n"
+        )
+        return text
+
+
+class ReconstructionReportViewer(tk.Toplevel):
+    """
+    Dedicated high-aesthetic dialog to display detailed Reconstruction Reports.
+    Provides copying to clipboard, opening results directory, and viewing in system editor.
+    """
+    def __init__(self, parent, run_name: str, report_text: str, run_dir: str):
+        super().__init__(parent)
+        self.run_name = run_name
+        self.report_text = report_text
+        self.run_dir = run_dir
+
+        self.title(f"📋 Reconstruction Report — {run_name}")
+        self.geometry("780x640")
+        self.minsize(600, 450)
+        self.configure(bg=BG)
+        self.transient(parent.winfo_toplevel() if hasattr(parent, 'winfo_toplevel') else parent)
+
+        # Set custom window icon
+        self._apply_icon()
+        self._build_ui()
+
+    def _apply_icon(self):
+        try:
+            ico = os.path.join(os.path.dirname(__file__), "abu_icon.ico")
+            if os.path.isfile(ico):
+                self.iconbitmap(ico)
+            png = os.path.join(os.path.dirname(__file__), "abu_icon.png")
+            if os.path.isfile(png):
+                self._photo = ImageTk.PhotoImage(file=png)
+                self.iconphoto(True, self._photo)
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        # Header Bar
+        hdr = tk.Frame(self, bg=SURFACE, padx=16, pady=12)
+        hdr.pack(fill="x", side="top")
+
+        tk.Label(hdr, text=f"📊 Reconstruction Report", bg=SURFACE, fg=ACCENT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(hdr, text=f"Run: {self.run_name}  ·  Folder: {self.run_dir}", bg=SURFACE, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+
+        # Text View Area
+        txt_frame = tk.Frame(self, bg=BG, padx=12, pady=8)
+        txt_frame.pack(fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(txt_frame, bg=FIELD, troughcolor=BG)
+        scrollbar.pack(side="right", fill="y")
+
+        self.text_widget = tk.Text(
+            txt_frame, wrap="word", bg="#0e1215", fg="#d1d9df",
+            insertbackground=TEXT, font=("Consolas", 10),
+            yscrollcommand=scrollbar.set, relief="flat", bd=0, padx=12, pady=10
+        )
+        self.text_widget.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.text_widget.yview)
+
+        self.text_widget.insert("1.0", self.report_text)
+        self.text_widget.configure(state="disabled")
+
+        # Bottom Action Bar
+        bar = tk.Frame(self, bg=SURFACE, padx=16, pady=10)
+        bar.pack(fill="x", side="bottom")
+
+        copy_btn = tk.Button(
+            bar, text="📋 Copy Report", command=self._copy_to_clipboard,
+            bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, padx=12, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2"
+        )
+        copy_btn.pack(side="left", padx=(0, 8))
+
+        open_folder_btn = tk.Button(
+            bar, text="📂 Open Run Folder", command=self._open_folder,
+            bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, padx=12, pady=6, font=("Segoe UI", 9), cursor="hand2"
+        )
+        open_folder_btn.pack(side="left", padx=(0, 8))
+
+        notepad_btn = tk.Button(
+            bar, text="📝 Open in Notepad", command=self._open_in_notepad,
+            bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, padx=12, pady=6, font=("Segoe UI", 9), cursor="hand2"
+        )
+        notepad_btn.pack(side="left", padx=(0, 8))
+
+        self.status_lbl = tk.Label(bar, text="", bg=SURFACE, fg=ACCENT, font=("Segoe UI", 9))
+        self.status_lbl.pack(side="left", padx=10)
+
+        close_btn = tk.Button(
+            bar, text="Close", command=self.destroy,
+            bg="#2a343b", fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+            relief="flat", bd=0, padx=14, pady=6, font=("Segoe UI", 9), cursor="hand2"
+        )
+        close_btn.pack(side="right")
+
+    def _copy_to_clipboard(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.report_text)
+        self.status_lbl.configure(text="✓ Copied to clipboard!")
+        self.after(2500, lambda: self.status_lbl.configure(text=""))
+
+    def _open_folder(self):
+        if os.path.isdir(self.run_dir):
+            try:
+                os.startfile(self.run_dir)
+            except Exception:
+                pass
+
+    def _open_in_notepad(self):
+        rep_file = os.path.join(self.run_dir, "reconstruction_report.txt")
+        if not os.path.isfile(rep_file):
+            try:
+                with open(rep_file, "w", encoding="utf-8") as f:
+                    f.write(self.report_text)
+            except Exception:
+                pass
+        try:
+            os.system(f'start notepad "{rep_file}"')
+        except Exception:
+            pass

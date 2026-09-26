@@ -214,25 +214,29 @@ def enable_memory_efficient_patch_and_frame_attention(model: Any, chunk_size: in
 
 def fast_load_and_preprocess_images(
     image_paths: List[str],
+    mode: str = "auto",
     target_size: int = 518,
     patch_size: int = 14,
     pad_value: float = 1.0,
     max_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
-) -> Tuple[torch.Tensor, List[Tuple[int, int]], List[Tuple[int, int, int, int]]]:
+) -> Tuple[torch.Tensor, List[Tuple[int, int]], List[Tuple[int, int, int, int, float, float, float, float]]]:
     """
     High-performance multi-threaded image loader and preprocessor.
     Accelerates 60MP+ image datasets by up to 40x using libjpeg-turbo DCT scaling
     and parallel worker threads.
     
-    Preserves exact aspect ratios and avoids artificial white padding when the sequence
-    aspect ratio is uniform, eliminating 87,000 ghost padding points per frame and
-    reducing transformer token length by up to 32.4% for faster inference.
-    
+    Modes:
+      - 'auto' [Recommended]: If sequence has uniform aspect ratios, scales without padding.
+        If mixed landscape/portrait photos exist, uses smart center-crop to (518, 518) to
+        eliminate artificial white border bars and prevent transformer boundary attention artifacts.
+      - 'crop': Smart center-crop to (518, 518) with 100% authentic photographic pixels.
+      - 'pad': Preserves full sensor aspect ratio by padding smaller dimension with white.
+
     Returns:
         images_tensor: (N, 3, H, W) float32 in [0, 1].
         orig_dims: List of (orig_w, orig_h) per image.
-        padding_boxes: List of (pad_left, pad_top, new_w, new_h) per image.
+        padding_boxes: List of (box_x, box_y, box_w, box_h, scale_x, scale_y, offset_x, offset_y) per image.
     """
     try:
         import cv2
@@ -243,9 +247,9 @@ def fast_load_and_preprocess_images(
     num_images = len(image_paths)
     workers = max_workers or min(32, os.cpu_count() or 8)
 
-    # 1. Fast metadata pass to determine image aspect ratios and target dimensions
+    # 1. Fast metadata pass to inspect image aspect ratios
     orig_dims = []
-    target_dims = []
+    aspect_ratios = []
     for path in image_paths:
         try:
             with Image.open(path) as img_h:
@@ -253,75 +257,136 @@ def fast_load_and_preprocess_images(
         except Exception:
             orig_w, orig_h = 518, 518
         orig_dims.append((orig_w, orig_h))
+        aspect_ratios.append(orig_w / float(max(1, orig_h)))
 
-        if orig_w >= orig_h:
-            nw = target_size
-            nh = round(orig_h * (nw / orig_w) / patch_size) * patch_size
-        else:
-            nh = target_size
-            nw = round(orig_w * (nh / orig_h) / patch_size) * patch_size
-        target_dims.append((nw, nh))
+    is_uniform = (max(aspect_ratios) - min(aspect_ratios)) < 0.02
 
-    # Check if all images have uniform target aspect ratio
-    uniform_shape = len(set(target_dims)) == 1
-    if uniform_shape:
-        max_w, max_h = target_dims[0]
+    if mode == "auto":
+        sub_mode = "uniform_scale" if is_uniform else "smart_crop"
+    elif mode == "crop":
+        sub_mode = "smart_crop"
     else:
-        max_w = max(d[0] for d in target_dims)
-        max_h = max(d[1] for d in target_dims)
+        sub_mode = "pad"
 
-    # Compute bounding boxes and padding for each image
     padding_boxes = []
-    for nw, nh in target_dims:
-        pad_left = (max_w - nw) // 2
-        pad_top = (max_h - nh) // 2
-        padding_boxes.append((pad_left, pad_top, nw, nh))
+    for orig_w, orig_h in orig_dims:
+        if sub_mode == "smart_crop":
+            if orig_w >= orig_h:
+                s = orig_h / float(target_size)
+                crop_w_orig = orig_h
+                offset_x = (orig_w - crop_w_orig) / 2.0
+                offset_y = 0.0
+            else:
+                s = orig_w / float(target_size)
+                crop_h_orig = orig_w
+                offset_x = 0.0
+                offset_y = (orig_h - crop_h_orig) / 2.0
+            padding_boxes.append((0, 0, target_size, target_size, s, s, offset_x, offset_y))
+        elif sub_mode == "uniform_scale":
+            if orig_w >= orig_h:
+                nw = target_size
+                nh = round(orig_h * (nw / orig_w) / patch_size) * patch_size
+            else:
+                nh = target_size
+                nw = round(orig_w * (nh / orig_h) / patch_size) * patch_size
+            scale_x = orig_w / float(nw)
+            scale_y = orig_h / float(nh)
+            padding_boxes.append((0, 0, nw, nh, scale_x, scale_y, 0.0, 0.0))
+        else:  # pad
+            if orig_w >= orig_h:
+                nw = target_size
+                nh = round(orig_h * (nw / orig_w) / patch_size) * patch_size
+            else:
+                nh = target_size
+                nw = round(orig_w * (nh / orig_h) / patch_size) * patch_size
+            pad_left = (target_size - nw) // 2
+            pad_top = (target_size - nh) // 2
+            scale_x = orig_w / float(nw)
+            scale_y = orig_h / float(nh)
+            padding_boxes.append((pad_left, pad_top, nw, nh, scale_x, scale_y, 0.0, 0.0))
 
     def _process_single(item):
         idx, path = item
         orig_w, orig_h = orig_dims[idx]
-        pad_left, pad_top, new_w, new_h = padding_boxes[idx]
-        pad_right = max_w - new_w - pad_left
-        pad_bottom = max_h - new_h - pad_top
+        box_x, box_y, box_w, box_h, scale_x, scale_y, offset_x, offset_y = padding_boxes[idx]
 
         tensor = None
         if has_cv2:
             try:
-                scale = max(orig_w, orig_h) / max(target_size, 1)
+                scale_down = min(orig_w, orig_h) / float(target_size)
                 is_jpeg = path.lower().endswith((".jpg", ".jpeg"))
-                if is_jpeg and scale >= 8:
+                if is_jpeg and scale_down >= 8:
                     im = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_8)
-                elif is_jpeg and scale >= 4:
+                elif is_jpeg and scale_down >= 4:
                     im = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_4)
-                elif is_jpeg and scale >= 2:
+                elif is_jpeg and scale_down >= 2:
                     im = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_2)
                 else:
                     im = cv2.imread(path, cv2.IMREAD_COLOR)
 
                 if im is not None:
-                    interp = cv2.INTER_AREA if scale >= 2 else cv2.INTER_CUBIC
-                    im = cv2.resize(im, (new_w, new_h), interpolation=interp)
+                    h_cur, w_cur = im.shape[:2]
+                    interp = cv2.INTER_AREA if scale_down >= 2 else cv2.INTER_CUBIC
+
+                    if sub_mode == "smart_crop":
+                        if orig_w >= orig_h:
+                            target_w = max(target_size, round(w_cur * (target_size / float(h_cur))))
+                            im = cv2.resize(im, (target_w, target_size), interpolation=interp)
+                            crop_x = max(0, (target_w - target_size) // 2)
+                            im = im[:, crop_x : crop_x + target_size]
+                        else:
+                            target_h = max(target_size, round(h_cur * (target_size / float(w_cur))))
+                            im = cv2.resize(im, (target_size, target_h), interpolation=interp)
+                            crop_y = max(0, (target_h - target_size) // 2)
+                            im = im[crop_y : crop_y + target_size, :]
+                    elif sub_mode == "uniform_scale":
+                        im = cv2.resize(im, (box_w, box_h), interpolation=interp)
+                    else:  # pad
+                        im = cv2.resize(im, (box_w, box_h), interpolation=interp)
+
                     im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
                     tensor = torch.from_numpy(im).permute(2, 0, 1).float().div_(255.0)
             except Exception:
                 tensor = None
 
         if tensor is None:
-            # High-fidelity Pillow fallback
+            # Pillow fallback
             with Image.open(path) as pil_img:
                 if pil_img.mode == "RGBA":
                     bg_val = int(255 * pad_value)
                     bg = Image.new("RGBA", pil_img.size, (bg_val, bg_val, bg_val, 255))
                     pil_img = Image.alpha_composite(bg, pil_img)
                 pil_img = pil_img.convert("RGB")
-                pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+
+                if sub_mode == "smart_crop":
+                    w_cur, h_cur = pil_img.size
+                    if orig_w >= orig_h:
+                        target_w = max(target_size, round(w_cur * (target_size / float(h_cur))))
+                        pil_img = pil_img.resize((target_w, target_size), Image.Resampling.BICUBIC)
+                        crop_x = max(0, (target_w - target_size) // 2)
+                        pil_img = pil_img.crop((crop_x, 0, crop_x + target_size, target_size))
+                    else:
+                        target_h = max(target_size, round(h_cur * (target_size / float(w_cur))))
+                        pil_img = pil_img.resize((target_size, target_h), Image.Resampling.BICUBIC)
+                        crop_y = max(0, (target_h - target_size) // 2)
+                        pil_img = pil_img.crop((0, crop_y, target_size, crop_y + target_size))
+                elif sub_mode == "uniform_scale":
+                    pil_img = pil_img.resize((box_w, box_h), Image.Resampling.BICUBIC)
+                else:  # pad
+                    pil_img = pil_img.resize((box_w, box_h), Image.Resampling.BICUBIC)
+
                 tensor = torch.from_numpy(np.array(pil_img)).permute(2, 0, 1).float().div_(255.0)
 
-        # Apply padding if non-uniform
-        if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
-            tensor = torch.nn.functional.pad(
-                tensor, (pad_left, pad_right, pad_top, pad_bottom), mode="constant", value=pad_value
-            )
+        # Apply padding only in pad mode
+        if sub_mode == "pad":
+            pad_left = box_x
+            pad_top = box_y
+            pad_right = target_size - box_w - pad_left
+            pad_bottom = target_size - box_h - pad_top
+            if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+                tensor = torch.nn.functional.pad(
+                    tensor, (pad_left, pad_right, pad_top, pad_bottom), mode="constant", value=pad_value
+                )
 
         return idx, tensor
 
@@ -343,12 +408,13 @@ def run_vggttt_reconstruction(
     weights_path: Optional[str] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    conf_threshold: float = 2.0,
+    conf_threshold: Any = "adaptive",
     max_points: int = 300000,
     memory_efficient: bool = False,
     offload_to_cpu: Optional[bool] = None,
     ttt_steps: Optional[int] = 1,
-    use_global_pred: bool = False,
+    use_global_pred: bool = True,
+    prep_mode: str = "auto",
     target_size: int = 518,
     progress_callback: Optional[Callable[[str], None]] = None,
     **kwargs,
@@ -362,11 +428,14 @@ def run_vggttt_reconstruction(
         weights_path: Optional custom path to model directory or safetensors.
         device: CUDA device identifier or 'cpu' (default: auto-detect).
         dtype: PyTorch precision (torch.bfloat16, torch.float16, or float32).
-        conf_threshold: Confidence threshold to filter noisy points (default: 2.0).
+        conf_threshold: Confidence threshold to filter noisy points ('adaptive', or float like 2.0).
         max_points: Maximum number of points to preserve in exported point cloud.
         memory_efficient: Whether to enable chunked attention to reduce VRAM for 1k+ images.
         ttt_steps: Number of Test-Time Training steps (1-3, or None for auto).
-        use_global_pred: If True, uses point head; if False (recommended), unprojects depth maps.
+        use_global_pred: If True (recommended, NVIDIA demo standard), uses direct 3D point head;
+                         if False, unprojects depth maps.
+        prep_mode: Image preprocessing mode: 'auto' (smart center crop for mixed orientations),
+                   'crop' (center crop), or 'pad' (aspect ratio padding).
         target_size: Input processing resolution (default: 518).
         progress_callback: Optional status logging callback.
 
@@ -396,10 +465,10 @@ def run_vggttt_reconstruction(
     model = load_vggttt_model(weights_path=weights_path, device=device, dtype=dtype)
 
     # 2. Preprocess Images (Parallel Hardware-Accelerated)
-    log(f"[VGG-T³ 2/4] Preprocessing {num_images} images to {target_size}px (multi-threaded DCT acceleration)...")
+    log(f"[VGG-T³ 2/4] Preprocessing {num_images} images to {target_size}px (Mode: {prep_mode.upper()})...")
     t_prep = time.time()
     images_tensor, orig_dims, padding_boxes = fast_load_and_preprocess_images(
-        image_paths, target_size=target_size, progress_callback=progress_callback
+        image_paths, mode=prep_mode, target_size=target_size, progress_callback=progress_callback
     )
     t_prep_dur = time.time() - t_prep
     log(f"      * Preprocessed into tensor {tuple(images_tensor.shape)} in {t_prep_dur:.2f}s ({t_prep_dur/max(num_images,1)*1000:.1f}ms/frame)")
@@ -426,7 +495,7 @@ def run_vggttt_reconstruction(
     if memory_efficient or offload_to_cpu or num_images > 32:
         enable_memory_efficient_patch_and_frame_attention(model, chunk_size=16)
 
-    log(f"[VGG-T³ 3/4] Running feed-forward reconstruction (TTT Steps: {ttt_steps or 'Auto'}, Mem-Eff: {memory_efficient}, CPU-Offload: {offload_to_cpu})...")
+    log(f"[VGG-T³ 3/4] Running feed-forward reconstruction (TTT Steps: {ttt_steps or 'Auto'}, Global-Pred: {use_global_pred}, Mem-Eff: {memory_efficient})...")
     t_inf = time.time()
     images_gpu = images_tensor.to(device)
 
@@ -469,18 +538,20 @@ def run_vggttt_reconstruction(
 
     for idx, img_path in enumerate(image_paths):
         orig_w, orig_h = orig_dims[idx]
-        pad_left, pad_top, new_w, new_h = padding_boxes[idx]
+        meta = padding_boxes[idx]
+        box_x, box_y, box_w, box_h = meta[0], meta[1], meta[2], meta[3]
+        scale_x = meta[4] if len(meta) > 4 else orig_w / float(box_w)
+        scale_y = meta[5] if len(meta) > 5 else orig_h / float(box_h)
+        offset_x = meta[6] if len(meta) > 6 else 0.0
+        offset_y = meta[7] if len(meta) > 7 else 0.0
         image_name = os.path.basename(img_path)
 
-        # Scale intrinsics to native original resolution, accounting for padding offsets
-        scale_x = orig_w / float(new_w)
-        scale_y = orig_h / float(new_h)
-
+        # Scale intrinsics to native original resolution, accounting for padding/crop offsets
         K_orig = intrinsics_model[idx].copy()
         fx = float(K_orig[0, 0] * scale_x)
         fy = float(K_orig[1, 1] * scale_y)
-        cx = float((K_orig[0, 2] - pad_left) * scale_x)
-        cy = float((K_orig[1, 2] - pad_top) * scale_y)
+        cx = float((K_orig[0, 2] - box_x) * scale_x + offset_x)
+        cy = float((K_orig[1, 2] - box_y) * scale_y + offset_y)
 
         # Add camera to pycolmap
         camera_id = idx + 1
@@ -548,11 +619,12 @@ def run_vggttt_reconstruction(
     valid_rgb_list = []
 
     for i in range(num_images):
-        pad_left, pad_top, new_w, new_h = padding_boxes[i]
+        meta = padding_boxes[i]
+        box_x, box_y, box_w, box_h = meta[0], meta[1], meta[2], meta[3]
         # Crop strictly to genuine image content (excluding any padding borders)
-        pts_view = pts3d_raw[i, pad_top : pad_top + new_h, pad_left : pad_left + new_w].reshape(-1, 3)
-        conf_view = conf_raw[i, pad_top : pad_top + new_h, pad_left : pad_left + new_w].reshape(-1)
-        rgb_view = (images_np[i, pad_top : pad_top + new_h, pad_left : pad_left + new_w].reshape(-1, 3) * 255.0).astype(np.uint8)
+        pts_view = pts3d_raw[i, box_y : box_y + box_h, box_x : box_x + box_w].reshape(-1, 3)
+        conf_view = conf_raw[i, box_y : box_y + box_h, box_x : box_x + box_w].reshape(-1)
+        rgb_view = (images_np[i, box_y : box_y + box_h, box_x : box_x + box_w].reshape(-1, 3) * 255.0).astype(np.uint8)
 
         # Filter NaNs / Infs per view
         is_finite = np.isfinite(pts_view).all(axis=1)
@@ -570,13 +642,40 @@ def run_vggttt_reconstruction(
         flat_conf = np.zeros((1,), dtype=np.float32)
         flat_rgb = np.full((1, 3), 200, dtype=np.uint8)
 
-    # Confidence Threshold Filtering
-    mask = flat_conf >= conf_threshold
-    if np.count_nonzero(mask) < 1000:
-        # If too strict, dynamically lower threshold to retain structure
-        log(f"      * [VGG-T³ Notice] Low point count at conf={conf_threshold}. Dynamically relaxing filter to median...")
-        med = float(np.median(flat_conf)) if len(flat_conf) > 0 else 1.0
-        mask = flat_conf >= max(1.0, med)
+    # Adaptive / User Confidence Threshold Filtering
+    is_adaptive = False
+    effective_thresh = 2.0
+    if isinstance(conf_threshold, str):
+        if "adapt" in conf_threshold.lower():
+            is_adaptive = True
+        else:
+            try:
+                effective_thresh = float(conf_threshold)
+            except ValueError:
+                is_adaptive = True
+    elif isinstance(conf_threshold, (int, float)):
+        if conf_threshold <= 0.0:
+            is_adaptive = True
+        else:
+            effective_thresh = float(conf_threshold)
+    else:
+        is_adaptive = True
+
+    if is_adaptive and len(flat_conf) > 0:
+        min_conf = float(np.min(flat_conf))
+        max_conf = float(np.max(flat_conf))
+        # NVIDIA Gradio demo adaptive quantile formula: min_conf + (max_conf - min_conf) * 0.2
+        effective_thresh = float(min_conf + (max_conf - min_conf) * 0.2)
+        log(f"      * [VGG-T³ Adaptive Filter] Computed optimal confidence threshold: {effective_thresh:.2f} (range: [{min_conf:.2f}, {max_conf:.2f}])")
+
+    mask = flat_conf >= effective_thresh
+    valid_count = np.count_nonzero(mask)
+    if valid_count < 5000 and len(flat_conf) > 0:
+        # Dynamically relax threshold to 15th percentile to ensure crisp surfaces are preserved
+        relaxed_thresh = max(1.0, float(np.percentile(flat_conf, 15)))
+        log(f"      * [VGG-T³ Notice] Low point count ({valid_count:,} < 5,000) at conf={effective_thresh:.2f}. Relaxing threshold to {relaxed_thresh:.2f}...")
+        effective_thresh = relaxed_thresh
+        mask = flat_conf >= effective_thresh
 
     filtered_pts = flat_pts[mask]
     filtered_rgb = flat_rgb[mask]
@@ -607,7 +706,7 @@ def run_vggttt_reconstruction(
         except Exception:
             pass
 
-    log(f"      * [Point Cloud] Retained {len(dense_3d):,} clean 3D points (Confidence >= {conf_threshold})")
+    log(f"      * [Point Cloud] Retained {len(dense_3d):,} clean 3D points (Confidence >= {effective_thresh:.2f})")
     log(f"      * [Cameras] Registered {reconstruction.num_reg_images()}/{num_images} views in pycolmap")
 
     # 6. Standardized Dataset Export

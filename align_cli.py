@@ -84,7 +84,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.3 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.4 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1488,12 +1488,14 @@ def main():
     parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
     # NVIDIA VGG-T3 (VGG-TTT) Options
     parser.add_argument("--vggttt_weights", type=str, default=None, help="Custom checkpoint path (.safetensors or .pt) for NVIDIA VGG-T3")
-    parser.add_argument("--vggttt_conf", type=float, default=2.0, help="Confidence threshold for VGG-T3 depth point extraction (default: 2.0; lower=denser)")
+    parser.add_argument("--vggttt_conf", type=str, default="adaptive", help="Confidence threshold for VGG-T3 depth point extraction ('adaptive', or numerical like 2.0; lower=denser)")
     parser.add_argument("--vggttt_mem_eff", action="store_true", default=False, help="Enable memory-efficient linear attention inference in VGG-T3 for large sequences (>64 views)")
     parser.add_argument("--vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_true", default=None, help="Stream intermediate attention chunk outputs to CPU memory to prevent VRAM spill on large sequences")
     parser.add_argument("--no_vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_false", help="Keep all attention states in GPU VRAM")
     parser.add_argument("--vggttt_ttt_steps", type=int, default=2, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 2)")
-    parser.add_argument("--vggttt_global_pred", action="store_true", default=False, help="Use global transformer point head for 3D point cloud rather than unprojected depth")
+    parser.add_argument("--vggttt_global_pred", dest="vggttt_global_pred", action="store_true", default=True, help="Use global transformer point head for 3D point cloud rather than unprojected depth (NVIDIA demo default)")
+    parser.add_argument("--no_vggttt_global_pred", dest="vggttt_global_pred", action="store_false", help="Disable global point head and unproject from depth maps")
+    parser.add_argument("--vggttt_prep_mode", type=str, choices=["auto", "crop", "pad"], default="auto", help="VGG-T3 image preprocessing mode: 'auto' (smart center crop for mixed orientations), 'crop', or 'pad'")
     # Video Frame Extraction Options
     parser.add_argument("--video_fps", type=float, default=5.0, help="Target FPS when extracting from video input (default: 5.0)")
     parser.add_argument("--video_format", choices=["jpg", "png"], default="jpg", help="Format for extracted video frames (default: jpg)")
@@ -2119,9 +2121,11 @@ def main():
         print()
     elif engine in ["vggttt", "vgg-ttt", "vggt3"]:
         print("[3/5] Starting NVIDIA VGG-T3 Linear-Scaling Structure-from-Motion (CVPR 2026)...")
-        print(f"      * Confidence Threshold: {getattr(args, 'vggttt_conf', 2.0)}")
+        print(f"      * Preprocessing Mode:   {getattr(args, 'vggttt_prep_mode', 'auto').upper()}")
+        print(f"      * Confidence Threshold: {getattr(args, 'vggttt_conf', 'adaptive')}")
         print(f"      * Memory Efficient:     {getattr(args, 'vggttt_mem_eff', False)}")
-        print(f"      * TTT Steps:            {getattr(args, 'vggttt_ttt_steps', 1)}")
+        print(f"      * TTT Steps:            {getattr(args, 'vggttt_ttt_steps', 2)}")
+        print(f"      * Global Point Head:    {getattr(args, 'vggttt_global_pred', True)}")
         inf_start = time.time()
         from vggttt_engine import run_vggttt_reconstruction
         reconstruction, dense_3d, dense_rgb = run_vggttt_reconstruction(
@@ -2130,11 +2134,12 @@ def main():
             weights_path=getattr(args, "vggttt_weights", None),
             device=device,
             dtype=dtype,
-            conf_threshold=getattr(args, "vggttt_conf", 2.0),
+            conf_threshold=getattr(args, "vggttt_conf", "adaptive"),
             memory_efficient=getattr(args, "vggttt_mem_eff", False),
             offload_to_cpu=getattr(args, "vggttt_offload_cpu", None),
-            ttt_steps=getattr(args, "vggttt_ttt_steps", 1),
-            use_global_pred=getattr(args, "vggttt_global_pred", False),
+            ttt_steps=getattr(args, "vggttt_ttt_steps", 2),
+            use_global_pred=getattr(args, "vggttt_global_pred", True),
+            prep_mode=getattr(args, "vggttt_prep_mode", "auto"),
             progress_callback=print,
         )
         inf_elapsed = time.time() - inf_start

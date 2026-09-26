@@ -1,4 +1,5 @@
 """Desktop presentation layer. Pipeline state and engine callbacks stay in the app."""
+import os
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
@@ -135,6 +136,12 @@ def polish_controls(parent):
 def polish_dialog(dialog):
     """Unify tool dialogs without recoloring their interactive preview canvases."""
     dialog.configure(bg=BG)
+    ico_path = os.path.join(os.path.dirname(__file__), "abu_icon.ico")
+    if os.path.isfile(ico_path):
+        try:
+            dialog.iconbitmap(ico_path)
+        except Exception:
+            pass
     def walk(parent):
         for widget in parent.winfo_children():
             if isinstance(widget, (tk.Frame, tk.LabelFrame)):
@@ -452,6 +459,25 @@ class LogSearch:
 def build_workspace(app, tooltip):
     configure_theme(app)
     root = app.root
+    # Apply custom Abu 'A' icon to main window titlebar and taskbar
+    ico_path = os.path.join(os.path.dirname(__file__), "abu_icon.ico")
+    if os.path.isfile(ico_path):
+        try:
+            root.iconbitmap(default=ico_path)
+        except Exception:
+            try:
+                root.iconbitmap(ico_path)
+            except Exception:
+                pass
+    png_path = os.path.join(os.path.dirname(__file__), "abu_icon.png")
+    if os.path.isfile(png_path):
+        try:
+            from PIL import ImageTk
+            app._app_icon_photo = ImageTk.PhotoImage(file=png_path)
+            root.iconphoto(True, app._app_icon_photo)
+        except Exception:
+            pass
+
     app.run_mode_var = tk.StringVar(master=root, value="Align & train" if app.auto_train_var.get() else "Align only")
     # Header: identity on the left, secondary destinations on the right.
     header = tk.Frame(root, bg=BG, padx=24, pady=12)
@@ -459,7 +485,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.8.3", 9, muted=True)
+    app.version_label = label(header, "v0.0.8.4", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -619,6 +645,8 @@ def build_workspace(app, tooltip):
     app.workspace_tabs.add(train_page, text="02  Training")
     app.workspace_tabs.add(activity, text="03  Activity")
     app.workspace_tabs.add(app.workspace_3d, text="04  3D Workspace")
+    app.align_page = align_page
+    app.train_page = train_page
     app.activity_tab = activity
     app.settings_pages = (align_page, train_page)
     app.workspace_tabs.enable_traversal()
@@ -691,6 +719,17 @@ def build_workspace(app, tooltip):
     tooltip(app.train_max_gaussians_cb, "Max Gaussians Cap:\nSet the maximum number of Gaussians allowed during training and model export across all 4 training engines.\n• Unlimited (Engine Default): Uses each engine's default capacity.\n• 500,000: Fast training, ultra-compact export, minimal VRAM usage.\n• 1,000,000: Standard balance for most objects and scenes.\n• 2,000,000 - 5,000,000: High fidelity for large environments.")
     app.train_target_run_cb = field(general, "Alignment run target", app.train_target_run_var,
           ["Latest Run (Auto-Detect)"], width=26)
+    app.train_target_run_cb.configure(postcommand=app._refresh_train_target_runs)
+    # View Reconstruction Report button for selected training run
+    run_btn_box = tk.Frame(app.train_target_run_cb.master, bg=SURFACE)
+    run_btn_box.pack(anchor="w", pady=(4, 0))
+    app.view_train_rep_btn = tk.Button(
+        run_btn_box, text="📋 View Report", command=app._view_training_run_report,
+        bg=FIELD, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+        relief="flat", bd=0, padx=8, pady=3, font=("Segoe UI", 8), cursor="hand2"
+    )
+    app.view_train_rep_btn.pack(side="left")
+    tooltip(app.view_train_rep_btn, "Open Reconstruction Report for the selected alignment run.")
     tooltip(app.train_target_run_cb, "Alignment Output Run Target:\nSelect which alignment run in results/ to use for 3DGS training.\n• Latest Run (Auto-Detect): Automatically detects and uses the newest sparse_* alignment.\n• Specific run: Explicitly targets that alignment run.")
     app.training_summary = general
     for child in general.winfo_children():
@@ -800,6 +839,8 @@ def build_workspace(app, tooltip):
     def on_tab_changed(event):
         try:
             sel = app.workspace_tabs.select()
+            if hasattr(app, "_refresh_train_target_runs"):
+                app._refresh_train_target_runs()
             if hasattr(app, "workspace_3d") and sel == str(app.workspace_3d):
                 app.workspace_3d.refresh_runs()
                 if app.workspace_3d.points is None:

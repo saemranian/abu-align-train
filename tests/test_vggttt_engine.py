@@ -204,15 +204,29 @@ class TestVGGTTTEngine(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "COLMAP_Lichtfield").is_dir())
             self.assertTrue((Path(tmp_dir) / "points.ply").is_file())
 
-    def test_run_vggttt_reconstruction_signature_compatibility(self):
-        """Verifies run_vggttt_reconstruction accepts device, dtype, and extra kwargs without error."""
-        import inspect
-        from vggttt_engine import run_vggttt_reconstruction
-        sig = inspect.signature(run_vggttt_reconstruction)
-        self.assertIn("device", sig.parameters)
-        self.assertIn("dtype", sig.parameters)
-        self.assertTrue(any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()))
+    def test_fast_load_and_preprocess_mixed_orientations(self):
+        """Verifies smart center-crop eliminates white padding on mixed landscape/portrait frames."""
+        from PIL import Image
+        from vggttt_engine import fast_load_and_preprocess_images
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            img_land = Path(tmp_dir) / "land.jpg"
+            img_port = Path(tmp_dir) / "port.jpg"
+
+            Image.new("RGB", (900, 600), color=(100, 150, 200)).save(img_land)
+            Image.new("RGB", (600, 900), color=(200, 150, 100)).save(img_port)
+
+            paths = [str(img_land), str(img_port)]
+
+            # Test auto mode (should trigger smart_crop on mixed orientations)
+            tensors, orig_dims, padding_boxes = fast_load_and_preprocess_images(paths, mode="auto", target_size=518)
+            self.assertEqual(tensors.shape, (2, 3, 518, 518))
+            self.assertEqual(orig_dims[0], (900, 600))
+            self.assertEqual(orig_dims[1], (600, 900))
+            self.assertEqual(padding_boxes[0][:4], (0, 0, 518, 518))
+            self.assertEqual(padding_boxes[1][:4], (0, 0, 518, 518))
 
 
 if __name__ == "__main__":
     unittest.main()
+

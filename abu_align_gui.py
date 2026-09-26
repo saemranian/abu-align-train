@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.8.3
+Abu Align & Train Version 0.0.8.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -15,6 +15,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple, Callable
 try:
     import psutil
 except ImportError:
@@ -216,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.8.3 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.8.4 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -236,6 +237,7 @@ class AbuAlignApp:
         self.console_bg = "#111518"
 
         self.root.configure(bg=self.bg_dark)
+        self._set_window_icon()
 
         self.conda_python = r"C:\Users\USer\miniconda3\envs\vggt\python.exe"
         cli_candidates = [
@@ -284,10 +286,11 @@ class AbuAlignApp:
         self.vggt_preprocess_var = tk.StringVar(value="max_size")
 
         # VGG-T3 (VGG-TTT) Specific Options
-        self.vggttt_conf_var = tk.StringVar(value="2.0 (Default)")
+        self.vggttt_conf_var = tk.StringVar(value="Adaptive (20% Quantile)")
+        self.vggttt_prep_var = tk.StringVar(value="Auto (Smart Center-Crop)")
         self.vggttt_mem_var = tk.BooleanVar(value=True)
         self.vggttt_steps_var = tk.StringVar(value="2 (Recommended)")
-        self.vggttt_pred_var = tk.BooleanVar(value=False)
+        self.vggttt_pred_var = tk.BooleanVar(value=True)
 
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
@@ -515,6 +518,29 @@ class AbuAlignApp:
         except (OSError, ValueError, tk.TclError) as exc:
             messagebox.showerror("Could not load preset", str(exc), parent=self.root)
 
+    def _set_window_icon(self):
+        """Sets the application titlebar and taskbar icon to custom Abu 'A' icon."""
+        try:
+            ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "abu_icon.ico")
+            if os.path.isfile(ico_path):
+                try:
+                    self.root.iconbitmap(default=ico_path)
+                except Exception:
+                    try:
+                        self.root.iconbitmap(ico_path)
+                    except Exception:
+                        pass
+            png_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "abu_icon.png")
+            if os.path.isfile(png_path):
+                try:
+                    from PIL import ImageTk
+                    self._app_icon_photo = ImageTk.PhotoImage(file=png_path)
+                    self.root.iconphoto(True, self._app_icon_photo)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _build_menu(self):
         menubar = tk.Menu(self.root, bg=self.panel_bg, fg=self.text_primary)
         self.root.config(menu=menubar)
@@ -527,6 +553,7 @@ class AbuAlignApp:
         file_menu.add_command(label="Open Video File...", command=self._browse_video)
         file_menu.add_command(label="Open Results Folder", command=self._open_results_folder)
         file_menu.add_command(label="📁 Open 3DGS Models Folder", command=self._open_models_folder)
+        file_menu.add_command(label="📋 View Reconstruction Report...", command=self._view_training_run_report)
         file_menu.add_separator()
         file_menu.add_command(label="📁 Open Logs Folder", command=self._open_logs_folder)
         file_menu.add_command(label="📄 View Latest Log File", command=self._open_latest_log)
@@ -539,6 +566,7 @@ class AbuAlignApp:
         tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
         tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
         tools_menu.add_command(label="📐 Open Native 3D Workspace", accelerator="Alt+4", command=self._show_3d_workspace)
+        tools_menu.add_command(label="📋 View Reconstruction Report...", command=self._view_training_run_report)
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
         tools_menu.add_separator()
         tools_menu.add_command(label="🔄 Check Engine Repository Updates...", command=self._open_engine_updates_dialog)
@@ -978,7 +1006,7 @@ class AbuAlignApp:
         # =========================================================================
         self.panel_align_vggttt = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
 
-        # Col A: Density & Confidence
+        # Col A: Density, Confidence & Preprocessing
         ttt_col1 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
         ttt_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         tk.Label(ttt_col1, text="Point Cloud & Confidence:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
@@ -987,14 +1015,23 @@ class AbuAlignApp:
         ttt_conf_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
         lbl_ttt_conf = tk.Label(ttt_conf_frame, text="Confidence Thresh:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
         lbl_ttt_conf.pack(side=tk.LEFT)
-        cb_ttt_conf = ttk.Combobox(ttt_conf_frame, textvariable=self.vggttt_conf_var, values=["1.0", "1.5", "2.0 (Default)", "2.5", "3.0", "4.0"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_ttt_conf = ttk.Combobox(ttt_conf_frame, textvariable=self.vggttt_conf_var, values=["Adaptive (20% Quantile)", "1.0 (Dense)", "1.5", "2.0 (Standard)", "2.5", "3.0 (Clean)", "4.0 (Ultra)"], state="readonly", width=17, font=("Segoe UI", 8))
         cb_ttt_conf.pack(side=tk.LEFT)
-        ToolTip(lbl_ttt_conf, "Minimum depth confidence threshold for 3D point cloud generation. Lower values produce denser points; higher values yield cleaner surfaces.")
-        ToolTip(cb_ttt_conf, "Depth Confidence Filter (VGG-T3):\nFilters out noisy and low-certainty depth pixels during point cloud reconstruction. 2.0 is optimal for crisp, artifact-free 3D tie points.")
+        ToolTip(lbl_ttt_conf, "Minimum depth confidence threshold for 3D point cloud generation. 'Adaptive (20% Quantile)' dynamically filters outliers matching NVIDIA's official demo.")
+        ToolTip(cb_ttt_conf, "Depth Confidence Filter (VGG-T3):\n• Adaptive (20% Quantile) [Recommended]: Uses NVIDIA demo quantile formula to filter floating points and preserve crisp surface geometry.\n• 2.0 (Standard): Fixed numerical threshold.\n• Lower values yield denser clouds; higher values keep strictly high-certainty tie points.")
+
+        ttt_prep_frame = tk.Frame(ttt_col1, bg=self.panel_bg)
+        ttt_prep_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
+        lbl_ttt_prep = tk.Label(ttt_prep_frame, text="Preprocessing:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
+        lbl_ttt_prep.pack(side=tk.LEFT)
+        cb_ttt_prep = ttk.Combobox(ttt_prep_frame, textvariable=self.vggttt_prep_var, values=["Auto (Smart Center-Crop)", "Crop (NVIDIA Demo Standard)", "Pad (Aspect Ratio Padding)"], state="readonly", width=17, font=("Segoe UI", 8))
+        cb_ttt_prep.pack(side=tk.LEFT)
+        ToolTip(lbl_ttt_prep, "Preprocessing mode applied before feeding frames to VGG-T3 transformer.")
+        ToolTip(cb_ttt_prep, "VGG-T3 Image Preprocessing:\n• Auto (Smart Center-Crop) [Recommended]: Uses clean center-crop when mixed landscape/portrait frames exist, eliminating artificial white padding bars.\n• Crop (NVIDIA Demo Standard): Crops to 518x518 with 100% genuine photo pixels.\n• Pad: Adds white padding to preserve full sensor aspect ratio.")
 
         chk_pred = tk.Checkbutton(ttt_col1, text="Use Global Point Head", variable=self.vggttt_pred_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_pred.pack(anchor="w", pady=(2, 0))
-        ToolTip(chk_pred, "Global Point Head:\nWhen enabled, extracts 3D points directly from the global transformer point prediction head rather than backprojecting depth and camera intrinsics.")
+        ToolTip(chk_pred, "Global Point Head:\nWhen enabled, extracts 3D points directly from the global transformer point prediction head (matching NVIDIA Gradio demo default). When unchecked, backprojects depth and camera intrinsics.")
 
         # Col B: Test-Time Training (TTT) & Attention Mode
         ttt_col2 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
@@ -1005,10 +1042,10 @@ class AbuAlignApp:
         ttt_steps_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
         lbl_ttt_steps = tk.Label(ttt_steps_frame, text="TTT Inner Steps:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
         lbl_ttt_steps.pack(side=tk.LEFT)
-        cb_ttt_steps = ttk.Combobox(ttt_steps_frame, textvariable=self.vggttt_steps_var, values=["1", "2 (Recommended)", "3", "5"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_ttt_steps = ttk.Combobox(ttt_steps_frame, textvariable=self.vggttt_steps_var, values=["1 (Fast Preview)", "2 (Recommended)", "3 (Balanced)", "5 (Deep)"], state="readonly", width=14, font=("Segoe UI", 8))
         cb_ttt_steps.pack(side=tk.LEFT)
         ToolTip(lbl_ttt_steps, "Number of Test-Time Training optimization steps per layer during feedforward alignment.")
-        ToolTip(cb_ttt_steps, "TTT Steps:\nNumber of fast-weight gradient updates applied to the memory weights during inference. 2 steps is recommended for optimal trajectory convergence and zero drift.")
+        ToolTip(cb_ttt_steps, "TTT Steps (NVIDIA CVPR 2026):\n• 2 (Recommended): Mathematically optimal sweet spot derived in the paper for <= 1,000 views.\n• 1 (Fast Preview): Ultra-fast single-pass update.\n• 5 (Deep): 5 gradient updates per block; can overfit on disordered mirrorless photos.")
 
         chk_mem = tk.Checkbutton(ttt_col2, text="Memory-Efficient (>64 views)", variable=self.vggttt_mem_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_mem.pack(anchor="w", pady=(2, 0))
@@ -1413,25 +1450,77 @@ class AbuAlignApp:
             self.dataset_status_lbl.config(text=status_text, fg="#f59e0b")
 
         # Discover all available alignment runs in results/
-        runs = ["Latest Run (Auto-Detect)"]
-        cand_results = os.path.join(path, "results")
-        if not os.path.isdir(cand_results):
-            cand_p_results = os.path.join(os.path.dirname(path), "results")
-            if os.path.isdir(cand_p_results):
-                cand_results = cand_p_results
-        if os.path.isdir(cand_results):
-            subdirs = [d for d in os.listdir(cand_results) if d.startswith("sparse_")]
-            subdirs.sort(key=lambda d: os.path.getmtime(os.path.join(cand_results, d)), reverse=True)
-            runs.extend(subdirs)
-        if hasattr(self, "train_target_run_cb"):
-            self.train_target_run_cb["values"] = runs
-            if self.train_target_run_var.get() not in runs:
-                self.train_target_run_var.set(runs[0])
+        self._refresh_train_target_runs()
         if hasattr(self, "workspace_3d"):
             try:
                 self.workspace_3d.refresh_runs()
             except Exception:
                 pass
+
+    def _refresh_train_target_runs(self, select_newest: bool = False) -> List[str]:
+        """Discovers all available alignment runs in results/ and dynamically updates the dropdown."""
+        runs = ["Latest Run (Auto-Detect)"]
+        path = self.dataset_var.get() if hasattr(self, "dataset_var") else ""
+        if path and os.path.isdir(path):
+            cand_results = os.path.join(path, "results")
+            if not os.path.isdir(cand_results):
+                cand_p_results = os.path.join(os.path.dirname(path), "results")
+                if os.path.isdir(cand_p_results):
+                    cand_results = cand_p_results
+            if os.path.isdir(cand_results):
+                subdirs = [d for d in os.listdir(cand_results) if os.path.isdir(os.path.join(cand_results, d)) and d.startswith("sparse_")]
+                subdirs.sort(key=lambda d: os.path.getmtime(os.path.join(cand_results, d)), reverse=True)
+                runs.extend(subdirs)
+        if hasattr(self, "train_target_run_cb"):
+            self.train_target_run_cb["values"] = runs
+            cur = self.train_target_run_var.get() if hasattr(self, "train_target_run_var") else ""
+            if select_newest and len(runs) > 1:
+                self.train_target_run_var.set(runs[1])
+            elif cur not in runs:
+                self.train_target_run_var.set(runs[0])
+        return runs
+
+    def _view_training_run_report(self):
+        """Displays the Reconstruction Report for the currently selected alignment target in Tab 02 Training."""
+        path = self.dataset_var.get() if hasattr(self, "dataset_var") else ""
+        if not path or not os.path.isdir(path):
+            messagebox.showinfo("Reconstruction Report", "No valid dataset path selected.")
+            return
+
+        cand_results = os.path.join(path, "results")
+        if not os.path.isdir(cand_results):
+            cand_p_results = os.path.join(os.path.dirname(path), "results")
+            if os.path.isdir(cand_p_results):
+                cand_results = cand_p_results
+
+        if not os.path.isdir(cand_results):
+            messagebox.showinfo("Reconstruction Report", "No results/ folder found for this dataset.")
+            return
+
+        target_run = self.train_target_run_var.get() if hasattr(self, "train_target_run_var") else ""
+        if not target_run or target_run == "Latest Run (Auto-Detect)":
+            subdirs = [d for d in os.listdir(cand_results) if os.path.isdir(os.path.join(cand_results, d)) and d.startswith("sparse_")]
+            subdirs.sort(key=lambda d: os.path.getmtime(os.path.join(cand_results, d)), reverse=True)
+            if not subdirs:
+                messagebox.showinfo("Reconstruction Report", "No sparse_* alignment runs found.")
+                return
+            target_run = subdirs[0]
+
+        run_dir = os.path.join(cand_results, target_run)
+        if not os.path.isdir(run_dir):
+            messagebox.showinfo("Reconstruction Report", f"Selected alignment run directory does not exist:\n{run_dir}")
+            return
+
+        if hasattr(self, "workspace_3d") and hasattr(self.workspace_3d, "show_reconstruction_report"):
+            self.workspace_3d.active_run_dir = run_dir
+            self.workspace_3d.active_run_name = target_run
+            self.workspace_3d.show_reconstruction_report()
+        else:
+            rep_path = os.path.join(run_dir, "reconstruction_report.txt")
+            if os.path.isfile(rep_path):
+                os.system(f'start notepad "{rep_path}"')
+            else:
+                os.startfile(run_dir)
 
     def _open_video_extractor_dialog(self):
         """
@@ -3399,16 +3488,31 @@ class AbuAlignApp:
             elif density == "max":
                 cmd.extend(["--conf_thresh", "1.2", "--max_points", "1500000"])
         elif align_engine in ["vggttt", "vgg-ttt", "vggt3"]:
-            conf_str = str(self.vggttt_conf_var.get()).split()[0]
+            raw_conf = str(self.vggttt_conf_var.get()).strip()
+            if "adapt" in raw_conf.lower():
+                conf_str = "adaptive"
+            else:
+                conf_str = raw_conf.split()[0]
             steps_str = str(self.vggttt_steps_var.get()).split()[0]
             cmd.extend([
                 "--vggttt_conf", conf_str,
                 "--vggttt_ttt_steps", steps_str,
             ])
+            prep_val = str(self.vggttt_prep_var.get()).lower()
+            if "crop" in prep_val and "auto" not in prep_val:
+                prep_mode = "crop"
+            elif "pad" in prep_val:
+                prep_mode = "pad"
+            else:
+                prep_mode = "auto"
+            cmd.extend(["--vggttt_prep_mode", prep_mode])
+
             if self.vggttt_mem_var.get():
                 cmd.append("--vggttt_mem_eff")
             if self.vggttt_pred_var.get():
                 cmd.append("--vggttt_global_pred")
+            else:
+                cmd.append("--no_vggttt_global_pred")
         elif align_engine == "ace0":
             cmd.extend([
                 "--ace_iterations", str(self.ace_iter_var.get()),
@@ -3800,7 +3904,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.8.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.8.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -3905,9 +4009,12 @@ class AbuAlignApp:
                         self.telemetry_lbl.config(text="Status: Pipeline Completed Successfully (100%)", fg=self.accent_green)
                         self.eta_lbl.config(text="Done")
                         self._log("\n[STATUS] Pipeline Job Completed.\n")
+                        # Auto-discover and select newest alignment run across all tabs
+                        self._refresh_train_target_runs(select_newest=True)
                         if hasattr(self, "workspace_3d"):
                             try:
                                 self.workspace_3d.refresh_runs()
+                                self.workspace_3d.load_selected_run()
                             except Exception:
                                 pass
                     else:
@@ -4349,7 +4456,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.8.3 - {title}")
+        doc_win.title(f"Abu Align v0.0.8.4 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -4976,7 +5083,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.8.3\n"
+            "Abu Align & Train - Version 0.0.8.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
