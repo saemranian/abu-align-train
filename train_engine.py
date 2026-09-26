@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.0.7.8 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.0.7.9 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)

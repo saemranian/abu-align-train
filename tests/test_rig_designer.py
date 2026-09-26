@@ -163,6 +163,19 @@ class RigDesignerTests(unittest.TestCase):
                                 or other.winfo_y()+other.winfo_height() <= control.winfo_y())
         self.assertEqual(self.errors_seen, [])
 
+    def test_source_browse_actions_keep_their_width(self):
+        self.ui.dialog.geometry("1120x760")
+        self.ui.tabs.select(0)
+        self.root.update()
+        card = next(w for w in self.ui.pages[0].body.winfo_children() if isinstance(w, tk.LabelFrame))
+        buttons = [w for row in card.winfo_children() for w in row.winfo_children()
+                   if isinstance(w, tk.Button)]
+        self.assertGreaterEqual(len(buttons), 3)
+        for control in buttons:
+            self.assertTrue(control.winfo_ismapped())
+            self.assertGreaterEqual(control.winfo_width(), control.winfo_reqwidth())
+            self.assertLessEqual(control.winfo_x()+control.winfo_width(), control.master.winfo_width())
+
     def test_direct_camera_selection_and_rig_shrink(self):
         self.ui.mode.set("fibonacci")
         self.ui.cameras.set(32)

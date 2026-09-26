@@ -69,6 +69,17 @@ def enhance_rig_designer(app, ctx):
         card.pack(fill="x")
     notebook.select(1 if ctx["in_var"].get() else 0)
     notebook.enable_traversal()
+    # Reserve browse actions before allowing long source paths to fill the row.
+    for row_name in ("r1", "r2"):
+        row = ctx[row_name]
+        row.columnconfigure(1, weight=1)
+        children = row.winfo_children()
+        for widget in children:
+            widget.pack_forget()
+        for column, widget in enumerate(children):
+            if isinstance(widget, tk.Entry):
+                widget.configure(width=1)
+            widget.grid(row=0, column=column, sticky="ew", padx=(0, 6), pady=3)
     friendly_choices(ctx["mode_cb"], ctx["mode_var"],
                      {"ring": "Ring", "cubemap": "Cubemap", "dome": "Dome", "fibonacci": "Fibonacci sphere"})
     friendly_choices(ctx["solver_cb"], ctx["solver_mode_var"],
