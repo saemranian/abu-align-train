@@ -1,47 +1,57 @@
-# v0.0.7.9 — UI interaction and viewport polish
+# v0.0.8.5 — Main 3D workspace and comparison
 
-## Changes and rationale
-- Rig toolbar responds to changing button labels, wraps with consistent spacing,
-  and avoids clipped or overlapping expanded controls.
-- Source-path fields yield width to Folder, Video, and Browse actions so these
-  buttons remain fully visible at minimum size.
-- Controls help floats over the viewport instead of shrinking the 3D scene.
-  Escape dismisses help before restoring settings from focus view.
-- Log search refreshes counts after appending, trimming, and clearing output.
-  Updates are coalesced over 150 ms and preserve reading position and follow state.
-- Settings pages respect Windows wheel magnitude and fractional deltas; zero
-  movement is ignored and scrolling does not change option selections.
-- Layout coverage now includes VGG-T3 alongside the other five alignment engines.
+## Outcome
+The embedded 04 3D Workspace now provides a dedicated inspection layout with
+stable navigation and two-run comparison. The browser viewer shares registration
+and distance math and offers the same A/B inspection workflow.
 
-See docs/DESIGN_REVIEW_v0.0.7.9.md for critique, phased implementation, acceptance
-criteria, and remaining limitations.
+## Changes
+- Focused main-tab layout; setup header collapses while inspecting, and progress,
+  Pause, and Stop remain available. Returning to setup restores the usual layout.
+- Native Compare sidebar, optional Inspect controls, wrapping toolbar, adaptive
+  Fit, standard views, orbit/pan modes, wheel zoom, keyboard shortcuts, camera
+  picking, camera focus/look-through, and saved viewpoints.
+- A-only/B-only/overlay modes, mint/coral colors, camera-center residuals,
+  optional similarity registration, and sampled B-to-A point-distance colors.
+- Background native loading, two-run caches, finite-point filtering, bounded
+  preview sampling, safer offscreen rendering, and far-to-near point drawing.
+- Correct half-turn rotations and NeRF OpenGL camera directions for inspection.
+- Browser viewpoint stays fixed during display changes; standard views support
+  Z-up/Y-up. Compatible Viser theme avoids its hidden-share-button React crash.
+- Source reconstruction files are never rewritten by comparison or navigation.
 
 ## Verification
-- Desktop, rig, and preset suite: 29 tests passed in 96.550 seconds.
-- Isolated release snapshot: the same 29 checks passed in 112.951 seconds.
-- After the final source-row correction: all 11 affected rig checks passed in
-  48.825 seconds (30 distinct UI/preset checks covered across these runs).
-- All 20 snapshot Python modules compiled; source and launcher parity verified.
-- Tested desktop sizes: 960x720, 1240x900, 1600x1000; rig: 1120x760.
-- Real-window inspection identified viewport compression with both help and
-  display open. Regression checks verify help no longer reduces scene height.
-- Window hit-testing initially failed because another application obscured the
-  preview; the isolated visibility test now keeps its own dialog on top.
-- Commands: python -m unittest discover -s tests -p test_desktop_ui.py -v;
-  repeat for test_rig_designer.py and test_gui_presets.py.
-- No alignment or training jobs were launched. No VRAM or inference performance
-  benchmark was performed. The existing CPU rig renderer is retained; the log
-  buffer remains bounded to approximately 5,000 lines.
+Synthetic browser and full native-app previews were inspected. Browser Top,
+overlay, and registered camera residuals were verified visually. Native minimum
+layout, background loading, fit margins, camera actions, view restoration,
+registration failure retention, and distance legends are covered by tests.
+Final automated result: 44 tests passed in 63.570 seconds across
+ test_fast_viewer, test_viewer_workspace, test_native_inspection,
+ test_desktop_ui, and test_gui_presets.
+Command: python -m unittest discover -s tests -p <test_file.py> -v for each
+listed test module (the final run combined these into one unittest suite).
 
-## Release and collaboration
-Base-10 release: v0.0.7.8 -> v0.0.7.9. C# launchers rebuilt by version_manager.py.
-Canonical source stays in the consolidated project root; backup: versions/v0.0.7.9/.
-Antigravity commit 8957ca8 collected shared UI edits along with its engine fixes
-while verification was running. This release preserves that history and records
-UI verification separately. Earlier v0.0.7.8 engine notes remain in its snapshot.
+Backup verification: all 23 Python modules compiled; active-source, launcher,
+icon, and documentation parity passed. Native and browser workspace imports were
+verified from inside the standalone snapshot.
 
-## Files
-Functional UI: abu_align_gui.py, desktop_ui.py, rig_designer_ui.py.
-Regression coverage: tests/test_desktop_ui.py, tests/test_rig_designer.py.
-Release metadata: VERSION.txt, both BAT launchers, version headers
-in GUI/CLI/training files, rebuilt EXEs, release documentation, and snapshot.
+## Memory and limits
+Native previews retain up to 150,000 points per run; browser budgets range from
+100,000 to 1,000,000 per run. Nearest-sample cloud comparison uses up to 50,000 A
+points. Two source runs are cached. Large PLY files are still fully parsed before
+native sampling, so peak load memory can exceed retained preview memory.
+No alignment or training was launched, and no VRAM or production-scene FPS
+benchmark was performed. Native rendering is a CPU preview, not a GPU CAD engine.
+Camera frustums are illustrative. Residuals measure sampled inter-run agreement
+in scene units, not ground-truth reconstruction accuracy. Registration requires
+three or more uniquely matched, noncollinear camera centers.
+
+## Files and release
+Core: native_inspection.py, workspace_3d.py, desktop_ui.py, viewer_workspace.py,
+fast_viewer.py, and version_manager.py. Tests: test_native_inspection.py,
+test_viewer_workspace.py, and test_desktop_ui.py. Release includes synchronized
+version headers, launchers, icons, and documentation.
+Backup: versions/v0.0.8.5/ in the consolidated project root.
+See docs/WORKSPACE_3D_DESIGN.md for critique, phases, and usage details.
+Concurrent Antigravity releases advanced the baseline to v0.0.8.4 and captured
+some browser-workspace edits. This release preserves that committed engine work.

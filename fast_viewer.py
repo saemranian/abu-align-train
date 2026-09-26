@@ -759,7 +759,7 @@ def main():
     # Configure sleek fixed dark theme matching Abu Align & Train GUI
     server.gui.configure_theme(
         titlebar_content=None,
-        control_layout="fixed",
+        control_layout="collapsible",
         control_width="medium",
         dark_mode=True,
         brand_color=(112, 219, 192),  # Shared mint accent.

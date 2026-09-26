@@ -97,6 +97,7 @@ def create_version_snapshot(version_str: str) -> None:
         "rig_viewport.py",
         "fast_viewer.py",
         "viewer_workspace.py",
+        "native_inspection.py",
         "align_cli.py",
         "train_engine.py",
         "opensfm_engine.py",
@@ -119,6 +120,8 @@ def create_version_snapshot(version_str: str) -> None:
         "Abu_Align.bat",
         "Abu_Align.exe",
         "launcher.cs",
+        "abu_icon.ico",
+        "abu_icon.png",
         "walkthrough.md"
     ]
     for sf in snapshot_files:

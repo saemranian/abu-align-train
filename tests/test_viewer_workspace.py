@@ -4,11 +4,11 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import numpy as np
 from scipy.spatial.transform import Rotation
 import viser
-from viewer_workspace import InspectionWorkspace, camera_pairs, similarity, transform_cameras
+from viewer_workspace import InspectionWorkspace, camera_pairs, similarity, transform_cameras, cloud_distances
 from fast_viewer import load_cameras_from_transforms, load_cameras_from_opensfm, read_ply_data
 
 
@@ -20,6 +20,12 @@ def sample():
 
 
 class GeometryTests(unittest.TestCase):
+    def test_directed_cloud_distances_and_empty_input(self):
+        distances, count = cloud_distances(np.array([[0, 0, 0], [2, 0, 0]]), np.array([[0, 3, 0], [2, 0, 0]]))
+        np.testing.assert_allclose(distances, [3, 0])
+        self.assertEqual(count, 2)
+        self.assertEqual(cloud_distances([], [1])[1], 0)
+
     def test_similarity_recovers_scale_rotation_translation(self):
         source = sample()['points']
         rotation = Rotation.from_euler('xyz', [30, -80, 130], degrees=True).as_matrix()
@@ -64,7 +70,10 @@ class GeometryTests(unittest.TestCase):
 
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
-        self.server = viser.ViserServer(host='127.0.0.1', port=8896, verbose=False)
+        # Use the installed frontend, avoiding an unrelated process-discovery
+        # race in Viser's development-server auto-builder on Windows.
+        with patch('viser._client_autobuild._check_viser_yarn_running', return_value=False):
+            self.server = viser.ViserServer(host='127.0.0.1', port=8896, verbose=False)
         self.addCleanup(self.server.stop)
         self.loader = Mock(side_effect=lambda path: sample())
         self.ui = InspectionWorkspace(self.server, {'Run A':'a', 'Run B':'b'}, 'Run A',
@@ -83,6 +92,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('Registered B', self.ui.comparison.content)
         self.assertEqual(len(self.ui.camera_options), 8)
         self.assertIn('RMS', self.ui.comparison.content)
+        self.ui.color.value = 'B distance to A'
+        self.ui.update()
+        self.assertIn('Cloud distance', self.ui.comparison.content)
 
     def test_navigation_camera_lookthrough_and_saved_view(self):
         client = SimpleNamespace(client_id=1, camera=SimpleNamespace(position=np.array([9., 8, 7]), look_at=np.zeros(3), up_direction=np.array([0., 0, 1])))
@@ -93,6 +105,13 @@ class WorkspaceTests(unittest.TestCase):
         self.ui.camera_action(SimpleNamespace(client=client))
         self.assertGreater(client.camera.look_at[2], client.camera.position[2])
         np.testing.assert_equal(client.camera.up_direction, [0, -1, 0])
+        self.ui.bookmark._impl.value = 'Save view'
+        self.ui.saved_view(SimpleNamespace(client=client))
+        saved = np.array(client.camera.position).copy()
+        client.camera.position = np.array([100, 100, 100])
+        self.ui.bookmark._impl.value = 'Restore view'
+        self.ui.saved_view(SimpleNamespace(client=client))
+        np.testing.assert_equal(client.camera.position, saved)
 
     def test_registration_failure_keeps_previous_scene(self):
         old = list(self.ui.handles)

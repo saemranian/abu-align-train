@@ -4,6 +4,7 @@ from threading import RLock
 import os
 import numpy as np
 from scipy.spatial.transform import Rotation
+from scipy.spatial import cKDTree
 
 
 MINT = (112, 219, 192)
@@ -62,6 +63,15 @@ def scene_bounds(points):
     return (low+high)*0.5, max(float(np.linalg.norm(high-low)), 0.01)
 
 
+def cloud_distances(reference, query, limit=50000):
+    """Directed nearest-sample distances, not calibrated reconstruction error."""
+    if not len(reference) or not len(query):
+        return np.empty(0), 0
+    indices = np.linspace(0, len(reference)-1, min(limit, len(reference)), dtype=int)
+    distance, _ = cKDTree(reference[indices]).query(query, workers=1)
+    return distance, len(indices)
+
+
 class InspectionWorkspace:
     """Two cached source layers; navigation never changes source reconstruction data."""
     def __init__(self, server, runs, selected, title, loader, discover):
@@ -74,35 +84,41 @@ class InspectionWorkspace:
         self.center, self.span = np.zeros(3), 1.0
         self.camera_options = {}
         gui = server.gui
-        gui.add_markdown(f'## Reconstruction workspace\n{title}\n\nInspect · Navigate · Compare')
+        gui.add_markdown(f'## 3D workspace\n{title}')
         self.status = gui.add_markdown('Loading reconstruction…')
         with gui.add_folder('Navigate'):
             self.views = gui.add_button_group('View', ('Fit', 'Top', 'Front', 'Right'))
             self.zoom = gui.add_button_group('Distance', ('Closer', 'Farther'))
             self.bookmark = gui.add_button_group('Viewpoint', ('Save view', 'Restore view'))
-            gui.add_markdown('**Orbit** drag · **Pan** right-drag · **Zoom** scroll\n\n'
-                             'Use Fit to recover the scene. Display changes keep your viewpoint.')
+            self.up_axis = gui.add_dropdown('World up', ('Z up', 'Y up'), initial_value='Z up',
+                hint='Used by standard views. Camera look-through uses the source camera orientation.')
+            self.navigation_info = gui.add_markdown('**Orbit** drag · **Pan** right-drag · **Zoom** scroll')
         with gui.add_folder('Compare reconstructions'):
             names = list(runs)
             self.a = gui.add_dropdown('A · Reference', names, initial_value=selected)
             self.b = gui.add_dropdown('B · Comparison', names,
                 initial_value=next((n for n in names if n != selected), selected), disabled=len(names)<2)
             self.mode = gui.add_dropdown('Show', ('A only', 'B only', 'Overlay'), initial_value='A only', disabled=len(names)<2)
-            self.registration = gui.add_checkbox('Register B to A using cameras', False,
+            self.registration = gui.add_checkbox('Register B to A', False,
                 hint='Fits rotation, translation and scale from identical image names. Changes the preview only.')
-            self.links = gui.add_checkbox('Show camera differences', True)
-            gui.add_markdown('**A · mint** / **B · coral** in Overlay. Switch A/B to compare from the same viewpoint.\n\n'
-                             'Raw coordinates are used unless registration is enabled. Independent runs may have different origins and scales.')
+            self.links = gui.add_checkbox('Camera offsets', True)
+            gui.add_markdown('**A · mint** / **B · coral** · Overlay uses layer colors.')
+            with gui.add_folder('How comparison works', expand_by_default=False):
+                gui.add_markdown('Switch A/B from the same viewpoint. Display settings never reset navigation.\n\n'
+                    'Independent reconstructions may have different origins and scales. Register B to A fits '
+                    'rotation, translation, and scale using uniquely matched camera image names.\n\n'
+                    'Residuals measure agreement, not ground-truth accuracy. They use the same cameras fitted '
+                    'during registration. Scene units are not necessarily meters. Source files are never changed.')
             self.comparison = gui.add_markdown('Choose a different run for B to compare.')
             self.refresh = gui.add_button('Refresh available runs')
         with gui.add_folder('Scene layers', expand_by_default=False):
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
-            self.paths = gui.add_checkbox('Camera paths', True)
+            self.paths = gui.add_checkbox('Camera sequence', True, hint='Connects camera centers in file order; not an inferred capture path.')
             self.grid = gui.add_checkbox('Ground grid', False)
             self.point_size = gui.add_slider('Point size', 0.001, 0.03, 0.001, 0.004)
             self.camera_size = gui.add_slider('Camera size', 0.2, 3.0, 0.1, 1.0)
-            self.color = gui.add_dropdown('Point color', ('Original', 'Layer color'), initial_value='Original')
+            self.color = gui.add_dropdown('Point color', ('Original', 'Layer color', 'B distance to A'), initial_value='Original')
             self.budget = gui.add_dropdown('Points per run', ('100,000', '300,000', '1,000,000'), initial_value='300,000')
             self.trim = gui.add_checkbox('Hide outer 1% of points', False,
                 hint='Preview only. Off preserves all finite points before display sampling.')
@@ -172,17 +188,19 @@ class InspectionWorkspace:
                         errors = np.linalg.norm(left-right, axis=1)
                         summary += (f'\n\nCamera-center difference · median **{np.median(errors):.4g}** · '
                                     f'RMS **{np.sqrt(np.mean(errors**2)):.4g}** scene units.\n\n'
-                                    'Agreement between runs, not ground-truth accuracy. Registration residuals use the fitted cameras.')
+                                    'Inter-run agreement, not ground-truth accuracy.')
                     else:
                         summary += '\n\nNo camera differences available. Names must match exactly, including relative paths.'
                     layers['B'] = b
                 self.layers = layers
                 self.comparison.content = summary
-                self.render()
-                count = sum(len(layer['points']) for layer in layers.values())
+                with self.server.atomic():
+                    self.render()
+                count = sum(len(layer['points']) for key, layer in layers.items()
+                            if self.mode.value == 'Overlay' or self.mode.value.startswith(key))
                 self.status.content = f'**{self.mode.value}** · {count:,} finite source points\n\n' + (
                     'No geometry found. Select a completed reconstruction or refresh.' if not count and not any(l['cameras'] for l in layers.values())
-                    else 'Ready · display sampling leaves source files unchanged.')
+                    else 'Ready · viewpoint preserved')
             except Exception as error:
                 self.status.content = f'**Unable to apply selection**\n\n{error}\n\nPrevious scene retained. Change the selection or disable registration.'
 
@@ -207,9 +225,22 @@ class InspectionWorkspace:
             if visible:
                 bounds.extend([sampled, positions])
             _, span = scene_bounds([sampled, positions])
+            point_colors = tint if self.mode.value == 'Overlay' or self.color.value == 'Layer color' else colors[indices]
+            if key == 'B' and self.color.value == 'B distance to A':
+                distance, reference_count = cloud_distances(self.layers['A']['points'], sampled)
+                if len(distance):
+                    maximum = max(float(np.percentile(distance, 95)), 1e-9)
+                    fraction = np.clip(distance/maximum, 0, 1)[:, None]
+                    point_colors = ((1-fraction)*np.array([95, 190, 240])+fraction*np.array([255, 115, 90])).astype(np.uint8)
+                    self.comparison.content += (f'\n\n**Cloud distance · B → A**\n\nMedian {np.median(distance):.4g} · '
+                        f'95th percentile {np.percentile(distance, 95):.4g} scene units.\n\n'
+                        f'Blue → coral: 0 → {maximum:.4g}. Nearest sample in A ({reference_count:,} reference points). '
+                        'Directed, sampled distances; not correspondence or ground-truth errors.')
+                else:
+                    self.comparison.content += '\n\nCloud distances unavailable: both runs need finite points.'
             if len(sampled):
                 self.handles.append(self.server.scene.add_point_cloud(f'/inspection/{key}/points', sampled,
-                    tint if self.mode.value == 'Overlay' or self.color.value == 'Layer color' else colors[indices],
+                    point_colors,
                     point_size=self.point_size.value, point_shape='circle', visible=visible and self.points.value))
             if len(positions) > 1:
                 self.handles.append(self.server.scene.add_line_segments(f'/inspection/{key}/path',
@@ -253,8 +284,16 @@ class InspectionWorkspace:
         directions = {'Fit': (1, -1.5, 1), 'Top': (0, 0, 1), 'Front': (0, -1, 0), 'Right': (1, 0, 0)}
         direction = np.array(directions[name], dtype=float)
         direction /= np.linalg.norm(direction)
-        client.camera.up_direction = (0, 1, 0) if name == 'Top' else (0, 0, 1)
-        client.camera.position = self.center + direction*self.span*1.5
+        up = np.array((0, 1, 0) if name == 'Top' else (0, 0, 1))
+        if self.up_axis.value == 'Y up':
+            direction = direction[[0, 2, 1]] * [1, 1, -1]
+            up = up[[0, 2, 1]] * [1, 1, -1]
+        client.camera.up_direction = up
+        fov = float(getattr(client.camera, 'fov', np.radians(60)))
+        aspect = max(.1, float(getattr(client.camera, 'aspect', 1)))
+        half_angle = min(fov/2, np.arctan(np.tan(fov/2)*aspect))
+        distance = self.span*.5/max(.05, np.sin(half_angle))*1.12
+        client.camera.position = self.center + direction*distance
         client.camera.look_at = self.center
 
     def navigate(self, event):
@@ -272,8 +311,12 @@ class InspectionWorkspace:
             if self.bookmark.value == 'Save view':
                 self.bookmarks[client.client_id] = tuple(np.array(v).copy() for v in
                     (client.camera.position, client.camera.look_at, client.camera.up_direction))
+                self.navigation_info.content = 'View saved. Use Restore view to return after inspecting another angle.'
             elif client.client_id in self.bookmarks:
                 client.camera.position, client.camera.look_at, client.camera.up_direction = self.bookmarks[client.client_id]
+                self.navigation_info.content = 'Saved viewpoint restored.'
+            else:
+                self.navigation_info.content = 'No saved viewpoint yet. Choose Save view first.'
 
     def select_camera(self, name):
         self.camera.value = name

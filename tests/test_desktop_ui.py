@@ -329,7 +329,7 @@ class DesktopTests(unittest.TestCase):
         ws.reset_view()
         self.assertEqual(ws.yaw, -25.0)
         self.assertEqual(ws.pitch, 20.0)
-        self.assertEqual(ws.distance, 5.0)
+        self.assertEqual(ws.distance, 1.5)  # Fit now uses normalized scene bounds.
         
         ws.set_preset_view(0, 89.9)
         self.assertEqual(ws.yaw, 0.0)
@@ -337,8 +337,17 @@ class DesktopTests(unittest.TestCase):
         
         ws.reset_view()
         self.assertEqual(ws.yaw, -25.0)
+        self.root.geometry('960x720')
+        ws.toggle_comparison()
+        self.root.update()
+        self.assertGreater(ws.canvas.winfo_height(), 120)
+        self.assertGreater(ws.canvas.winfo_width(), 400)
+        self.assertTrue(self.app.stop_btn.winfo_ismapped())
+        self.assertFalse(self.app.path_entry.winfo_ismapped())
+        self.app.workspace_tabs.select(0)
+        self.root.update()
+        self.assertTrue(self.app.path_entry.winfo_ismapped())
 
 
 if __name__ == "__main__":
     unittest.main()
-

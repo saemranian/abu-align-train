@@ -485,7 +485,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.8.4", 9, muted=True)
+    app.version_label = label(header, "v0.0.8.5", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -533,7 +533,9 @@ def build_workspace(app, tooltip):
     def compact_footer(event):
         if event.widget is not root or not app.workflow_summary.winfo_exists():
             return
-        if event.height < 820:
+        in_workspace = (hasattr(app, 'workspace_3d') and
+                        app.workspace_tabs.select() == str(app.workspace_3d))
+        if event.height < 820 or in_workspace:
             app.workflow_summary.pack_forget()
         elif not app.workflow_summary.winfo_manager():
             app.workflow_summary.pack(fill="x", pady=(0, 10), before=status)
@@ -839,6 +841,20 @@ def build_workspace(app, tooltip):
     def on_tab_changed(event):
         try:
             sel = app.workspace_tabs.select()
+            in_workspace = hasattr(app, 'workspace_3d') and sel == str(app.workspace_3d)
+            # Inspection gets dedicated space; running-job controls stay visible.
+            if in_workspace:
+                header.pack_forget()
+                project.pack_forget()
+                app.workflow_summary.pack_forget()
+                app.workspace_tabs.pack_configure(padx=12)
+            else:
+                if not header.winfo_manager():
+                    header.pack(fill='x',before=app.workspace_tabs)
+                    project.pack(fill='x',padx=24,pady=(0,12),before=app.workspace_tabs)
+                app.workspace_tabs.pack_configure(padx=24)
+                if root.winfo_height() >= 820 and not app.workflow_summary.winfo_manager():
+                    app.workflow_summary.pack(fill='x',pady=(0,10),before=status)
             if hasattr(app, "_refresh_train_target_runs"):
                 app._refresh_train_target_runs()
             if hasattr(app, "workspace_3d") and sel == str(app.workspace_3d):

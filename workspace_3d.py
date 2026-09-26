@@ -246,7 +246,7 @@ def load_cameras_from_run(run_dir: str) -> List[Dict[str, Any]]:
 # Native 3D Workspace Component
 # =========================================================================
 
-class Workspace3DViewer(tk.Frame):
+class _LegacyWorkspace3DViewer(tk.Frame):
     """
     Main CAD-grade 3D photogrammetry and alignment inspection workspace.
     Renders dense point clouds and registered camera trajectories with 6-DOF controls.
@@ -567,7 +567,7 @@ class Workspace3DViewer(tk.Frame):
             return
 
         # View Matrix (World to View)
-        R_view = make_rotation_matrix(self.yaw, self.pitch, 0.0)
+        R_view = self.view_matrix if self.view_matrix is not None else make_rotation_matrix(self.yaw, self.pitch, 0.0)
 
         # Draw Grid on ground (XZ plane at bottom of bounding box)
         grid_lines = []
@@ -594,7 +594,7 @@ class Workspace3DViewer(tk.Frame):
             z_cam = p_rot[:, 2] + tz
 
             # Perspective projection
-            valid = z_cam > 0.1
+            valid = z_cam > 0.005
             if np.any(valid):
                 zc = z_cam[valid]
                 focal = min(w, h) * 1.05
@@ -607,19 +607,23 @@ class Workspace3DViewer(tk.Frame):
                 py = py[in_screen]
 
                 # Resolve color mode
-                mode = self.color_mode_var.get()
+                mode = "rgb" if self.compare_mode.get() == "Overlay" or self.distance_colors.get() else self.color_mode_var.get()
                 if mode == "rgb" and self.colors is not None and len(self.colors) == len(self.points):
                     pt_cols = self.colors[valid][in_screen]
-                elif mode == "depth":
+                elif mode == "depth" and len(px):
                     depths = zc[in_screen]
                     d_norm = (depths - np.min(depths)) / max(0.001, np.max(depths) - np.min(depths))
                     pt_cols = turbo_colormap(d_norm)
-                elif mode == "elevation":
+                elif mode == "elevation" and len(px):
                     elevs = p_norm[valid, 1][in_screen]
                     e_norm = (elevs - np.min(elevs)) / max(0.001, np.max(elevs) - np.min(elevs))
                     pt_cols = viridis_colormap(e_norm)
                 else:
                     pt_cols = np.full((len(px), 3), 230, dtype=np.uint8)
+
+                # Paint far-to-near so coincident samples do not hide foreground geometry.
+                order = np.argsort(-zc[in_screen])
+                px, py, pt_cols = px[order], py[order], pt_cols[order]
 
                 # Rasterize points to frame buffer
                 pt_size = self.point_size_var.get()
@@ -627,8 +631,8 @@ class Workspace3DViewer(tk.Frame):
                     frame[py, px] = pt_cols
                 else:
                     # Splat slightly larger point
-                    for off_y in range(-pt_size // 2, pt_size // 2 + 1):
-                        for off_x in range(-pt_size // 2, pt_size // 2 + 1):
+                    for off_y in range(-(pt_size // 2), pt_size - pt_size // 2):
+                        for off_x in range(-(pt_size // 2), pt_size - pt_size // 2):
                             sy = np.clip(py + off_y, 0, h - 1)
                             sx = np.clip(px + off_x, 0, w - 1)
                             frame[sy, sx] = pt_cols
@@ -653,8 +657,9 @@ class Workspace3DViewer(tk.Frame):
 
         # 3. Render Cameras & Trajectories
         cam_screen_pts = []
+        self._camera_screen = []
         if self.cameras:
-            cam_scale = 0.08 * (self.scale / max(self.scale, 1.0)) * self.cam_scale_var.get()
+            cam_scale = 0.025 * self.cam_scale_var.get()
             for i, cam in enumerate(self.cameras):
                 c_pos = (cam["pos"] - self.center) / self.scale
                 c_rot = c_pos @ R_view.T
@@ -665,7 +670,9 @@ class Workspace3DViewer(tk.Frame):
                     csy = int(c_cam[1] / c_cam[2] * focal + h * 0.5)
                     cam_screen_pts.append((csx, csy, c_cam[2], i))
 
-                    if self.show_cameras_var.get():
+                    selected = i == self.selected_camera
+                    color = "#ffdc7d" if selected else tuple(cam.get("color", (112, 219, 192)))
+                    if self.show_cameras_var.get() and (i % max(1, math.ceil(len(self.cameras)/300)) == 0 or selected):
                         # Frustum pyramid corners
                         fwd = cam.get("forward", np.array([0, 0, 1], dtype=np.float32))
                         up = cam.get("up", np.array([0, -1, 0], dtype=np.float32))
@@ -688,17 +695,20 @@ class Workspace3DViewer(tk.Frame):
                         if len(scr_corners) == 4:
                             # Draw pyramid edges from apex
                             for sc in scr_corners:
-                                draw.line([(csx, csy), sc], fill=CAM_COLOR, width=1)
+                                draw.line([(csx, csy), sc], fill=color, width=2 if selected else 1)
                             # Draw base rectangle
-                            draw.line([scr_corners[0], scr_corners[1], scr_corners[2], scr_corners[3], scr_corners[0]], fill=CAM_COLOR, width=1)
+                            draw.line([scr_corners[0], scr_corners[1], scr_corners[2], scr_corners[3], scr_corners[0]], fill=color, width=2 if selected else 1)
 
-            # Draw Connecting Trajectory Spline
-            if self.show_trajectory_var.get() and len(cam_screen_pts) > 1:
-                traj_pts = [(p[0], p[1]) for p in cam_screen_pts]
-                draw.line(traj_pts, fill=TRAJ_COLOR, width=2)
-                # Draw camera marker nodes
-                for sx, sy, _, _ in cam_screen_pts:
-                    draw.ellipse([sx - 2, sy - 2, sx + 2, sy + 2], fill=HIGHLIGHT, outline=TRAJ_COLOR)
+            # Keep A and B sequences separate; never connect independent runs.
+            if self.show_trajectory_var.get():
+                for layer in ('A', 'B'):
+                    sequence = [(x,y) for x,y,z,i in cam_screen_pts if self.cameras[i].get('layer','A') == layer]
+                    if len(sequence)>1:
+                        draw.line(sequence, fill='#70dbc0' if layer=='A' else '#ff9b7f', width=1)
+            self._camera_screen = cam_screen_pts
+            for x,y,z,i in cam_screen_pts:
+                if i == self.selected_camera:
+                    draw.ellipse((x-5,y-5,x+5,y+5),outline='#ffdc7d',width=2)
 
         # Update Tkinter Canvas Image
         self._photo_image = ImageTk.PhotoImage(pil_img)
@@ -918,3 +928,11 @@ class ReconstructionReportViewer(tk.Toplevel):
             os.system(f'start notepad "{rep_file}"')
         except Exception:
             pass
+
+
+# Keep the embedded tab API stable while separating its interaction controller.
+from native_inspection import NativeInspection
+
+class Workspace3DViewer(NativeInspection, _LegacyWorkspace3DViewer):
+    """Native reconstruction workspace with stable navigation and A/B comparison."""
+    pass
