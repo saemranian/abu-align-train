@@ -84,7 +84,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.3 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1492,7 +1492,7 @@ def main():
     parser.add_argument("--vggttt_mem_eff", action="store_true", default=False, help="Enable memory-efficient linear attention inference in VGG-T3 for large sequences (>64 views)")
     parser.add_argument("--vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_true", default=None, help="Stream intermediate attention chunk outputs to CPU memory to prevent VRAM spill on large sequences")
     parser.add_argument("--no_vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_false", help="Keep all attention states in GPU VRAM")
-    parser.add_argument("--vggttt_ttt_steps", type=int, default=1, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 1)")
+    parser.add_argument("--vggttt_ttt_steps", type=int, default=2, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 2)")
     parser.add_argument("--vggttt_global_pred", action="store_true", default=False, help="Use global transformer point head for 3D point cloud rather than unprojected depth")
     # Video Frame Extraction Options
     parser.add_argument("--video_fps", type=float, default=5.0, help="Target FPS when extracting from video input (default: 5.0)")
@@ -2101,6 +2101,7 @@ def main():
             weights_path=args.dvo_weights,
             patches_per_frame=args.dvo_patches,
             stride=args.stride,
+            load_res=getattr(args, "load_res", 1024),
             polar_mask_pct=getattr(args, "dvo_polar_mask", 0.08),
             local_ba_window=getattr(args, "dvo_ba_window", 8),
             metric_scale=getattr(args, "dvo_scale", 3.2),

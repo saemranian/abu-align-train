@@ -586,6 +586,7 @@ def run_360dvo_reconstruction(
     weights_path: Optional[str] = None,
     patches_per_frame: int = 96,
     stride: int = 1,
+    load_res: int = 1024,
     polar_mask_pct: float = 0.08,
     local_ba_window: int = 8,
     metric_scale: float = 3.2,
@@ -602,6 +603,8 @@ def run_360dvo_reconstruction(
     Executes 360DVO Deep Visual Odometry on the input image list.
     Outputs: pycolmap.Reconstruction, dense_3d (np.ndarray), dense_rgb (np.ndarray).
     """
+    dense_3d = np.zeros((0, 3), dtype=np.float32)
+    dense_rgb = np.zeros((0, 3), dtype=np.uint8)
     has_opened_browser = False
     def log(msg: str):
         nonlocal has_opened_browser
@@ -678,6 +681,7 @@ def run_360dvo_reconstruction(
             f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride {stride} "
             f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale} "
             f"--patch_lifetime {patch_lifetime} --final_ba_iters {final_ba_iters} --keyframe_thresh {keyframe_thresh} "
+            f"--load_res {load_res} "
             f"{viz_arg} {dense_arg} {grad_arg}"
         )
 
@@ -700,12 +704,7 @@ def run_360dvo_reconstruction(
             log("[SUCCESS] 360DVO Native GPU Odometry Trajectory computed successfully.")
             img_basenames = [os.path.basename(p) for p in image_paths]
             sparse_0 = os.path.join(output_dir, "sparse", "0")
-            tum_trajectory_to_colmap(trajectory_txt, img_basenames, sparse_0, width=w, height=h)
-            tf_out = os.path.join(output_dir, "transforms.json")
-            tum_trajectory_to_transforms_json(trajectory_txt, img_basenames, tf_out, width=w, height=h)
 
-            dense_3d = np.zeros((0, 3), dtype=np.float32)
-            dense_rgb = np.zeros((0, 3), dtype=np.uint8)
             if os.path.isfile(ply_out):
                 shutil.copy2(ply_out, os.path.join(output_dir, "points3D.ply"))
                 shutil.copy2(ply_out, os.path.join(output_dir, "points.ply"))
@@ -718,6 +717,10 @@ def run_360dvo_reconstruction(
                         dense_rgb = np.stack([v['red'], v['green'], v['blue']], axis=1).astype(np.uint8)
                 except Exception:
                     pass
+
+            tum_trajectory_to_colmap(trajectory_txt, img_basenames, sparse_0, width=w, height=h, points_xyz=dense_3d, points_rgb=dense_rgb)
+            tf_out = os.path.join(output_dir, "transforms.json")
+            tum_trajectory_to_transforms_json(trajectory_txt, img_basenames, tf_out, width=w, height=h, ply_source=ply_out, output_ply_dest=os.path.join(output_dir, "points3D.ply"))
 
             # OpenSfM Bridge: reconstruction.json and metadata.json for direct PFGS360 training
             opensfm_dir = os.path.join(output_dir, "opensfm")
@@ -775,203 +778,197 @@ def run_360dvo_reconstruction(
             return rec_obj, dense_3d, dense_rgb
         else:
             log("[WARNING] WSL2 360DVO execution did not produce trajectory. Falling back to internal estimator...")
-    elif native_available and engine.weights_path:
-        log(f"[*] Found native 360DVO package and checkpoint at: {engine.weights_path}")
-        log("[*] Initializing Distortion-Aware Spherical Feature Extractor (DAS-Feat)...")
-        log("[*] Executing Omnidirectional Differentiable Bundle Adjustment (ODBA)...")
-        from dpvo.dpvo import DPVO
-        from dpvo.config import cfg
+
+    log("[*] Running 360DVO Spherical Visual Odometry Estimator...")
+    log(f"    * Sphere Dimension: {w} x {h} (2:1 Equirectangular)")
+    log("    * Tangent Plane Patch Sampling on S² Manifold: Active")
+
+    # Collect 3D points for tie points and trajectory point cloud
+    total_n = len(image_paths)
+    cur_R = np.eye(3, dtype=np.float64)
+    cur_t = np.zeros(3, dtype=np.float64)
+    poses = []
+    pts_list = []
+    rgb_list = []
+
+    # Patch density scaling based on user selection (64 vs 96 vs 128)
+    # 64 patches  -> ~1,500 candidate keypoints per frame
+    # 96 patches  -> ~3,000 candidate keypoints per frame
+    # 128 patches -> ~5,000 candidate keypoints per frame
+    n_features = max(600, int(patches_per_frame * 35))
+    min_dist = max(6, int(w / max(patches_per_frame * 1.5, 1.0)))
+
+    # Mask polar regions (zenith top and nadir bottom) to eliminate tripod shadows and sky artifacts
+    mask = np.zeros((h, w), dtype=np.uint8)
+    y_start = int(h * polar_mask_pct)
+    y_end = int(h * (1.0 - polar_mask_pct))
+    if y_end > y_start:
+        mask[y_start:y_end, :] = 255
     else:
-        log("[*] Running 360DVO Spherical Visual Odometry Estimator...")
-        log(f"    * Sphere Dimension: {w} x {h} (2:1 Equirectangular)")
-        log("    * Tangent Plane Patch Sampling on S² Manifold: Active")
+        mask[:, :] = 255
 
-        # Collect 3D points for tie points and trajectory point cloud
-        total_n = len(image_paths)
-        cur_R = np.eye(3, dtype=np.float64)
-        cur_t = np.zeros(3, dtype=np.float64)
-        poses = []
-        pts_list = []
-        rgb_list = []
+    prev_gray = None
+    prev_kps = None
+    prev_im_bgr = None
+    prev_R = None
+    prev_C = None
+    window_cams = []
 
-        # Patch density scaling based on user selection (64 vs 96 vs 128)
-        # 64 patches  -> ~1,500 candidate keypoints per frame
-        # 96 patches  -> ~3,000 candidate keypoints per frame
-        # 128 patches -> ~5,000 candidate keypoints per frame
-        n_features = max(600, int(patches_per_frame * 35))
-        min_dist = max(6, int(w / max(patches_per_frame * 1.5, 1.0)))
+    log("[*] Streaming continuous frames through Spherical Bearing Tracker...")
+    log(f"    * Feature Budget:   {n_features} corners/frame (proportional to {patches_per_frame} patches)")
+    log(f"    * Feature Spacing:  {min_dist}px on 2:1 Equirectangular Canvas")
+    log(f"    * Polar Mask:       {polar_mask_pct*100:.1f}% Zenith & Nadir cutoff")
+    log(f"    * Metric Scale:     {metric_scale:.2f}m")
+    log(f"    * ODBA Window:      {local_ba_window} keyframes")
 
-        # Mask polar regions (zenith top and nadir bottom) to eliminate tripod shadows and sky artifacts
-        mask = np.zeros((h, w), dtype=np.uint8)
-        y_start = int(h * polar_mask_pct)
-        y_end = int(h * (1.0 - polar_mask_pct))
-        if y_end > y_start:
-            mask[y_start:y_end, :] = 255
-        else:
-            mask[:, :] = 255
+    for i, p in enumerate(image_paths):
+        if i % max(1, total_n // 10) == 0 or i == total_n - 1:
+            pct = (i + 1) / total_n * 100.0
+            print(f"[TELEMETRY:STAGE3] batch={i+1} total={total_n} pct={pct:.1f}", flush=True)
+            log(f"    --> Frame [{i+1}/{total_n}] ({pct:.1f}%) | 360DVO Odometry tracking active...")
 
-        prev_gray = None
-        prev_kps = None
-        prev_im_bgr = None
-        prev_R = None
-        prev_C = None
-        window_cams = []
+        img_bgr = cv2.imread(p)
+        if img_bgr is None:
+            continue
 
-        log("[*] Streaming continuous frames through Spherical Bearing Tracker...")
-        log(f"    * Feature Budget:   {n_features} corners/frame (proportional to {patches_per_frame} patches)")
-        log(f"    * Feature Spacing:  {min_dist}px on 2:1 Equirectangular Canvas")
-        log(f"    * Polar Mask:       {polar_mask_pct*100:.1f}% Zenith & Nadir cutoff")
-        log(f"    * Metric Scale:     {metric_scale:.2f}m")
-        log(f"    * ODBA Window:      {local_ba_window} keyframes")
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        cur_time = float(i)
 
-        for i, p in enumerate(image_paths):
-            if i % max(1, total_n // 10) == 0 or i == total_n - 1:
-                pct = (i + 1) / total_n * 100.0
-                print(f"[TELEMETRY:STAGE3] batch={i+1} total={total_n} pct={pct:.1f}", flush=True)
-                log(f"    --> Frame [{i+1}/{total_n}] ({pct:.1f}%) | 360DVO Odometry tracking active...")
+        if prev_gray is not None and prev_kps is not None and len(prev_kps) >= 8:
+            # 1. Pyramidal Optical Flow with forward-backward verification
+            p2, st1, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, prev_kps, None, winSize=(21, 21), maxLevel=3)
+            p1_b, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, p2, None, winSize=(21, 21), maxLevel=3)
+            fb_err = np.linalg.norm(prev_kps - p1_b, axis=1)
+            valid = (st1.flatten() == 1) & (st2.flatten() == 1) & (fb_err < 1.5)
 
-            img_bgr = cv2.imread(p)
-            if img_bgr is None:
-                continue
+            val_p1 = prev_kps[valid]
+            val_p2 = p2[valid]
 
-            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-            cur_time = float(i)
+            if len(val_p1) >= 8:
+                b1 = uv_to_bearing(val_p1, w, h)
+                b2 = uv_to_bearing(val_p2, w, h)
 
-            if prev_gray is not None and prev_kps is not None and len(prev_kps) >= 8:
-                # 1. Pyramidal Optical Flow with forward-backward verification
-                p2, st1, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, prev_kps, None, winSize=(21, 21), maxLevel=3)
-                p1_b, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, p2, None, winSize=(21, 21), maxLevel=3)
-                fb_err = np.linalg.norm(prev_kps - p1_b, axis=1)
-                valid = (st1.flatten() == 1) & (st2.flatten() == 1) & (fb_err < 1.5)
+                # 2. Relative Pose Estimation on S^2 Manifold
+                R_rel, t_rel, inliers = solve_spherical_relative_pose(b1, b2, max_iters=150)
 
-                val_p1 = prev_kps[valid]
-                val_p2 = p2[valid]
+                # Dynamic scale estimation from translational disparity on S^2:
+                # Derotate b1 into frame 2 to isolate pure translational parallax
+                b1_derot = (R_rel @ b1[inliers].T).T
+                dots = np.clip(np.sum(b2[inliers] * b1_derot, axis=1), -1.0, 1.0)
+                disp_rad = np.arccos(dots)
+                med_disp = float(np.median(disp_rad)) if len(disp_rad) > 0 else 0.0
 
-                if len(val_p1) >= 8:
-                    b1 = uv_to_bearing(val_p1, w, h)
-                    b2 = uv_to_bearing(val_p2, w, h)
-
-                    # 2. Relative Pose Estimation on S^2 Manifold
-                    R_rel, t_rel, inliers = solve_spherical_relative_pose(b1, b2, max_iters=150)
-
-                    # Dynamic scale estimation from translational disparity on S^2:
-                    # Derotate b1 into frame 2 to isolate pure translational parallax
-                    b1_derot = (R_rel @ b1[inliers].T).T
-                    dots = np.clip(np.sum(b2[inliers] * b1_derot, axis=1), -1.0, 1.0)
-                    disp_rad = np.arccos(dots)
-                    med_disp = float(np.median(disp_rad)) if len(disp_rad) > 0 else 0.0
-
-                    # Dynamic step length: stationary if parallax < 0.12 deg, else proportional to scene depth
-                    if med_disp < 0.002:
-                        step_len = 0.0
-                    else:
-                        step_len = float(np.clip(med_disp * metric_scale, 0.005, 0.35)) * max(1, stride)
-
-                    t_norm = np.linalg.norm(t_rel)
-                    t_dir = (t_rel / t_norm) if t_norm > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
-                    
-                    # Align translation direction with forward continuous motion
-                    if 'prev_t_dir' in locals() and prev_t_dir is not None:
-                        if np.dot(t_dir, prev_t_dir) < -0.2:
-                            t_dir = -t_dir
-                    prev_t_dir = t_dir.copy()
-
-                    t_step = t_dir * step_len
-
-                    # Update camera pose in world coordinates:
-                    R_next = cur_R @ R_rel.T
-                    C_next = cur_t + cur_R @ t_step
-                    cur_R = R_next
-                    cur_t = C_next
-
-                    # 3. Multi-View Ray Triangulation with Strict Parallax & Geometry Checks
-                    in_p1 = val_p1[inliers]
-                    in_b1 = b1[inliers]
-                    in_b2 = b2[inliers]
-
-                    C1 = prev_C if prev_C is not None else (cur_t - cur_R @ t_step)
-                    R1 = prev_R if prev_R is not None else (cur_R @ R_rel)
-                    C2 = cur_t
-                    R2 = cur_R
-
-                    d1 = (R1 @ in_b1.T).T
-                    d2 = (R2 @ in_b2.T).T
-                    w0 = C1 - C2
-
-                    for k in range(len(d1)):
-                        ray1 = d1[k]
-                        ray2 = d2[k]
-                        b_dot = np.dot(ray1, ray2)
-                        denom = 1.0 - b_dot * b_dot
-                        if denom > 1e-4:
-                            # Filter ill-conditioned near-zero and degenerate parallax
-                            ang_parallax = math.degrees(math.acos(np.clip(b_dot, -1.0, 1.0)))
-                            if 1.5 <= ang_parallax <= 65.0:
-                                d_dot_w0 = np.dot(ray1, w0)
-                                e_dot_w0 = np.dot(ray2, w0)
-                                l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
-                                l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
-                                if 0.2 < l1 < 35.0 and 0.2 < l2 < 35.0:
-                                    pt1 = C1 + l1 * ray1
-                                    pt2 = C2 + l2 * ray2
-                                    if np.linalg.norm(pt1 - pt2) < 0.08 * min(l1, l2):
-                                        P_mid = (pt1 + pt2) / 2.0
-                                        u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
-                                        b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
-                                        pts_list.append(P_mid)
-                                        rgb_list.append([int(r_c), int(g_c), int(b_c)])
+                # Dynamic step length: stationary if parallax < 0.12 deg, else proportional to scene depth
+                if med_disp < 0.002:
+                    step_len = 0.0
                 else:
-                    pass
+                    step_len = float(np.clip(med_disp * metric_scale, 0.005, 0.35)) * max(1, stride)
 
-            # Extract keypoints for tracking into next frame
-            kps_new = cv2.goodFeaturesToTrack(
-                gray,
-                maxCorners=n_features,
-                qualityLevel=0.01,
-                minDistance=min_dist,
-                mask=mask
-            )
-            prev_kps = kps_new.reshape(-1, 2) if kps_new is not None else None
-            prev_gray = gray
-            prev_im_bgr = img_bgr
-            prev_R = cur_R.copy()
-            prev_C = cur_t.copy()
+                t_norm = np.linalg.norm(t_rel)
+                t_dir = (t_rel / t_norm) if t_norm > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                
+                # Align translation direction with forward continuous motion
+                if 'prev_t_dir' in locals() and prev_t_dir is not None:
+                    if np.dot(t_dir, prev_t_dir) < -0.2:
+                        t_dir = -t_dir
+                prev_t_dir = t_dir.copy()
 
-            # Record camera state in ODBA sliding-window buffer
-            window_cams.append({
-                "idx": i,
-                "R": cur_R.copy(),
-                "C": cur_t.copy()
-            })
-            if len(window_cams) > max(4, local_ba_window):
-                window_cams.pop(0)
+                t_step = t_dir * step_len
 
-            # Local trajectory smoothing (3-frame moving average) to suppress high-frequency jitter
-            if len(window_cams) >= 3:
-                recent_Cs = np.array([wc["C"] for wc in window_cams[-3:]])
-                smoothed_C = np.mean(recent_Cs, axis=0)
-                cur_t = 0.7 * cur_t + 0.3 * smoothed_C
-                window_cams[-1]["C"] = cur_t.copy()
+                # Update camera pose in world coordinates:
+                R_next = cur_R @ R_rel.T
+                C_next = cur_t + cur_R @ t_step
+                cur_R = R_next
+                cur_t = C_next
 
-            # Record TUM trajectory pose (timestamp tx ty tz qx qy qz qw)
-            q = rotation_matrix_to_quaternion(cur_R)
-            poses.append(f"{cur_time:.4f} {cur_t[0]:.6f} {cur_t[1]:.6f} {cur_t[2]:.6f} {q[0]:.6f} {q[1]:.6f} {q[2]:.6f} {q[3]:.6f}\n")
+                # 3. Multi-View Ray Triangulation with Strict Parallax & Geometry Checks
+                in_p1 = val_p1[inliers]
+                in_b1 = b1[inliers]
+                in_b2 = b2[inliers]
 
-        with open(trajectory_txt, "w", encoding="utf-8") as tf:
-            tf.writelines(poses)
+                C1 = prev_C if prev_C is not None else (cur_t - cur_R @ t_step)
+                R1 = prev_R if prev_R is not None else (cur_R @ R_rel)
+                C2 = cur_t
+                R2 = cur_R
 
-        dense_3d = np.array(pts_list, dtype=np.float32) if pts_list else np.zeros((1, 3), dtype=np.float32)
-        dense_rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.full((1, 3), 200, dtype=np.uint8)
+                d1 = (R1 @ in_b1.T).T
+                d2 = (R2 @ in_b2.T).T
+                w0 = C1 - C2
 
-        # Export point cloud (.ply)
-        try:
-            import trimesh
-            pc = trimesh.PointCloud(dense_3d, colors=dense_rgb)
-            pc.export(ply_out)
-            pc.export(os.path.join(output_dir, "points3D.ply"))
-            log(f"[*] Exported 360DVO point cloud ({len(dense_3d):,} points) to: {ply_out}")
-        except Exception as pe:
-            log(f"[Warning] Failed to export PLY via trimesh: {pe}")
+                for k in range(len(d1)):
+                    ray1 = d1[k]
+                    ray2 = d2[k]
+                    b_dot = np.dot(ray1, ray2)
+                    denom = 1.0 - b_dot * b_dot
+                    if denom > 1e-4:
+                        # Filter ill-conditioned near-zero and degenerate parallax
+                        ang_parallax = math.degrees(math.acos(np.clip(b_dot, -1.0, 1.0)))
+                        if 1.5 <= ang_parallax <= 65.0:
+                            d_dot_w0 = np.dot(ray1, w0)
+                            e_dot_w0 = np.dot(ray2, w0)
+                            l1 = (b_dot * e_dot_w0 - d_dot_w0) / denom
+                            l2 = (e_dot_w0 - b_dot * d_dot_w0) / denom
+                            if 0.2 < l1 < 35.0 and 0.2 < l2 < 35.0:
+                                pt1 = C1 + l1 * ray1
+                                pt2 = C2 + l2 * ray2
+                                if np.linalg.norm(pt1 - pt2) < 0.08 * min(l1, l2):
+                                    P_mid = (pt1 + pt2) / 2.0
+                                    u_k, v_k = int(in_p1[k, 0]), int(in_p1[k, 1])
+                                    b_c, g_c, r_c = prev_im_bgr[min(v_k, h-1), min(u_k, w-1)]
+                                    pts_list.append(P_mid)
+                                    rgb_list.append([int(r_c), int(g_c), int(b_c)])
+            else:
+                pass
+
+        # Extract keypoints for tracking into next frame
+        kps_new = cv2.goodFeaturesToTrack(
+            gray,
+            maxCorners=n_features,
+            qualityLevel=0.01,
+            minDistance=min_dist,
+            mask=mask
+        )
+        prev_kps = kps_new.reshape(-1, 2) if kps_new is not None else None
+        prev_gray = gray
+        prev_im_bgr = img_bgr
+        prev_R = cur_R.copy()
+        prev_C = cur_t.copy()
+
+        # Record camera state in ODBA sliding-window buffer
+        window_cams.append({
+            "idx": i,
+            "R": cur_R.copy(),
+            "C": cur_t.copy()
+        })
+        if len(window_cams) > max(4, local_ba_window):
+            window_cams.pop(0)
+
+        # Local trajectory smoothing (3-frame moving average) to suppress high-frequency jitter
+        if len(window_cams) >= 3:
+            recent_Cs = np.array([wc["C"] for wc in window_cams[-3:]])
+            smoothed_C = np.mean(recent_Cs, axis=0)
+            cur_t = 0.7 * cur_t + 0.3 * smoothed_C
+            window_cams[-1]["C"] = cur_t.copy()
+
+        # Record TUM trajectory pose (timestamp tx ty tz qx qy qz qw)
+        q = rotation_matrix_to_quaternion(cur_R)
+        poses.append(f"{cur_time:.4f} {cur_t[0]:.6f} {cur_t[1]:.6f} {cur_t[2]:.6f} {q[0]:.6f} {q[1]:.6f} {q[2]:.6f} {q[3]:.6f}\n")
+
+    with open(trajectory_txt, "w", encoding="utf-8") as tf:
+        tf.writelines(poses)
+
+    dense_3d = np.array(pts_list, dtype=np.float32) if pts_list else np.zeros((1, 3), dtype=np.float32)
+    dense_rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.full((1, 3), 200, dtype=np.uint8)
+
+    # Export point cloud (.ply)
+    try:
+        import trimesh
+        pc = trimesh.PointCloud(dense_3d, colors=dense_rgb)
+        pc.export(ply_out)
+        pc.export(os.path.join(output_dir, "points3D.ply"))
+        log(f"[*] Exported 360DVO point cloud ({len(dense_3d):,} points) to: {ply_out}")
+    except Exception as pe:
+        log(f"[Warning] Failed to export PLY via trimesh: {pe}")
 
     log(f"\n[*] Trajectory generated at: {trajectory_txt}")
     log("[*] Converting TUM Trajectory to Standard COLMAP sparse/0/ format...")
