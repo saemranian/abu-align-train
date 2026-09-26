@@ -756,6 +756,17 @@ def main():
         print("[ERROR] Could not start Viser server on any port 8080-8089.")
         sys.exit(1)
 
+    url = f"http://localhost:{active_port}"
+
+    import threading
+    def _open_browser_async():
+        try:
+            time.sleep(0.3)
+            webbrowser.open(url)
+        except Exception:
+            pass
+    threading.Thread(target=_open_browser_async, daemon=True).start()
+
     # Configure sleek fixed dark theme matching Abu Align & Train GUI
     server.gui.configure_theme(
         titlebar_content=None,
@@ -787,15 +798,9 @@ def main():
     workspace = InspectionWorkspace(server, runs, current_run_name, project_title,
         load_workspace_run, lambda: resolve_project_structure(target_dir)[2])
 
-    url = f"http://localhost:{active_port}"
     print(f"\n[READY] Interactive 3D Viewer running at: {url}")
     print(f"Viewing active run: {current_run_name}")
     print("Press Ctrl+C to stop viewer.\n")
-
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
 
     while True:
         time.sleep(0.1)

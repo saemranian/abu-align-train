@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from threading import RLock
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Tuple, Any
 import numpy as np
 from PIL import Image
@@ -86,6 +87,7 @@ class InspectionWorkspace:
         self.center, self.span = np.zeros(3), 1.0
         self.camera_options = {}
         self._thumb_cache = {}
+        self._thumb_executor = ThreadPoolExecutor(max_workers=6)
         gui = server.gui
         gui.add_markdown(f'## 3D workspace\n{title}')
         self.status = gui.add_markdown('Loading reconstruction…')
@@ -266,14 +268,18 @@ class InspectionWorkspace:
                     self.camera_options[name] = (key, i)
                 if i % step:
                     continue
-                thumb = self._get_thumbnail(camera.get('name', ''), run_path) if self.camera_thumbs.value else None
+                cam_name = camera.get('name', '')
+                cache_key = (cam_name, run_path)
+                cached_thumb = self._thumb_cache.get(cache_key)
                 handle = self.server.scene.add_camera_frustum(f'/inspection/{key}/camera/{i}',
                     fov=np.radians(60), aspect=1.5, scale=span*.018*self.camera_size.value,
                     color=tint, position=camera['pos'], wxyz=camera['wxyz'],
-                    image=thumb, format='jpeg',
+                    image=cached_thumb, format='jpeg',
                     visible=visible and self.cameras.value)
                 handle.on_click(lambda event, value=name: self.select_camera(value))
                 self.handles.append(handle)
+                if self.camera_thumbs.value and cached_thumb is None and cam_name:
+                    self._thumb_executor.submit(self._fetch_thumbnail_and_update, cam_name, run_path, handle)
             details.append(f'**{key} · {self.a.value if key == "A" else self.b.value}**\n\n'
                            f'{len(sampled):,} displayed / {len(layer["points"]):,} finite points · '
                            f'{len(cameras)} cameras · up to 250 frustums\n\n'
@@ -365,6 +371,14 @@ class InspectionWorkspace:
                     return c
         return None
 
+    def _fetch_thumbnail_and_update(self, cam_name: str, run_dir: str, handle):
+        thumb = self._get_thumbnail(cam_name, run_dir)
+        if thumb is not None and handle is not None:
+            try:
+                handle.image = thumb
+            except Exception:
+                pass
+
     def _get_thumbnail(self, cam_name: str, run_dir: str = "") -> Optional[np.ndarray]:
         if not cam_name:
             return None
@@ -377,8 +391,12 @@ class InspectionWorkspace:
             return None
         try:
             with Image.open(photo_path) as img:
+                try:
+                    img.draft("RGB", (160, 106))
+                except Exception:
+                    pass
                 img = img.convert("RGB")
-                img.thumbnail((160, 106), Image.Resampling.LANCZOS)
+                img.thumbnail((160, 106), Image.Resampling.BILINEAR)
                 arr = np.asarray(img, dtype=np.uint8)
                 self._thumb_cache[cache_key] = arr
                 return arr

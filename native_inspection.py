@@ -543,3 +543,8 @@ class NativeInspection:
     def _cleanup_inspection(self,event):
         if event.widget is self:
             self.after_cancel(self._poll_id)
+            if hasattr(self, '_thumb_executor'):
+                try:
+                    self._thumb_executor.shutdown(wait=False)
+                except Exception:
+                    pass

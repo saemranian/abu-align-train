@@ -11,6 +11,7 @@ import glob
 import math
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Tuple, Optional, Any, Callable
 
 import tkinter as tk
@@ -331,40 +332,77 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         self._last_mouse_x = 0
         self._last_mouse_y = 0
         self._is_dragging = False
-        self._thumb_cache: Dict[str, Optional[Image.Image]] = {}
+        self._thumb_cache: Dict[str, Any] = {}
+        self._thumb_executor = ThreadPoolExecutor(max_workers=4)
+        self._thumb_redraw_scheduled = False
         self._photo_image: Optional[ImageTk.PhotoImage] = None
 
         self._build_toolbar()
         self._build_canvas()
         self._bind_mouse_events()
 
+    def _schedule_thumb_redraw(self):
+        if not getattr(self, "_thumb_redraw_scheduled", False):
+            self._thumb_redraw_scheduled = True
+            try:
+                self.after(150, self._on_thumb_redraw)
+            except Exception:
+                self._thumb_redraw_scheduled = False
+
+    def _on_thumb_redraw(self):
+        self._thumb_redraw_scheduled = False
+        if not getattr(self, "_is_dragging", False):
+            self.render()
+
     def _get_camera_thumbnail(self, cam_name: str, file_path: Optional[str] = None) -> Optional[Image.Image]:
-        """Loads and caches downsampled thumbnail for frustum overlay."""
+        """Asynchronously loads and caches downsampled thumbnail for frustum overlay."""
         key = cam_name or file_path or ""
         if not key:
             return None
         if key in self._thumb_cache:
-            return self._thumb_cache[key]
+            val = self._thumb_cache[key]
+            return val if isinstance(val, Image.Image) else None
+
+        self._thumb_cache[key] = "queued"
 
         dataset_dir = None
         if hasattr(self, "master") and hasattr(self.master, "dataset_var"):
             dataset_dir = self.master.dataset_var.get()
+        run_dir = getattr(self, "active_run_dir", "")
 
-        img_path = resolve_camera_photo_path(key, getattr(self, "active_run_dir", ""), dataset_dir)
-        if not img_path:
-            self._thumb_cache[key] = None
-            return None
+        def _fetch():
+            img_path = resolve_camera_photo_path(key, run_dir, dataset_dir)
+            if not img_path:
+                self._thumb_cache[key] = None
+                return
+            try:
+                with Image.open(img_path) as im:
+                    try:
+                        im.draft("RGB", (128, 128))
+                    except Exception:
+                        pass
+                    im = im.convert("RGB")
+                    im.thumbnail((128, 128), Image.Resampling.BILINEAR)
+                    thumb = im.copy()
+                    self._thumb_cache[key] = thumb
+                    self._schedule_thumb_redraw()
+            except Exception:
+                self._thumb_cache[key] = None
 
-        try:
-            with Image.open(img_path) as im:
-                im = im.convert("RGB")
-                im.thumbnail((128, 128))
-                thumb = im.copy()
-                self._thumb_cache[key] = thumb
-                return thumb
-        except Exception:
-            self._thumb_cache[key] = None
-            return None
+        if hasattr(self, "_thumb_executor"):
+            try:
+                self._thumb_executor.submit(_fetch)
+            except Exception:
+                pass
+        return None
+
+    def destroy(self):
+        if hasattr(self, "_thumb_executor"):
+            try:
+                self._thumb_executor.shutdown(wait=False)
+            except Exception:
+                pass
+        super().destroy()
 
     def _build_toolbar(self):
         """Builds top inspection and control toolbar."""
