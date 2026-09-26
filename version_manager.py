@@ -112,6 +112,7 @@ def create_version_snapshot(version_str: str) -> None:
         "equirectangular_transcoder.py",
         "engine_tracker.py",
         "vggttt_engine.py",
+        "realityscan_engine.py",
         "workspace_3d.py",
         "version_manager.py",
         "VERSION.txt",

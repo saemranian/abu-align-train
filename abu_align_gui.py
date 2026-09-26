@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.8.5
+Abu Align & Train Version 0.0.8.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.8.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.8.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -334,6 +334,22 @@ class AbuAlignApp:
         self.dvo_patch_lifetime_var = tk.StringVar(value="13 (Default)")
         self.dvo_final_refine_var = tk.StringVar(value="12 (Standard)")
         self.dvo_gradient_bias_var = tk.BooleanVar(value=True)
+
+        # RealityScan (Epic Games / Capturing Reality) Alignment Options
+        self.rs_gui_var = tk.BooleanVar(value=False)
+        self.rs_prior_run_var = tk.StringVar(value="Auto-Detect Latest Run")
+        self.rs_feature_quality_var = tk.StringVar(value="High")
+        self.rs_max_features_mpx_var = tk.StringVar(value="80000")
+        self.rs_max_features_image_var = tk.StringVar(value="320000")
+        self.rs_overlap_var = tk.StringVar(value="Low")
+        self.rs_downscale_var = tk.StringVar(value="1")
+        self.rs_max_reproj_error_var = tk.StringVar(value="2.0")
+        self.rs_preselector_var = tk.StringVar(value="40000")
+        self.rs_sensitivity_var = tk.StringVar(value="High")
+        self.rs_distortion_var = tk.StringVar(value="Brown3")
+        self.rs_rematch_var = tk.BooleanVar(value=True)
+        self.rs_export_colmap_var = tk.BooleanVar(value=True)
+        self.rs_export_postshot_var = tk.BooleanVar(value=True)
 
         # Cache & Windowing Options
         self.cache_var = tk.BooleanVar(value=True)
@@ -462,8 +478,13 @@ class AbuAlignApp:
             expected = bool if isinstance(var, tk.BooleanVar) else str
             if type(value) is not expected:
                 raise ValueError(f"Invalid type for {key}: expected {expected.__name__}.")
-            if str(var) in choices and value not in choices[str(var)]:
-                raise ValueError(f"Unsupported value for {key}: {value!r}.")
+            if str(var) in choices:
+                allowed = choices[str(var)]
+                if isinstance(var, tk.BooleanVar):
+                    if value not in allowed and str(int(value)) not in allowed and str(value) not in allowed:
+                        raise ValueError(f"Unsupported value for {key}: {value!r}.")
+                elif value not in allowed:
+                    raise ValueError(f"Unsupported value for {key}: {value!r}.")
         return settings
 
     def _save_preset(self):
@@ -1058,6 +1079,118 @@ class AbuAlignApp:
         tk.Label(ttt_col3, text="⚡ Linear O(N) SfM Transformer (CVPR 2026)", font=("Segoe UI", 8, "bold"), fg="#60a5fa", bg=self.panel_bg).pack(anchor="w", pady=(1, 1))
         tk.Label(ttt_col3, text="• Fast-Weight Attention + Muon Optimizer\n• Aligns 1,000 photos in <1 minute on GPU\n• Linear complexity without quadratic bottleneck\n• Native COLMAP, transforms.json, points.ply\n• Automatic handoff to Abu Train (LichtFeld / 3DGRUT)", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, justify=tk.LEFT).pack(anchor="w")
 
+        # =========================================================================
+        # 7. Epic Games RealityScan Subpanel (Photogrammetry with Prior Trajectory)
+        # =========================================================================
+        self.panel_align_realityscan = tk.Frame(self.align_dynamic_container, bg=self.panel_bg)
+
+        # Col A: Prior Trajectory Ingestion & Execution Mode
+        rs_col1 = tk.Frame(self.panel_align_realityscan, bg=self.panel_bg)
+        rs_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(rs_col1, text="Prior Trajectory & Mode:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        rs_prior_frame = tk.Frame(rs_col1, bg=self.panel_bg)
+        rs_prior_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
+        tk.Label(rs_prior_frame, text="Prior Run:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=10, anchor="w").pack(side=tk.LEFT)
+        self.rs_prior_run_cb = ttk.Combobox(rs_prior_frame, textvariable=self.rs_prior_run_var, values=["Auto-Detect Latest Run", "Scratch (No Prior Trajectory)"], state="readonly", width=22, font=("Segoe UI", 8))
+        self.rs_prior_run_cb.pack(side=tk.LEFT)
+        self.rs_prior_run_cb.configure(postcommand=self._refresh_rs_prior_runs)
+        ToolTip(self.rs_prior_run_cb, "Prior Camera Trajectory Ingestion:\n• Auto-Detect Latest Run: Ingests cameras.csv / transforms.json computed by VGGT-Omega, VGG-TTT, ACE0, etc.\n• Scratch: Runs pure RealityScan feature matching & alignment without prior camera poses.")
+
+        rs_mode_frame = tk.Frame(rs_col1, bg=self.panel_bg)
+        rs_mode_frame.pack(anchor="w", pady=(2, 2))
+        rb_rs_cli = tk.Radiobutton(rs_mode_frame, text="Background CLI (Fast Headless)", variable=self.rs_gui_var, value=False, bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
+        rb_rs_cli.pack(anchor="w")
+        rb_rs_gui = tk.Radiobutton(rs_mode_frame, text="RealityScan GUI Window (Interactive)", variable=self.rs_gui_var, value=True, bg=self.panel_bg, fg=self.text_primary, selectcolor=self.bg_dark, activebackground=self.panel_bg, font=("Segoe UI", 8))
+        rb_rs_gui.pack(anchor="w")
+        ToolTip(rb_rs_cli, "Background CLI Mode: Runs RealityScan.exe headless with live console streaming into Abu Align console, auto-saves project, and exports outputs.")
+        ToolTip(rb_rs_gui, "Interactive GUI Mode: Opens the native RealityScan GUI application window with your dataset and prior trajectory loaded for interactive inspection and editing.")
+
+        chk_rs_colmap = tk.Checkbutton(rs_col1, text="Export COLMAP (sparse/0/)", variable=self.rs_export_colmap_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_rs_colmap.pack(anchor="w", pady=(2, 0))
+        ToolTip(chk_rs_colmap, "Export COLMAP sparse/0/ structure (cameras.bin, images.bin, points3D.bin) for instant training in LichtFeld Studio, 3DGRUT, and Nerfstudio.")
+
+        chk_rs_post = tk.Checkbutton(rs_col1, text="Export Postshot (cameras.csv, points.ply)", variable=self.rs_export_postshot_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_rs_post.pack(anchor="w", pady=(1, 0))
+        ToolTip(chk_rs_post, "Export Postshot / RealityCapture formats: cameras.csv, points.ply, and universal transforms.json.")
+
+        # Col B: Feature Detection Quality & Preselector (Screenshot 3)
+        rs_col2 = tk.Frame(self.panel_align_realityscan, bg=self.panel_bg)
+        rs_col2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(rs_col2, text="Feature Detection Quality:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        f_q_frame = tk.Frame(rs_col2, bg=self.panel_bg)
+        f_q_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_q_frame, text="Feature Quality:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_q = ttk.Combobox(f_q_frame, textvariable=self.rs_feature_quality_var, values=["High", "Normal", "Low"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_f_q.pack(side=tk.LEFT)
+        ToolTip(cb_f_q, "Feature detection quality:\n• High [Screenshot default]: Maximum keypoint fidelity.\n• Normal / Low: Faster feature extraction.")
+
+        f_mpx_frame = tk.Frame(rs_col2, bg=self.panel_bg)
+        f_mpx_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_mpx_frame, text="Max Feat / Mpx:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_mpx = ttk.Combobox(f_mpx_frame, textvariable=self.rs_max_features_mpx_var, values=["40000", "80000", "120000"], state="normal", width=12, font=("Segoe UI", 8))
+        cb_f_mpx.pack(side=tk.LEFT)
+        ToolTip(cb_f_mpx, "Max features per mpx:\n[Screenshot default: 80 000]. Defines feature budget scaled by sensor megapixel count.")
+
+        f_img_frame = tk.Frame(rs_col2, bg=self.panel_bg)
+        f_img_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_img_frame, text="Max Feat / Image:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_img = ttk.Combobox(f_img_frame, textvariable=self.rs_max_features_image_var, values=["160000", "320000", "500000"], state="normal", width=12, font=("Segoe UI", 8))
+        cb_f_img.pack(side=tk.LEFT)
+        ToolTip(cb_f_img, "Max features per image:\n[Screenshot default: 320 000]. Hard upper limit on detected keypoints per image.")
+
+        f_ovl_frame = tk.Frame(rs_col2, bg=self.panel_bg)
+        f_ovl_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_ovl_frame, text="Image Overlap:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_ovl = ttk.Combobox(f_ovl_frame, textvariable=self.rs_overlap_var, values=["Low", "Medium", "High"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_f_ovl.pack(side=tk.LEFT)
+        ToolTip(cb_f_ovl, "Image overlap expectation:\n• Low [Screenshot default]: Wider matching search space for sparse/drone fly-throughs.\n• Medium / High: Tighter matching neighborhood for dense scans.")
+
+        f_down_frame = tk.Frame(rs_col2, bg=self.panel_bg)
+        f_down_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_down_frame, text="Image Downscale:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_down = ttk.Combobox(f_down_frame, textvariable=self.rs_downscale_var, values=["1", "2", "4"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_f_down.pack(side=tk.LEFT)
+        ToolTip(cb_f_down, "Image downscale factor for feature detection:\n• 1 [Screenshot default]: Full 100% resolution feature extraction.")
+
+        # Col C: Alignment Settings & Distortion Model (Screenshot 3 & 4)
+        rs_col3 = tk.Frame(self.panel_align_realityscan, bg=self.panel_bg)
+        rs_col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+        tk.Label(rs_col3, text="Alignment & Calibration:", font=("Segoe UI", 9, "bold"), fg=self.text_primary, bg=self.panel_bg).pack(anchor="w")
+
+        f_err_frame = tk.Frame(rs_col3, bg=self.panel_bg)
+        f_err_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_err_frame, text="Max Reproj Error:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_err = ttk.Combobox(f_err_frame, textvariable=self.rs_max_reproj_error_var, values=["1.0", "1.5", "2.0", "3.0"], state="normal", width=12, font=("Segoe UI", 8))
+        cb_f_err.pack(side=tk.LEFT)
+        ToolTip(cb_f_err, "Max reprojection error (px):\n[Screenshot default: 2.0]. Inlier threshold for bundle adjustment.")
+
+        f_pres_frame = tk.Frame(rs_col3, bg=self.panel_bg)
+        f_pres_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_pres_frame, text="Preselector Feat:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_pres = ttk.Combobox(f_pres_frame, textvariable=self.rs_preselector_var, values=["20000", "40000", "60000"], state="normal", width=12, font=("Segoe UI", 8))
+        cb_f_pres.pack(side=tk.LEFT)
+        ToolTip(cb_f_pres, "Preselector features count:\n[Screenshot default: 40 000]. Rapid candidate pair filtering.")
+
+        f_sens_frame = tk.Frame(rs_col3, bg=self.panel_bg)
+        f_sens_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_sens_frame, text="Sensitivity:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_sens = ttk.Combobox(f_sens_frame, textvariable=self.rs_sensitivity_var, values=["High", "Normal", "Low"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_f_sens.pack(side=tk.LEFT)
+        ToolTip(cb_f_sens, "Detector sensitivity:\n[Screenshot default: High].")
+
+        f_dist_frame = tk.Frame(rs_col3, bg=self.panel_bg)
+        f_dist_frame.pack(anchor="w", pady=(1, 1), fill=tk.X)
+        tk.Label(f_dist_frame, text="Distortion Model:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w").pack(side=tk.LEFT)
+        cb_f_dist = ttk.Combobox(f_dist_frame, textvariable=self.rs_distortion_var, values=["Brown3", "Brown4", "Division"], state="readonly", width=12, font=("Segoe UI", 8))
+        cb_f_dist.pack(side=tk.LEFT)
+        ToolTip(cb_f_dist, "Lens distortion model:\n• Brown3 [Screenshot default]: Standard physical Brown 3 radial + tangential lens model.")
+
+        chk_rs_rematch = tk.Checkbutton(rs_col3, text="Force Component Rematch", variable=self.rs_rematch_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_rs_rematch.pack(anchor="w", pady=(2, 0))
+        ToolTip(chk_rs_rematch, "Force component rematch:\n[Screenshot default: Yes]. Exhaustively attempts connecting separate alignment components into a unified scene.")
+
     def _update_align_panel(self):
         engine = self.engine_var.get()
         self.panel_align_vggt.pack_forget()
@@ -1069,6 +1202,8 @@ class AbuAlignApp:
             self.panel_align_360dvo.pack_forget()
         if hasattr(self, "panel_align_vggttt"):
             self.panel_align_vggttt.pack_forget()
+        if hasattr(self, "panel_align_realityscan"):
+            self.panel_align_realityscan.pack_forget()
 
         if engine in ["vggt_omega", "vggt"]:
             self.panel_align_vggt.pack(fill=tk.BOTH, expand=True)
@@ -1089,6 +1224,9 @@ class AbuAlignApp:
                 self.panel_align_opensfm.pack(fill=tk.BOTH, expand=True)
             elif engine in ["360dvo", "dvo"]:
                 self.panel_align_360dvo.pack(fill=tk.BOTH, expand=True)
+            elif engine in ["realityscan", "realitycapture", "rc"]:
+                if hasattr(self, "panel_align_realityscan"):
+                    self.panel_align_realityscan.pack(fill=tk.BOTH, expand=True)
 
     def _build_train_panels(self):
         """Creates the 3 engine-specific training panels inside self.train_dynamic_container."""
@@ -1451,6 +1589,7 @@ class AbuAlignApp:
 
         # Discover all available alignment runs in results/
         self._refresh_train_target_runs()
+        self._refresh_rs_prior_runs()
         if hasattr(self, "workspace_3d"):
             try:
                 self.workspace_3d.refresh_runs()
@@ -1478,6 +1617,27 @@ class AbuAlignApp:
                 self.train_target_run_var.set(runs[1])
             elif cur not in runs:
                 self.train_target_run_var.set(runs[0])
+        return runs
+
+    def _refresh_rs_prior_runs(self, select_newest: bool = False) -> List[str]:
+        """Discovers all available alignment runs in results/ to use as RealityScan prior trajectories."""
+        runs = ["Auto-Detect Latest Run", "Scratch (No Prior Trajectory)"]
+        path = self.dataset_var.get() if hasattr(self, "dataset_var") else ""
+        if path and os.path.isdir(path):
+            cand_results = os.path.join(path, "results")
+            if not os.path.isdir(cand_results):
+                cand_p_results = os.path.join(os.path.dirname(path), "results")
+                if os.path.isdir(cand_p_results):
+                    cand_results = cand_p_results
+            if os.path.isdir(cand_results):
+                subdirs = [d for d in os.listdir(cand_results) if os.path.isdir(os.path.join(cand_results, d)) and d.startswith("sparse_")]
+                subdirs.sort(key=lambda d: os.path.getmtime(os.path.join(cand_results, d)), reverse=True)
+                runs.extend(subdirs)
+        if hasattr(self, "rs_prior_run_cb"):
+            self.rs_prior_run_cb["values"] = runs
+            cur = self.rs_prior_run_var.get() if hasattr(self, "rs_prior_run_var") else ""
+            if cur not in runs:
+                self.rs_prior_run_var.set(runs[0])
         return runs
 
     def _view_training_run_report(self):
@@ -3613,6 +3773,31 @@ class AbuAlignApp:
                 cmd.append("--no_dvo_viz")
             if self.dvo_weights_var.get().strip():
                 cmd.extend(["--dvo_weights", self.dvo_weights_var.get().strip()])
+        elif align_engine in ["realityscan", "realitycapture", "rc"]:
+            if self.rs_gui_var.get():
+                cmd.append("--rs_gui")
+            prior_sel = str(self.rs_prior_run_var.get()).strip()
+            if prior_sel:
+                cmd.extend(["--rs_prior_run", prior_sel])
+            cmd.extend([
+                "--rs_feature_quality", str(self.rs_feature_quality_var.get()).lower(),
+                "--rs_max_features_mpx", str(self.rs_max_features_mpx_var.get()),
+                "--rs_max_features_image", str(self.rs_max_features_image_var.get()),
+                "--rs_overlap", str(self.rs_overlap_var.get()).lower(),
+                "--rs_downscale", str(self.rs_downscale_var.get()),
+                "--rs_max_reproj_error", str(self.rs_max_reproj_error_var.get()),
+                "--rs_preselector", str(self.rs_preselector_var.get()),
+                "--rs_sensitivity", str(self.rs_sensitivity_var.get()).lower(),
+                "--rs_distortion", str(self.rs_distortion_var.get()),
+            ])
+            if self.rs_rematch_var.get():
+                cmd.append("--rs_rematch")
+            else:
+                cmd.append("--no_rs_rematch")
+            if not self.rs_export_colmap_var.get():
+                cmd.append("--no_rs_export_colmap")
+            if not self.rs_export_postshot_var.get():
+                cmd.append("--no_rs_export_postshot")
 
         # Active 3DGS Training Engine Options (logged in report, executed if auto-train enabled)
         train_engine = self.train_engine_var.get()
@@ -3904,7 +4089,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.8.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.8.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4456,7 +4641,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.8.5 - {title}")
+        doc_win.title(f"Abu Align v0.0.8.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5083,7 +5268,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.8.5\n"
+            "Abu Align & Train - Version 0.0.8.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

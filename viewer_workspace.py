@@ -2,7 +2,9 @@
 from collections import OrderedDict
 from threading import RLock
 import os
+from typing import Optional, List, Dict, Tuple, Any
 import numpy as np
+from PIL import Image
 from scipy.spatial.transform import Rotation
 from scipy.spatial import cKDTree
 
@@ -83,11 +85,14 @@ class InspectionWorkspace:
         self.selection_handle = None
         self.center, self.span = np.zeros(3), 1.0
         self.camera_options = {}
+        self._thumb_cache = {}
         gui = server.gui
         gui.add_markdown(f'## 3D workspace\n{title}')
         self.status = gui.add_markdown('Loading reconstruction…')
         with gui.add_folder('Navigate'):
             self.views = gui.add_button_group('View', ('Fit', 'Top', 'Front', 'Right'))
+            self.fit_traj_btn = gui.add_button('🎯 Fit the trajectory')
+            self.open_run_btn = gui.add_button('📂 Open Run Folder')
             self.zoom = gui.add_button_group('Distance', ('Closer', 'Farther'))
             self.bookmark = gui.add_button_group('Viewpoint', ('Save view', 'Restore view'))
             self.up_axis = gui.add_dropdown('World up', ('Z up', 'Y up'), initial_value='Z up',
@@ -114,6 +119,7 @@ class InspectionWorkspace:
         with gui.add_folder('Scene layers', expand_by_default=False):
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
+            self.camera_thumbs = gui.add_checkbox('Frustum thumbnails', True)
             self.paths = gui.add_checkbox('Camera sequence', True, hint='Connects camera centers in file order; not an inferred capture path.')
             self.grid = gui.add_checkbox('Ground grid', False)
             self.point_size = gui.add_slider('Point size', 0.001, 0.03, 0.001, 0.004)
@@ -125,20 +131,26 @@ class InspectionWorkspace:
         with gui.add_folder('Inspect a camera', expand_by_default=False):
             self.camera = gui.add_dropdown('Camera', ('No cameras',))
             self.camera_actions = gui.add_button_group('Selection', ('Previous', 'Next', 'Focus', 'Look through'))
+            self.open_photo_btn = gui.add_button('🖼️ Open Image in Window')
+            self.auto_open_photo = gui.add_checkbox('Open image on select', True,
+                hint='Automatically open high-res photo in separate window when a camera is selected or clicked.')
             self.camera_info = gui.add_markdown('Click a camera frustum or choose an image above. Frustum optics are illustrative.')
         with gui.add_folder('Run details', expand_by_default=False):
             self.details = gui.add_markdown('')
 
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
-                        self.cameras, self.paths, self.grid, self.point_size, self.camera_size,
+                        self.cameras, self.camera_thumbs, self.paths, self.grid, self.point_size, self.camera_size,
                         self.color, self.budget, self.trim):
             control.on_update(self.update)
         self.views.on_click(self.navigate)
+        self.fit_traj_btn.on_click(self.fit_trajectory)
+        self.open_run_btn.on_click(self.open_run_folder)
         self.zoom.on_click(self.zoom_view)
         self.bookmark.on_click(self.saved_view)
         self.refresh.on_click(self.refresh_runs)
         self.camera.on_update(self.inspect_camera)
         self.camera_actions.on_click(self.camera_action)
+        self.open_photo_btn.on_click(self.open_selected_photo)
         server.on_client_connect(lambda client: self.set_view(client, 'Fit'))
         self.update()
 
@@ -246,6 +258,7 @@ class InspectionWorkspace:
                 self.handles.append(self.server.scene.add_line_segments(f'/inspection/{key}/path',
                     np.stack((positions[:-1], positions[1:]), axis=1), tint, line_width=2,
                     visible=visible and self.paths.value))
+            run_path = self.runs.get(self.a.value if key == 'A' else self.b.value, '')
             step = max(1, int(np.ceil(len(cameras)/250)))
             for i, camera in enumerate(cameras):
                 name = f'{key} · {i+1:04d} · {camera["name"]}'
@@ -253,9 +266,12 @@ class InspectionWorkspace:
                     self.camera_options[name] = (key, i)
                 if i % step:
                     continue
+                thumb = self._get_thumbnail(camera.get('name', ''), run_path) if self.camera_thumbs.value else None
                 handle = self.server.scene.add_camera_frustum(f'/inspection/{key}/camera/{i}',
                     fov=np.radians(60), aspect=1.5, scale=span*.018*self.camera_size.value,
-                    color=tint, position=camera['pos'], wxyz=camera['wxyz'], visible=visible and self.cameras.value)
+                    color=tint, position=camera['pos'], wxyz=camera['wxyz'],
+                    image=thumb, format='jpeg',
+                    visible=visible and self.cameras.value)
                 handle.on_click(lambda event, value=name: self.select_camera(value))
                 self.handles.append(handle)
             details.append(f'**{key} · {self.a.value if key == "A" else self.b.value}**\n\n'
@@ -318,9 +334,107 @@ class InspectionWorkspace:
             else:
                 self.navigation_info.content = 'No saved viewpoint yet. Choose Save view first.'
 
+    def _resolve_photo(self, cam_name: str, run_dir: str = "") -> Optional[str]:
+        if not cam_name:
+            return None
+        if os.path.isabs(cam_name) and os.path.isfile(cam_name):
+            return cam_name
+        clean_name = os.path.basename(cam_name)
+        dirs_to_check = []
+        if run_dir and os.path.isdir(run_dir):
+            dirs_to_check.extend([
+                run_dir,
+                os.path.join(run_dir, "images"),
+                os.path.join(run_dir, "3dgs_dataset", "images"),
+                os.path.join(run_dir, "input"),
+                os.path.dirname(run_dir),
+                os.path.dirname(os.path.dirname(run_dir)),
+                os.path.join(os.path.dirname(os.path.dirname(run_dir)), "images"),
+                os.path.join(os.path.dirname(os.path.dirname(run_dir)), "input"),
+            ])
+        for d in dirs_to_check:
+            if not d or not os.path.isdir(d):
+                continue
+            for c in [os.path.join(d, cam_name), os.path.join(d, clean_name)]:
+                if os.path.isfile(c):
+                    return c
+            base, _ = os.path.splitext(clean_name)
+            for ext in [".jpg", ".JPG", ".jpeg", ".JPEG", ".png", ".PNG", ".bmp", ".BMP"]:
+                c = os.path.join(d, base + ext)
+                if os.path.isfile(c):
+                    return c
+        return None
+
+    def _get_thumbnail(self, cam_name: str, run_dir: str = "") -> Optional[np.ndarray]:
+        if not cam_name:
+            return None
+        cache_key = (cam_name, run_dir)
+        if cache_key in self._thumb_cache:
+            return self._thumb_cache[cache_key]
+        photo_path = self._resolve_photo(cam_name, run_dir)
+        if not photo_path:
+            self._thumb_cache[cache_key] = None
+            return None
+        try:
+            with Image.open(photo_path) as img:
+                img = img.convert("RGB")
+                img.thumbnail((160, 106), Image.Resampling.LANCZOS)
+                arr = np.asarray(img, dtype=np.uint8)
+                self._thumb_cache[cache_key] = arr
+                return arr
+        except Exception:
+            self._thumb_cache[cache_key] = None
+            return None
+
+    def fit_trajectory(self, event=None):
+        with self.lock:
+            positions = []
+            for key in ('A', 'B'):
+                if key in self.layers and (self.mode.value == 'Overlay' or (key == 'A' and self.mode.value == 'A only') or (key == 'B' and self.mode.value == 'B only')):
+                    cams = self.layers[key].get('cameras', [])
+                    for c in cams:
+                        positions.append(c['pos'])
+            if not positions:
+                for client in self.clients(event):
+                    self.set_view(client, 'Fit')
+                return
+            positions = np.asarray(positions)
+            traj_center = np.mean(positions, axis=0)
+            diffs = positions - traj_center
+            dist = np.linalg.norm(diffs, axis=1)
+            traj_span = max(float(np.max(dist)) * 2.0, 0.5)
+
+            direction = np.array((1.0, -1.5, 1.0), dtype=float)
+            direction /= np.linalg.norm(direction)
+            up = np.array((0.0, 0.0, 1.0))
+            if self.up_axis.value == 'Y up':
+                direction = direction[[0, 2, 1]] * [1, 1, -1]
+                up = up[[0, 2, 1]] * [1, 1, -1]
+
+            for client in self.clients(event):
+                client.camera.up_direction = up
+                fov = float(getattr(client.camera, 'fov', np.radians(60)))
+                aspect = max(.1, float(getattr(client.camera, 'aspect', 1)))
+                half_angle = min(fov/2, np.arctan(np.tan(fov/2)*aspect))
+                distance = traj_span*.5/max(.05, np.sin(half_angle))*1.25
+                client.camera.position = traj_center + direction*distance
+                client.camera.look_at = traj_center
+            self.navigation_info.content = f'Fitted viewpoint to trajectory ({len(positions)} cameras).'
+
+    def open_run_folder(self, event=None):
+        run_name = self.a.value if self.mode.value != 'B only' else self.b.value
+        run_path = self.runs.get(run_name, '')
+        if run_path and os.path.isdir(run_path):
+            try:
+                os.startfile(run_path)
+            except Exception as e:
+                print(f"[viewer] Error opening run folder: {e}")
+
     def select_camera(self, name):
         self.camera.value = name
         self.inspect_camera()
+        if self.auto_open_photo.value:
+            self.open_selected_photo()
 
     def inspect_camera(self, event=None):
         if self.selection_handle is not None:
@@ -330,11 +444,53 @@ class InspectionWorkspace:
             return
         key, index = self.camera_options[self.camera.value]
         camera = self.layers[key]['cameras'][index]
+        run_name = self.a.value if key == 'A' else self.b.value
+        run_path = self.runs.get(run_name, '')
+        cam_name = camera.get('name', '')
+        thumb = self._get_thumbnail(cam_name, run_path) if self.camera_thumbs.value else None
+        photo_path = self._resolve_photo(cam_name, run_path)
+
         self.selection_handle = self.server.scene.add_camera_frustum('/inspection/selected',
             fov=np.radians(60), aspect=1.5, scale=self.span*.022*self.camera_size.value,
             color=(255, 220, 125), line_width=3, position=camera['pos'], wxyz=camera['wxyz'],
+            image=thumb, format='jpeg',
             visible=self.cameras.value)
-        self.camera_info.content = f'**{camera["name"]}**\n\nLayer {key} · position ' + ', '.join(f'{v:.4g}' for v in camera['pos']) + '\n\nFrustum FOV is illustrative (60°), not calibrated optics.'
+        photo_info = f'\n\n📷 Photo: `{photo_path}`' if photo_path else '\n\n📷 Photo: *(not found on disk)*'
+        self.camera_info.content = (
+            f'**{cam_name}**\n\n'
+            f'Layer {key} · position ' + ', '.join(f'{v:.4g}' for v in camera['pos']) +
+            photo_info + '\n\nFrustum FOV is illustrative (60°), not calibrated optics.'
+        )
+
+    def open_selected_photo(self, event=None):
+        if self.camera.value not in self.camera_options:
+            return
+        key, index = self.camera_options[self.camera.value]
+        camera = self.layers[key]['cameras'][index]
+        run_name = self.a.value if key == 'A' else self.b.value
+        run_path = self.runs.get(run_name, '')
+        cam_name = camera.get('name', '')
+        photo_path = self._resolve_photo(cam_name, run_path)
+        if not photo_path or not os.path.isfile(photo_path):
+            self.camera_info.content = f'**{cam_name}**\n\n⚠️ Image file not found on disk for this camera.'
+            return
+        try:
+            os.startfile(photo_path)
+        except Exception as e:
+            print(f"[viewer] Error opening photo with startfile: {e}")
+        try:
+            with Image.open(photo_path) as img:
+                img = img.convert('RGB')
+                img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                arr = np.asarray(img, dtype=np.uint8)
+            modal = self.server.gui.add_modal(f'Photo: {os.path.basename(photo_path)}')
+            with modal:
+                self.server.gui.add_markdown(f'**File:** `{photo_path}`\n\n**Camera:** `{cam_name}`')
+                self.server.gui.add_image(arr, format='jpeg')
+                close_btn = self.server.gui.add_button('Close')
+                close_btn.on_click(lambda _: modal.close())
+        except Exception as e:
+            print(f"[viewer] Error opening browser photo modal: {e}")
 
     def camera_action(self, event):
         with self.lock:

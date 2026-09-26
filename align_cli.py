@@ -37,6 +37,8 @@ def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
         engine_suffix = "opensfm"
     elif "ttt" in eng_lower or "vggt3" in eng_lower:
         engine_suffix = "vggttt"
+    elif "realityscan" in eng_lower or "realitycapture" in eng_lower or "rc" in eng_lower:
+        engine_suffix = "realityscan"
     else:
         engine_suffix = "vggt"
     if use_ba:
@@ -84,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1485,7 +1487,22 @@ def main():
     parser.add_argument("--check_updates", "--check_engines", action="store_true", help="Check upstream GitHub repositories for updates across all 11 engines and print a diagnostic report")
     parser.add_argument("--input", "-i", type=str, required=False, default=None, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), or '360dvo' (Deep 360 Visual Odometry)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo", "realityscan", "realitycapture", "rc"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), '360dvo' (Deep 360 Visual Odometry), or 'realityscan' (Epic Games / Capturing Reality)")
+    # RealityScan / RealityCapture Options
+    parser.add_argument("--rs_gui", action="store_true", default=False, help="Launch interactive RealityScan GUI window instead of running headless in background")
+    parser.add_argument("--rs_prior_run", type=str, default=None, help="Custom prior alignment run folder or cameras.csv path to ingest")
+    parser.add_argument("--rs_feature_quality", choices=["High", "Normal"], default="High", help="Feature detection quality in RealityScan (default: High)")
+    parser.add_argument("--rs_max_features_mpx", type=int, default=80000, help="Max features per megapixel in RealityScan (default: 80000)")
+    parser.add_argument("--rs_max_features_image", type=int, default=320000, help="Max features per image in RealityScan (default: 320000)")
+    parser.add_argument("--rs_overlap", choices=["Low", "Medium", "High"], default="Low", help="Image overlap setting in RealityScan (default: Low)")
+    parser.add_argument("--rs_downscale", type=int, default=1, help="Image downscale factor in RealityScan (default: 1)")
+    parser.add_argument("--rs_max_reproj_error", type=float, default=2.0, help="Max feature reprojection error in RealityScan (default: 2.0)")
+    parser.add_argument("--rs_preselector_features", type=int, default=40000, help="Preselector features in RealityScan (default: 40000)")
+    parser.add_argument("--rs_sensitivity", choices=["Low", "Medium", "High", "Ultra"], default="High", help="Detector sensitivity in RealityScan (default: High)")
+    parser.add_argument("--rs_distortion", choices=["Brown3", "Brown4", "Brown3WithTangential2", "Division"], default="Brown3", help="Lens distortion model in RealityScan (default: Brown3)")
+    parser.add_argument("--no_rs_rematch", dest="rs_rematch", action="store_false", default=True, help="Disable force component rematch in RealityScan")
+    parser.add_argument("--no_rs_export_colmap", dest="rs_export_colmap", action="store_false", default=True, help="Disable COLMAP export from RealityScan")
+    parser.add_argument("--no_rs_export_postshot", dest="rs_export_postshot", action="store_false", default=True, help="Disable Postshot export from RealityScan")
     # NVIDIA VGG-T3 (VGG-TTT) Options
     parser.add_argument("--vggttt_weights", type=str, default=None, help="Custom checkpoint path (.safetensors or .pt) for NVIDIA VGG-T3")
     parser.add_argument("--vggttt_conf", type=str, default="adaptive", help="Confidence threshold for VGG-T3 depth point extraction ('adaptive', or numerical like 2.0; lower=denser)")
@@ -2144,7 +2161,38 @@ def main():
         )
         inf_elapsed = time.time() - inf_start
         print()
-        print(f"      * VGG-T3 Reconstruction Finished in: {inf_elapsed:.2f}s ({inf_elapsed/max(num_frames, 1):.3f}s per view)")
+    elif engine in ["realityscan", "realitycapture", "capturingreality", "rc"]:
+        print("[3/5] Starting Epic Games RealityScan Photogrammetry Engine...")
+        print(f"      * Execution Mode:       {'Interactive Window (GUI)' if getattr(args, 'rs_gui', False) else 'Headless (Background CLI)'}")
+        print(f"      * Feature Quality:      {getattr(args, 'rs_feature_quality', 'High')}")
+        print(f"      * Features / Mpx:       {getattr(args, 'rs_max_features_mpx', 80000):,}")
+        print(f"      * Features / Image:     {getattr(args, 'rs_max_features_image', 320000):,}")
+        print(f"      * Image Overlap:        {getattr(args, 'rs_overlap', 'Low')}")
+        print(f"      * Distortion Model:     {getattr(args, 'rs_distortion', 'Brown3')}")
+        inf_start = time.time()
+        from realityscan_engine import run_realityscan_alignment
+        reconstruction, dense_3d, dense_rgb = run_realityscan_alignment(
+            images_dir=scan_dir,
+            output_dir=output_dir,
+            prior_trajectory_csv=getattr(args, "rs_prior_run", None),
+            headless=not getattr(args, "rs_gui", False),
+            feature_detection_quality=getattr(args, "rs_feature_quality", "High"),
+            max_features_per_mpx=getattr(args, "rs_max_features_mpx", 80000),
+            max_features_per_image=getattr(args, "rs_max_features_image", 320000),
+            image_overlap=getattr(args, "rs_overlap", "Low"),
+            image_downscale_factor=getattr(args, "rs_downscale", 1),
+            max_feature_reprojection_error=getattr(args, "rs_max_reproj_error", 2.0),
+            force_component_rematch=getattr(args, "rs_rematch", True),
+            preselector_features=getattr(args, "rs_preselector_features", 40000),
+            detector_sensitivity=getattr(args, "rs_sensitivity", "High"),
+            distortion_model=getattr(args, "rs_distortion", "Brown3"),
+            export_colmap=getattr(args, "rs_export_colmap", True),
+            export_postshot=getattr(args, "rs_export_postshot", True),
+            progress_callback=print,
+        )
+        inf_elapsed = time.time() - inf_start
+        print()
+        print(f"      * RealityScan Alignment Finished in: {inf_elapsed:.2f}s ({inf_elapsed/max(num_frames, 1):.3f}s per view)")
         print()
     else:
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
@@ -2543,6 +2591,23 @@ def main():
             f"   * CPU Memory Offload:      {offload_str}",
             f"   * TTT Inner Steps:         {getattr(args, 'vggttt_ttt_steps', 1)}",
             f"   * 3D Point Head:           {'Global Transformer Point Head' if getattr(args, 'vggttt_global_pred', False) else 'Unprojected Depth & Intrinsics'}",
+        ])
+    elif engine in ["realityscan", "realitycapture", "rc"]:
+        report_lines.extend([
+            f"   * Execution Mode:          {'Interactive Window (GUI)' if getattr(args, 'rs_gui', False) else 'Headless (Background CLI)'}",
+            f"   * Prior Trajectory Input:  {getattr(args, 'rs_prior_run', 'Auto-Discovered from Previous Run')}",
+            f"   * Feature Quality:         {getattr(args, 'rs_feature_quality', 'High')}",
+            f"   * Max Features / Mpx:      {getattr(args, 'rs_max_features_mpx', 80000):,}",
+            f"   * Max Features / Image:    {getattr(args, 'rs_max_features_image', 320000):,}",
+            f"   * Image Overlap:           {getattr(args, 'rs_overlap', 'Low')}",
+            f"   * Image Downscale Factor:  {getattr(args, 'rs_downscale', 1)}",
+            f"   * Max Reprojection Error:  {getattr(args, 'rs_max_reproj_error', 2.0)} px",
+            f"   * Preselector Features:    {getattr(args, 'rs_preselector_features', 40000):,}",
+            f"   * Detector Sensitivity:    {getattr(args, 'rs_sensitivity', 'High')}",
+            f"   * Lens Distortion Model:   {getattr(args, 'rs_distortion', 'Brown3')}",
+            f"   * Force Component Rematch: {'Active' if getattr(args, 'rs_rematch', True) else 'Disabled'}",
+            f"   * COLMAP (LichtFeld) Export:{'Enabled' if getattr(args, 'rs_export_colmap', True) else 'Disabled'}",
+            f"   * Postshot Export:         {'Enabled (cameras.csv, points.ply)' if getattr(args, 'rs_export_postshot', True) else 'Disabled'}",
         ])
     else:
         report_lines.extend([

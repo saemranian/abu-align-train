@@ -7,9 +7,133 @@ import tkinter as tk
 from tkinter import ttk
 import numpy as np
 from scipy.spatial.transform import Rotation
+from PIL import Image, ImageTk
 from desktop_ui import BG, SURFACE, FIELD, TEXT, MUTED, ACCENT, button, label, ScrollPage
 from rig_designer_ui import wrap_row, friendly_choices
 from viewer_workspace import camera_pairs, similarity, transform_cameras, cloud_distances, scene_bounds
+
+
+class CameraPhotoViewer(tk.Toplevel):
+    """Separate inspection window displaying the high-resolution photo for the selected camera."""
+    def __init__(self, master, on_step=None, on_focus=None, on_look=None):
+        super().__init__(master)
+        self.title("Abu Align - Camera Photo Inspection")
+        self.geometry("820x660")
+        self.minsize(480, 360)
+        self.configure(bg=BG)
+
+        self.on_step = on_step
+        self.on_focus = on_focus
+        self.on_look = on_look
+        self.current_img_path = None
+        self._raw_pil = None
+        self._tk_img = None
+
+        # Top Header Bar
+        top_bar = tk.Frame(self, bg=SURFACE, padx=12, pady=8)
+        top_bar.pack(fill="x", side="top")
+        self.title_lbl = tk.Label(top_bar, text="Camera Photo", font=("Segoe UI", 10, "bold"), fg=TEXT, bg=SURFACE)
+        self.title_lbl.pack(side="left")
+        self.meta_lbl = tk.Label(top_bar, text="", font=("Segoe UI", 9), fg=MUTED, bg=SURFACE)
+        self.meta_lbl.pack(side="right")
+
+        # Bottom Action Bar
+        bottom_bar = tk.Frame(self, bg=SURFACE, padx=12, pady=8)
+        bottom_bar.pack(fill="x", side="bottom")
+
+        btn_prev = tk.Button(bottom_bar, text="◀ Previous", command=lambda: self.on_step(-1) if self.on_step else None,
+                             bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
+        btn_prev.pack(side="left", padx=2)
+
+        btn_next = tk.Button(bottom_bar, text="Next ▶", command=lambda: self.on_step(1) if self.on_step else None,
+                             bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
+        btn_next.pack(side="left", padx=2)
+
+        btn_focus = tk.Button(bottom_bar, text="🎯 Focus 3D", command=lambda: self.on_focus() if self.on_focus else None,
+                              bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
+        btn_focus.pack(side="left", padx=(10, 2))
+
+        btn_look = tk.Button(bottom_bar, text="👁️ Look Through", command=lambda: self.on_look() if self.on_look else None,
+                             bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
+        btn_look.pack(side="left", padx=2)
+
+        btn_sys = tk.Button(bottom_bar, text="📂 Open in Windows Viewer", command=self._open_system_viewer,
+                            bg=ACCENT, fg="#111518", font=("Segoe UI", 9, "bold"), activebackground="#8ef0d8", relief="flat", padx=10, pady=4, cursor="hand2")
+        btn_sys.pack(side="right", padx=4)
+
+        # Center Canvas for photo
+        self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", self._on_resize)
+
+        # Keyboard navigation
+        self.bind("<Left>", lambda e: self.on_step(-1) if self.on_step else None)
+        self.bind("<Right>", lambda e: self.on_step(1) if self.on_step else None)
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def show_camera(self, camera_dict, img_path, index, total):
+        self.current_img_path = img_path
+        name = camera_dict.get("name", f"camera_{index:04d}")
+        pos = camera_dict.get("pos", np.zeros(3))
+        pos_str = f"XYZ: ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})"
+
+        self.title_lbl.configure(text=f"📷 {name}  [{index + 1} / {total}]")
+        self.title(f"Photo: {name} - Camera {index + 1}/{total}")
+
+        if img_path and os.path.isfile(img_path):
+            try:
+                self._raw_pil = Image.open(img_path).convert("RGB")
+                w, h = self._raw_pil.size
+                self.meta_lbl.configure(text=f"{w}x{h} px · {pos_str}")
+                self._render_photo()
+            except Exception as e:
+                self._raw_pil = None
+                self.meta_lbl.configure(text=f"Error loading: {e}")
+                self.canvas.delete("all")
+                self.canvas.create_text(
+                    self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2,
+                    text=f"Cannot load image:\n{img_path}\n({e})",
+                    fill=MUTED, font=("Segoe UI", 11), justify="center"
+                )
+        else:
+            self._raw_pil = None
+            self.meta_lbl.configure(text=f"No image on disk · {pos_str}")
+            self.canvas.delete("all")
+            self.canvas.create_text(
+                self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2,
+                text=f"Image file not found on disk for:\n{name}\n\nSearch path: {img_path or 'N/A'}",
+                fill=MUTED, font=("Segoe UI", 11), justify="center"
+            )
+
+    def _on_resize(self, event=None):
+        if self._raw_pil is not None:
+            self._render_photo()
+
+    def _render_photo(self):
+        cw = max(50, self.canvas.winfo_width())
+        ch = max(50, self.canvas.winfo_height())
+        if self._raw_pil is None or cw < 10 or ch < 10:
+            return
+
+        iw, ih = self._raw_pil.size
+        scale = min(cw / iw, ch / ih)
+        nw = max(1, int(iw * scale))
+        nh = max(1, int(ih * scale))
+
+        resized = self._raw_pil.resize((nw, nh), Image.Resampling.BILINEAR)
+        self._tk_img = ImageTk.PhotoImage(resized)
+
+        self.canvas.delete("all")
+        cx = (cw - nw) // 2
+        cy = (ch - nh) // 2
+        self.canvas.create_image(cx, cy, anchor="nw", image=self._tk_img)
+
+    def _open_system_viewer(self):
+        if self.current_img_path and os.path.isfile(self.current_img_path):
+            try:
+                os.startfile(self.current_img_path)
+            except Exception:
+                pass
 
 
 class NativeInspection:
@@ -25,6 +149,7 @@ class NativeInspection:
         self.selected_camera = -1
         self._camera_screen = []
         self._saved_view = None
+        self.photo_viewer_window = None
         super().__init__(*args, **kwargs)
         self._poll_id = self.after(80, self._poll_load)
         self.bind('<Destroy>', self._cleanup_inspection, add='+')
@@ -36,6 +161,7 @@ class NativeInspection:
         self.distance_colors = tk.BooleanVar(self, False)
         self.navigation_mode = tk.StringVar(self, 'Orbit')
         self.camera_choice = tk.StringVar(self, '')
+        self.auto_open_photo_var = tk.BooleanVar(self, True)
         self._compare_visible = False
         self._inspector_visible = False
         self.scene_body = tk.Frame(self, bg=BG)
@@ -116,6 +242,9 @@ class NativeInspection:
         for i,(title,cmd) in enumerate([('Previous',lambda:self.step_camera(-1)),('Next',lambda:self.step_camera(1)),
                                       ('Focus',self.focus_camera),('Look through',self.look_through)],2):
             button(inspect,title,cmd).grid(row=0,column=i,padx=3)
+        button(inspect, '🖼️ View Photo', self.open_selected_camera_window).grid(row=0, column=6, padx=3)
+        tk.Checkbutton(inspect, text="Auto-open Photo", variable=self.auto_open_photo_var,
+                       bg=SURFACE, fg=TEXT, selectcolor=FIELD, activebackground=SURFACE, font=("Segoe UI", 8)).grid(row=0, column=7, padx=(6, 2))
         inspect.pack_forget()
         self.stats_lbl = label(self, 'Choose a completed alignment to inspect.', muted=True, anchor='w')
         self.stats_lbl.pack(side='bottom',fill='x',padx=12,pady=(4,8))
@@ -318,11 +447,15 @@ class NativeInspection:
 
     def _select_named_camera(self,event=None):
         self.selected_camera=self.camera_combo.current(); self.render()
+        if getattr(self, 'photo_viewer_window', None) is not None and self.photo_viewer_window.winfo_exists():
+            self.open_selected_camera_window()
 
     def step_camera(self,step):
         if self.cameras:
             self.selected_camera=(self.selected_camera+step)%len(self.cameras)
             self.camera_combo.current(self.selected_camera); self.render()
+            if getattr(self, 'photo_viewer_window', None) is not None and self.photo_viewer_window.winfo_exists():
+                self.open_selected_camera_window()
 
     def focus_camera(self):
         if 0<=self.selected_camera<len(self.cameras):
@@ -336,6 +469,30 @@ class NativeInspection:
             self.view_matrix=np.stack([camera['right'],-camera['up'],camera['forward']])
             self.pan_x=self.pan_y=0.; self.distance=0.; self.render()
             self.stats_lbl.configure(text=f'Looking through {camera["name"]} · illustrative optics · F returns to scene')
+
+    def open_selected_camera_window(self):
+        """Opens or updates separate photo viewer window for the selected camera."""
+        if not (0 <= self.selected_camera < len(self.cameras)):
+            return
+        cam = self.cameras[self.selected_camera]
+        from workspace_3d import resolve_camera_photo_path
+        run_dir = getattr(self, "active_run_dir", "")
+        dataset_dir = None
+        if hasattr(self, "master") and hasattr(self.master, "dataset_var"):
+            dataset_dir = self.master.dataset_var.get()
+        img_path = resolve_camera_photo_path(cam.get("name", ""), run_dir, dataset_dir) or \
+                   resolve_camera_photo_path(cam.get("file_path", ""), run_dir, dataset_dir)
+
+        if getattr(self, "photo_viewer_window", None) is None or not self.photo_viewer_window.winfo_exists():
+            self.photo_viewer_window = CameraPhotoViewer(
+                self,
+                on_step=self.step_camera,
+                on_focus=self.focus_camera,
+                on_look=self.look_through
+            )
+        self.photo_viewer_window.deiconify()
+        self.photo_viewer_window.lift()
+        self.photo_viewer_window.show_camera(cam, img_path, self.selected_camera, len(self.cameras))
 
     def _bind_mouse_events(self):
         super()._bind_mouse_events()
@@ -370,13 +527,18 @@ class NativeInspection:
             self._zoom(.9**(event.delta/120))
 
     def _pick_camera(self,event):
+        super()._on_mouse_up(event)
         if not hasattr(self,'_press_xy') or np.linalg.norm(np.array(self._press_xy)-[event.x,event.y])>5:
             return
         matches=[((x-event.x)**2+(y-event.y)**2,i) for x,y,z,i in self._camera_screen]
         if matches and min(matches)[0]<=144:
             if not self._inspector_visible:
                 self.toggle_inspector()
-            self.selected_camera=min(matches)[1];self.camera_combo.current(self.selected_camera);self.render()
+            self.selected_camera=min(matches)[1]
+            self.camera_combo.current(self.selected_camera)
+            self.render()
+            if getattr(self, 'auto_open_photo_var', None) and self.auto_open_photo_var.get():
+                self.open_selected_camera_window()
 
     def _cleanup_inspection(self,event):
         if event.widget is self:

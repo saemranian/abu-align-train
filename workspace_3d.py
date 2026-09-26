@@ -85,6 +85,52 @@ def viridis_colormap(val: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+def resolve_camera_photo_path(cam_name: str, run_dir: str = "", dataset_dir: Optional[str] = None) -> Optional[str]:
+    """Resolves local absolute image file path for a camera from run or dataset directories."""
+    if not cam_name:
+        return None
+    clean_name = os.path.basename(cam_name)
+
+    if os.path.isabs(cam_name) and os.path.isfile(cam_name):
+        return cam_name
+
+    dirs_to_check = []
+    if run_dir and os.path.isdir(run_dir):
+        dirs_to_check.extend([
+            run_dir,
+            os.path.join(run_dir, "images"),
+            os.path.join(run_dir, "3dgs_dataset", "images"),
+            os.path.join(run_dir, "input"),
+            os.path.dirname(run_dir),
+            os.path.dirname(os.path.dirname(run_dir)),
+            os.path.join(os.path.dirname(os.path.dirname(run_dir)), "images"),
+            os.path.join(os.path.dirname(os.path.dirname(run_dir)), "input"),
+        ])
+    if dataset_dir and os.path.isdir(dataset_dir):
+        dirs_to_check.extend([
+            dataset_dir,
+            os.path.join(dataset_dir, "images"),
+            os.path.join(dataset_dir, "input"),
+            os.path.join(dataset_dir, "photos"),
+        ])
+
+    for d in dirs_to_check:
+        if not d or not os.path.isdir(d):
+            continue
+        c1 = os.path.join(d, cam_name)
+        if os.path.isfile(c1):
+            return c1
+        c2 = os.path.join(d, clean_name)
+        if os.path.isfile(c2):
+            return c2
+        base_no_ext, _ = os.path.splitext(clean_name)
+        for ext in [".jpg", ".JPG", ".jpeg", ".JPEG", ".png", ".PNG", ".bmp", ".BMP"]:
+            c3 = os.path.join(d, base_no_ext + ext)
+            if os.path.isfile(c3):
+                return c3
+    return None
+
+
 # =========================================================================
 # Reconstruction Data Loaders
 # =========================================================================
@@ -184,6 +230,7 @@ def load_cameras_from_run(run_dir: str) -> List[Dict[str, Any]]:
                     name = os.path.basename(frame.get("file_path", f"frame_{i:04d}"))
                     cameras.append({
                         "name": name,
+                        "file_path": frame.get("file_path", ""),
                         "pos": cam_pos,
                         "forward": forward,
                         "up": up,
@@ -229,6 +276,7 @@ def load_cameras_from_run(run_dir: str) -> List[Dict[str, Any]]:
 
                         cameras.append({
                             "name": name,
+                            "file_path": name,
                             "pos": pos,
                             "forward": R_c2w[:, 2],
                             "up": -R_c2w[:, 1],
@@ -282,11 +330,41 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         # Mouse Tracking
         self._last_mouse_x = 0
         self._last_mouse_y = 0
+        self._is_dragging = False
+        self._thumb_cache: Dict[str, Optional[Image.Image]] = {}
         self._photo_image: Optional[ImageTk.PhotoImage] = None
 
         self._build_toolbar()
         self._build_canvas()
         self._bind_mouse_events()
+
+    def _get_camera_thumbnail(self, cam_name: str, file_path: Optional[str] = None) -> Optional[Image.Image]:
+        """Loads and caches downsampled thumbnail for frustum overlay."""
+        key = cam_name or file_path or ""
+        if not key:
+            return None
+        if key in self._thumb_cache:
+            return self._thumb_cache[key]
+
+        dataset_dir = None
+        if hasattr(self, "master") and hasattr(self.master, "dataset_var"):
+            dataset_dir = self.master.dataset_var.get()
+
+        img_path = resolve_camera_photo_path(key, getattr(self, "active_run_dir", ""), dataset_dir)
+        if not img_path:
+            self._thumb_cache[key] = None
+            return None
+
+        try:
+            with Image.open(img_path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((128, 128))
+                thumb = im.copy()
+                self._thumb_cache[key] = thumb
+                return thumb
+        except Exception:
+            self._thumb_cache[key] = None
+            return None
 
     def _build_toolbar(self):
         """Builds top inspection and control toolbar."""
@@ -383,12 +461,15 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         """Attaches CAD/DCC navigation handlers."""
         self.canvas.bind("<ButtonPress-1>", self._on_mouse_down)
         self.canvas.bind("<B1-Motion>", self._on_orbit_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
 
         self.canvas.bind("<ButtonPress-2>", self._on_mouse_down)
         self.canvas.bind("<B2-Motion>", self._on_pan_drag)
+        self.canvas.bind("<ButtonRelease-2>", self._on_mouse_up)
 
         self.canvas.bind("<ButtonPress-3>", self._on_mouse_down)
         self.canvas.bind("<B3-Motion>", self._on_pan_drag)
+        self.canvas.bind("<ButtonRelease-3>", self._on_mouse_up)
 
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)  # Windows
         self.canvas.bind("<Button-4>", lambda e: self._zoom(0.85))  # Linux up
@@ -396,10 +477,17 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         self.canvas.bind("<Double-Button-1>", lambda e: self.reset_view())
 
     def _on_mouse_down(self, event):
+        self._is_dragging = True
         self._last_mouse_x = event.x
         self._last_mouse_y = event.y
 
+    def _on_mouse_up(self, event):
+        if self._is_dragging:
+            self._is_dragging = False
+            self.render()
+
     def _on_orbit_drag(self, event):
+        self._is_dragging = True
         dx = event.x - self._last_mouse_x
         dy = event.y - self._last_mouse_y
         self._last_mouse_x = event.x
@@ -410,6 +498,7 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         self.render()
 
     def _on_pan_drag(self, event):
+        self._is_dragging = True
         dx = event.x - self._last_mouse_x
         dy = event.y - self._last_mouse_y
         self._last_mouse_x = event.x
@@ -580,9 +669,18 @@ class _LegacyWorkspace3DViewer(tk.Frame):
             grid_lines.extend([(p1, p2), (np.array([-grid_size, y_ground, gi], dtype=np.float32), np.array([grid_size, y_ground, gi], dtype=np.float32))])
 
         # 1. Project Point Cloud
+        is_drag = getattr(self, "_is_dragging", False)
         if self.points is not None and len(self.points) > 0:
+            if is_drag and len(self.points) > 25000:
+                stride = max(1, len(self.points) // 25000)
+                pts_active = self.points[::stride]
+                cols_active = self.colors[::stride] if self.colors is not None and len(self.colors) == len(self.points) else None
+            else:
+                pts_active = self.points
+                cols_active = self.colors
+
             # Normalize points: centered and scaled to ~[-1, 1]
-            p_norm = (self.points - self.center) / self.scale
+            p_norm = (pts_active - self.center) / self.scale
 
             # Rotate into view space
             p_rot = p_norm @ R_view.T
@@ -608,8 +706,8 @@ class _LegacyWorkspace3DViewer(tk.Frame):
 
                 # Resolve color mode
                 mode = "rgb" if self.compare_mode.get() == "Overlay" or self.distance_colors.get() else self.color_mode_var.get()
-                if mode == "rgb" and self.colors is not None and len(self.colors) == len(self.points):
-                    pt_cols = self.colors[valid][in_screen]
+                if mode == "rgb" and cols_active is not None and len(cols_active) == len(pts_active):
+                    pt_cols = cols_active[valid][in_screen]
                 elif mode == "depth" and len(px):
                     depths = zc[in_screen]
                     d_norm = (depths - np.min(depths)) / max(0.001, np.max(depths) - np.min(depths))
@@ -621,12 +719,14 @@ class _LegacyWorkspace3DViewer(tk.Frame):
                 else:
                     pt_cols = np.full((len(px), 3), 230, dtype=np.uint8)
 
-                # Paint far-to-near so coincident samples do not hide foreground geometry.
-                order = np.argsort(-zc[in_screen])
-                px, py, pt_cols = px[order], py[order], pt_cols[order]
+                if not is_drag:
+                    order = np.argsort(-zc[in_screen])
+                    px, py, pt_cols = px[order], py[order], pt_cols[order]
+                    pt_size = self.point_size_var.get()
+                else:
+                    pt_size = 1
 
                 # Rasterize points to frame buffer
-                pt_size = self.point_size_var.get()
                 if pt_size <= 1:
                     frame[py, px] = pt_cols
                 else:
@@ -693,6 +793,23 @@ class _LegacyWorkspace3DViewer(tk.Frame):
                                 scr_corners.append((int(cr[0] / cr[2] * focal + w * 0.5), int(cr[1] / cr[2] * focal + h * 0.5)))
 
                         if len(scr_corners) == 4:
+                            # Draw thumbnail on frustum face if available
+                            if not is_drag:
+                                xs = [pt[0] for pt in scr_corners]
+                                ys = [pt[1] for pt in scr_corners]
+                                min_x, max_x = min(xs), max(xs)
+                                min_y, max_y = min(ys), max(ys)
+                                bw = max_x - min_x
+                                bh = max_y - min_y
+                                if 14 <= bw <= 300 and 14 <= bh <= 300 and max_x > 0 and min_x < w and max_y > 0 and min_y < h:
+                                    thumb = self._get_camera_thumbnail(cam.get("name", ""), cam.get("file_path"))
+                                    if thumb is not None:
+                                        try:
+                                            resized_thumb = thumb.resize((bw, bh), Image.Resampling.BILINEAR)
+                                            pil_img.paste(resized_thumb, (min_x, min_y))
+                                        except Exception:
+                                            pass
+
                             # Draw pyramid edges from apex
                             for sc in scr_corners:
                                 draw.line([(csx, csy), sc], fill=color, width=2 if selected else 1)
