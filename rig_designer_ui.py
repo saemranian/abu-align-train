@@ -9,23 +9,24 @@ def wrap_row(row):
     children = list(row.winfo_children())
     for widget in children:
         widget.pack_forget()
-    row.pack_propagate(False)
     previous = [None]
-    def arrange(event):
-        if event.width == previous[0]:
+    def arrange(event=None):
+        available = max(1, row.winfo_width() - 2 * int(row.cget("padx")))
+        signature = (available, tuple((w.winfo_reqwidth(), w.winfo_reqheight()) for w in children))
+        if signature == previous[0]:
             return
-        previous[0] = event.width
-        x, y, line_height = 0, 0, 0
+        previous[0] = signature
+        x, line = 0, 0
         for widget in children:
             width = widget.winfo_reqwidth() + 8
-            if x and x + width > event.width:
-                y, x, line_height = y + line_height + 10, 0, 0
-            height = widget.winfo_reqheight()
-            widget.place(x=x, y=y+5, width=min(width-8, event.width), height=height)
-            x = x + width
-            line_height = max(line_height, height)
-        row.configure(height=y+line_height+10)
-    row.bind("<Configure>", arrange)
+            if x and x + width > available:
+                line, x = line + 1, 0
+            # Insets keep each line independent while grid tracks requested sizes.
+            widget.grid(row=line, column=0, sticky="w", padx=(x, 8), pady=5)
+            x += width
+    row.bind("<Configure>", arrange, add="+")
+    for widget in children:
+        widget.bind("<Configure>", arrange, add="+")
 
 
 def friendly_choices(combo, variable, options):
@@ -136,7 +137,6 @@ def enhance_rig_designer(app, ctx):
     focus_button = button(view_tools, "Focus view", focus_view)
     focus_button.pack(side="right")
     focus_button.configure(pady=4)
-    dialog.bind("<Escape>", lambda e: focus_view(True) if focused.get() else None, add="+")
     def view(yaw, pitch):
         ctx["canvas_view_mode_var"].set("3d")
         orbit.update(yaw=yaw, pitch=pitch, pan_x=0, pan_y=0, dist=3.4)
@@ -163,7 +163,8 @@ def enhance_rig_designer(app, ctx):
     display_button = button(view_tools, "Display", toggle_display)
     display_button.configure(pady=4, padx=8)
     display_button.pack(side="left")
-    controls_guide = tk.Frame(right, bg=SURFACE, padx=12, pady=10)
+    controls_guide = tk.Frame(right, bg=SURFACE, padx=12, pady=10,
+                             highlightthickness=1, highlightbackground=BORDER)
     guide_text = label(controls_guide,
         "Orbit: drag or arrow keys · Pan: Shift-drag or right-drag\n"
         "Zoom: scroll or + / − · Reset: F or double-click\n"
@@ -174,13 +175,22 @@ def enhance_rig_designer(app, ctx):
     def toggle_guide():
         shown = bool(controls_guide.winfo_manager())
         if shown:
-            controls_guide.pack_forget()
+            controls_guide.place_forget()
         else:
-            controls_guide.pack(fill="x", before=ctx["canvas_card"])
+            # Help is a temporary overlay; it must never collapse the 3D scene.
+            controls_guide.place(in_=ctx["canvas_card"], x=8, y=8, relwidth=1, width=-16)
+            controls_guide.lift()
         guide_button.configure(text="Hide controls" if not shown else "Controls")
     guide_button = button(view_tools, "Controls", toggle_guide)
     guide_button.configure(pady=4, padx=8)
     guide_button.pack(side="left")
+    def dismiss_view_help(event):
+        if controls_guide.winfo_manager():
+            toggle_guide()
+        elif focused.get():
+            focus_view(True)
+        return "break"
+    dialog.bind("<Escape>", dismiss_view_help, add="+")
     wrap_row(view_tools)
     controls = {}
     for title, attribute, initial in [("All coverage", "show_all", False), ("Labels", "show_labels", True),

@@ -103,7 +103,10 @@ def load_vggttt_model(weights_path: Optional[str] = None, device: str = "cuda", 
         else:
             raise e
 
-    model = model.to(device=device).eval()
+    if dtype is not None and dtype in (torch.float16, torch.bfloat16):
+        model = model.to(device=device, dtype=dtype).eval()
+    else:
+        model = model.to(device=device).eval()
     print(f"      * [VGG-T³] Model initialized in {time.time()-t_start:.1f}s on {device.upper()}")
     return model
 
@@ -112,6 +115,8 @@ def run_vggttt_reconstruction(
     image_paths: List[str],
     output_dir: str,
     weights_path: Optional[str] = None,
+    device: Optional[str] = None,
+    dtype: Optional[torch.dtype] = None,
     conf_threshold: float = 2.0,
     max_points: int = 300000,
     memory_efficient: bool = False,
@@ -119,6 +124,7 @@ def run_vggttt_reconstruction(
     use_global_pred: bool = False,
     target_size: int = 518,
     progress_callback: Optional[Callable[[str], None]] = None,
+    **kwargs,
 ) -> Tuple[pycolmap.Reconstruction, np.ndarray, np.ndarray]:
     """
     Executes end-to-end photogrammetric reconstruction using NVIDIA VGG-T³.
@@ -127,6 +133,8 @@ def run_vggttt_reconstruction(
         image_paths: List of absolute image paths.
         output_dir: Output directory where 3dgs_dataset, colmap, and points are written.
         weights_path: Optional custom path to model directory or safetensors.
+        device: CUDA device identifier or 'cpu' (default: auto-detect).
+        dtype: PyTorch precision (torch.bfloat16, torch.float16, or float32).
         conf_threshold: Confidence threshold to filter noisy points (default: 2.0).
         max_points: Maximum number of points to preserve in exported point cloud.
         memory_efficient: Whether to enable chunked attention to reduce VRAM for 1k+ images.
@@ -151,13 +159,14 @@ def run_vggttt_reconstruction(
     if num_images == 0:
         raise ValueError("Cannot run VGG-T³ reconstruction on an empty image list.")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cpu":
         log("      * [VGG-T³ Warning] CUDA is not available. Running inference on CPU will be slow.")
 
     # 1. Load Model
     log("[VGG-T³ 1/4] Loading neural network architecture & weights...")
-    model = load_vggttt_model(weights_path=weights_path, device=device)
+    model = load_vggttt_model(weights_path=weights_path, device=device, dtype=dtype)
 
     # 2. Preprocess Images
     log(f"[VGG-T³ 2/4] Preprocessing {num_images} images to {target_size}px (linear scaling)...")
@@ -186,6 +195,7 @@ def run_vggttt_reconstruction(
     results = model.infer(
         images_gpu,
         num_ttt_steps=ttt_steps,
+        dtype=dtype,
         memory_efficient_inference=memory_efficient,
         use_global_pred=use_global_pred,
     )

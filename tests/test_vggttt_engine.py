@@ -167,6 +167,15 @@ class TestVGGTTTEngine(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "COLMAP_Lichtfield").is_dir())
             self.assertTrue((Path(tmp_dir) / "points.ply").is_file())
 
+    def test_run_vggttt_reconstruction_signature_compatibility(self):
+        """Verifies run_vggttt_reconstruction accepts device, dtype, and extra kwargs without error."""
+        import inspect
+        from vggttt_engine import run_vggttt_reconstruction
+        sig = inspect.signature(run_vggttt_reconstruction)
+        self.assertIn("device", sig.parameters)
+        self.assertIn("dtype", sig.parameters)
+        self.assertTrue(any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,8 @@ class RigDesignerTests(unittest.TestCase):
 
     def test_tabs_and_controls_visible_at_minimum_size(self):
         self.ui.dialog.geometry("1120x760+40+40")
+        # Hit-testing measures the desktop z-order as well as Tk geometry.
+        self.ui.dialog.attributes("-topmost", True)
         self.ui.dialog.lift()
         for index, page in enumerate(self.ui.pages):
             self.ui.tabs.select(index)
@@ -123,14 +125,42 @@ class RigDesignerTests(unittest.TestCase):
     def test_controls_guide_preserves_rig(self):
         original = self.ui.get_rig()
         self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        height = self.ui.canvas.winfo_height()
         self.ui.toggle_guide()
         self.root.update()
         self.assertTrue(self.ui.controls_guide.winfo_ismapped())
         self.assertGreater(self.ui.canvas.winfo_height(), 100)
+        self.assertEqual(self.ui.canvas.winfo_height(), height)
         self.ui.toggle_guide()
         self.root.update()
         self.assertFalse(self.ui.controls_guide.winfo_ismapped())
         self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
+    def test_toolbar_labels_reflow_without_window_resize(self):
+        self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        self.ui.toggle_display()
+        self.ui.toggle_guide()
+        self.root.update()
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+        controls = [w for w in walk(self.ui.dialog) if isinstance(w, tk.Button)
+                    and w.cget("text") in ("Hide display", "Hide controls", "Focus view", "Fit", "Top", "Front")]
+        self.assertEqual(len(controls), 6)
+        for control in controls:
+            self.assertGreaterEqual(control.winfo_width(), control.winfo_reqwidth())
+            self.assertLessEqual(control.winfo_x()+control.winfo_width(), control.master.winfo_width())
+            for other in controls:
+                if other is control:
+                    continue
+                self.assertTrue(control.winfo_x()+control.winfo_width() <= other.winfo_x()
+                                or other.winfo_x()+other.winfo_width() <= control.winfo_x()
+                                or control.winfo_y()+control.winfo_height() <= other.winfo_y()
+                                or other.winfo_y()+other.winfo_height() <= control.winfo_y())
         self.assertEqual(self.errors_seen, [])
 
     def test_direct_camera_selection_and_rig_shrink(self):

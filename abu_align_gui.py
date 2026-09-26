@@ -3151,6 +3151,7 @@ class AbuAlignApp:
         self.console.configure(state="normal")
         self.console.delete("1.0", tk.END)
         self.console.configure(state="disabled")
+        self.log_search.buffer_changed()
         self.workspace_tabs.select(self.activity_tab)
 
     def _log(self, text):
@@ -3161,6 +3162,8 @@ class AbuAlignApp:
         if lines > 5000:
             self.console.delete("1.0", f"{lines - 5000}.0")
         self.console.configure(state="disabled")
+        if hasattr(self, "log_search"):
+            self.log_search.buffer_changed()
         if not hasattr(self, "follow_log_var") or self.follow_log_var.get():
             self.console.see(tk.END)
         try:

@@ -17,7 +17,7 @@ class DesktopTests(unittest.TestCase):
         for size in ["960x720", "1240x900", "1600x1000"]:
             self.root.geometry(size)
             for tab, variable, engines, container in [
-                (0, self.app.engine_var, ["vggt_omega", "ace0", "pycusfm", "opensfm", "360dvo"], self.app.align_dynamic_container),
+                (0, self.app.engine_var, ["vggt_omega", "vggttt", "ace0", "pycusfm", "opensfm", "360dvo"], self.app.align_dynamic_container),
                 (1, self.app.train_engine_var, ["lichtfeld", "splatfacto", "3dgrut", "pfgs360"], self.app.train_dynamic_container),
             ]:
                 self.app.workspace_tabs.select(tab)
@@ -166,6 +166,47 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(search.query.get(), "warning")
         self.assertFalse(search.frame.winfo_manager())
         self.assertEqual(self.app.console.get("1.0", "end"), original)
+
+    def test_log_search_refreshes_without_moving_reading_position(self):
+        self.app._clear_console()
+        self.app._log("warning first\nwarning second\n")
+        search = self.app.log_search
+        search.show()
+        search.query.set("warning")
+        search.find()
+        self.app._log("warning third\n")
+        with patch.object(self.app.console, "see") as see:
+            search.refresh()
+            see.assert_not_called()
+        self.assertEqual(search.count.cget("text"), "2 / 3")
+        self.assertFalse(self.app.follow_log_var.get())
+        self.app._clear_console()
+        search.refresh()
+        self.assertEqual(search.count.cget("text"), "No matches")
+        self.app._log("warning new\n")
+        self.assertIsNotNone(search.pending_refresh)
+        search.hide()
+        self.assertIsNone(search.pending_refresh)
+
+    def test_precision_wheel_and_option_protection(self):
+        from desktop_ui import ScrollPage
+        from tkinter import ttk
+        page = ScrollPage(self.root)
+        combo = ttk.Combobox(page.body, values=("First", "Second"), state="readonly")
+        combo.set("First")
+        combo.pack()
+        page.bind_navigation()
+        with patch.object(page.canvas, "yview", return_value=(0.2, 0.5)), patch.object(page.canvas, "yview_scroll") as scroll:
+            for delta in (0, -30, -30, -30):
+                combo.event_generate("<MouseWheel>", delta=delta)
+            scroll.assert_not_called()
+            combo.event_generate("<MouseWheel>", delta=-30)
+            scroll.assert_called_once_with(1, "units")
+            scroll.reset_mock()
+            combo.event_generate("<MouseWheel>", delta=360)
+            scroll.assert_called_once_with(-3, "units")
+        self.assertEqual(combo.get(), "First")
+        page.destroy()
 
     def test_video_controls_follow_sampling_and_format(self):
         self.root.deiconify()

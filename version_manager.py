@@ -128,6 +128,35 @@ def create_version_snapshot(version_str: str) -> None:
             except Exception:
                 pass
 
+    # Verify walkthrough.md is aligned with the new version
+    wt_path = os.path.join(target_dir, "walkthrough.md")
+    if os.path.isfile(wt_path):
+        try:
+            with open(wt_path, "r", encoding="utf-8") as wf:
+                wt_head = wf.read(500)
+            if f"v{version_str}" not in wt_head and version_str not in wt_head:
+                print(f"[VersionManager Warning] walkthrough.md does not yet mention 'v{version_str}'! "
+                      f"After documenting this release, run 'python version_manager.py --sync-walkthrough'.")
+            else:
+                print(f"[VersionManager] walkthrough.md verified aligned with v{version_str}.")
+        except Exception:
+            pass
+
+
+def sync_walkthrough_to_snapshot() -> None:
+    """Copies root walkthrough.md into the active version snapshot directory."""
+    import shutil
+    ver = get_current_version()
+    src = os.path.join(ROOT_DIR, "walkthrough.md")
+    target_dir = os.path.join(VERSIONS_DIR, f"v{ver}")
+    os.makedirs(target_dir, exist_ok=True)
+    dst = os.path.join(target_dir, "walkthrough.md")
+    if os.path.isfile(src):
+        shutil.copy2(src, dst)
+        print(f"[VersionManager] Synchronized walkthrough.md -> versions/v{ver}/walkthrough.md")
+    else:
+        print(f"[VersionManager Error] {src} not found.")
+
 
 def sync_files_with_version(new_version: str) -> List[str]:
     """
@@ -232,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--bump", action="store_true", help="Increment version by 1 with base-10 rollover and sync files")
     parser.add_argument("--set", type=str, default=None, help="Set explicit version (e.g. 0.0.1.3) and sync files")
     parser.add_argument("--snapshot", action="store_true", help="Create snapshot in versions/ for current version")
+    parser.add_argument("--sync-walkthrough", "--sync-docs", action="store_true", help="Synchronize root walkthrough.md into active version snapshot folder")
 
     args = parser.parse_args()
 
@@ -243,5 +273,7 @@ if __name__ == "__main__":
         ver = get_current_version()
         create_version_snapshot(ver)
         print(f"[VersionManager] Snapshot created in versions/v{ver}")
+    elif args.sync_walkthrough:
+        sync_walkthrough_to_snapshot()
     else:
         print(f"v{get_current_version()}")

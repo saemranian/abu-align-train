@@ -180,9 +180,18 @@ class ScrollPage(tk.Frame):
         self.canvas.itemconfigure(self.window, width=event.width)
 
     def bind_navigation(self, subtree=None):
+        remainder = [0]
         def wheel(event):
-            if self.canvas.yview() != (0.0, 1.0):
-                self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            # Windows wheels report multiples of 120; precision devices may
+            # deliver fractions of a notch. Preserve both speed and direction.
+            if event.delta:
+                if remainder[0] * event.delta < 0:
+                    remainder[0] = 0
+                remainder[0] += event.delta
+                steps = int(remainder[0] / 120)
+                remainder[0] -= steps * 120
+                if steps and self.canvas.yview() != (0.0, 1.0):
+                    self.canvas.yview_scroll(-steps, "units")
             return "break"
 
         def reveal(event):
@@ -366,6 +375,7 @@ class LogSearch:
                                ("Resume live", self.resume_live), ("Close", self.hide)]:
             button(self.frame, title, command).pack(side="left", padx=3)
         self.current = -1
+        self.pending_refresh = None
         self.query.trace_add("write", self.changed)
         self.entry.bind("<Return>", lambda e: (self.find(), "break")[-1])
         self.entry.bind("<Shift-Return>", lambda e: (self.find(-1), "break")[-1])
@@ -380,6 +390,9 @@ class LogSearch:
             self.find(0)
 
     def hide(self):
+        if self.pending_refresh is not None:
+            self.frame.after_cancel(self.pending_refresh)
+            self.pending_refresh = None
         self.frame.pack_forget()
         self.console.tag_remove("log_match", "1.0", "end")
         self.console.focus_set()
@@ -393,8 +406,20 @@ class LogSearch:
         self.current = -1
         self.find()
 
-    def find(self, direction=1):
+    def buffer_changed(self):
+        if self.frame.winfo_manager() and self.pending_refresh is None:
+            self.pending_refresh = self.frame.after(150, self.refresh)
+
+    def refresh(self):
+        if self.pending_refresh is not None:
+            self.frame.after_cancel(self.pending_refresh)
+            self.pending_refresh = None
+        if self.frame.winfo_manager():
+            self.find(0, reveal=False)
+
+    def find(self, direction=1, reveal=True):
         query = self.query.get()
+        selection = self.console.tag_ranges("log_match")
         self.console.tag_remove("log_match", "1.0", "end")
         if not query:
             self.count.configure(text="Find in log")
@@ -411,11 +436,16 @@ class LogSearch:
             self.count.configure(text="No matches")
             self.current = -1
             return
-        self.current = (self.current + direction) % len(matches)
+        if not reveal:
+            anchor = str(selection[0]) if selection else None
+            self.current = matches.index(anchor) if anchor in matches else max(0, min(self.current, len(matches)-1))
+        else:
+            self.current = (self.current + direction) % len(matches)
         match = matches[self.current]
-        self.follow.set(False)
         self.console.tag_add("log_match", match, f"{match}+{length}c")
-        self.console.see(match)
+        if reveal:
+            self.follow.set(False)
+            self.console.see(match)
         self.count.configure(text=f"{self.current+1} / {len(matches)}")
 
 
