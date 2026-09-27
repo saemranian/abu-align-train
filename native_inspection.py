@@ -162,6 +162,8 @@ class NativeInspection:
         self.register_runs = tk.BooleanVar(self, False)
         self.distance_colors = tk.BooleanVar(self, False)
         self.navigation_mode = tk.StringVar(self, 'Orbit')
+        self.inspection_profile = tk.StringVar(self, 'Overview')
+        self.show_points_var = tk.BooleanVar(self, True)
         self.camera_choice = tk.StringVar(self, '')
         self.auto_open_photo_var = tk.BooleanVar(self, False)
         self._compare_visible = False
@@ -211,6 +213,9 @@ class NativeInspection:
         self.navigation_bar = tk.Frame(self, bg=SURFACE, padx=12)
         self.navigation_bar.pack(fill='x')
         nav = self.navigation_bar
+        profile = ttk.Combobox(nav, textvariable=self.inspection_profile, values=('Overview','Geometry','Cameras'), state='readonly', width=10)
+        profile.pack(side='left', padx=(0, 8))
+        profile.bind('<<ComboboxSelected>>', lambda e:self.apply_profile())
         for title, command in [('Fit', self.reset_view), ('Front', lambda:self.set_preset_view(0, 0)),
             ('Top', lambda:self.set_preset_view(0, 89.9)), ('Right', lambda:self.set_preset_view(90, 0)),
             ('−', lambda:self._zoom(1.15)), ('+', lambda:self._zoom(.85)),
@@ -230,8 +235,8 @@ class NativeInspection:
         label(self.layer_bar, 'Size · px', muted=True).pack(side='left')
         size = ttk.Combobox(self.layer_bar, textvariable=self.point_size_var, values=(1,2,3,4), state='readonly', width=3)
         size.pack(side='left'); size.bind('<<ComboboxSelected>>', lambda e:self.render())
-        for title, var in [('Cameras',self.show_cameras_var), ('Trajectory',self.show_trajectory_var)]:
-            tk.Checkbutton(self.layer_bar, text=title, variable=var, command=self.render, bg=SURFACE,
+        for title, var in [('Points',self.show_points_var), ('Cameras',self.show_cameras_var), ('Trajectory',self.show_trajectory_var)]:
+            tk.Checkbutton(self.layer_bar, text=title, variable=var, command=self.custom_layers, bg=SURFACE,
                 fg=TEXT, selectcolor=FIELD, activebackground=SURFACE).pack(side='left')
         wrap_row(self.layer_bar)
         self.layer_bar.pack_forget()
@@ -286,6 +291,18 @@ class NativeInspection:
                 self.reset_view()
         else:
             self.compare_scroll.pack_forget()
+
+    def custom_layers(self):
+        self.inspection_profile.set('Custom')
+        self.render()
+
+    def apply_profile(self):
+        profile = self.inspection_profile.get()
+        self.show_points_var.set(profile != 'Cameras')
+        self.show_cameras_var.set(profile != 'Geometry')
+        self.show_trajectory_var.set(profile != 'Geometry')
+        self.render()
+        self.stats_lbl.configure(text=f'{profile} · viewpoint preserved · Fit frames visible layers')
 
     def switch_comparison(self):
         if 'B' not in self.layers:
@@ -451,8 +468,8 @@ class NativeInspection:
             self.compare_info.configure(text=f'{error} Previous scene retained.')
 
     def reset_view(self):
-        points=[] if self.points is None else [self.points]
-        if self.cameras:
+        points=[] if self.points is None or not self.show_points_var.get() else [self.points]
+        if self.cameras and (self.show_cameras_var.get() or self.show_trajectory_var.get()):
             points.append(np.array([c['pos'] for c in self.cameras]))
         self.center,self.scale=scene_bounds(points)
         self.yaw,self.pitch,self.distance=-25.,20.,1.5

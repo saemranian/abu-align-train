@@ -107,10 +107,10 @@ class InspectionWorkspace:
         gui = server.gui
         gui.add_markdown(f'## 3D workspace\n{title}')
         self.status = gui.add_markdown('Loading reconstruction…')
+        self.profile = gui.add_button_group('Inspect', ('Overview', 'Geometry', 'Cameras'))
         with gui.add_folder('Navigate'):
             self.views = gui.add_button_group('View', ('Fit', 'Top', 'Front', 'Right'))
             self.fit_traj_btn = gui.add_button('Fit cameras')
-            self.open_run_btn = gui.add_button('Open run folder')
             self.zoom = gui.add_button_group('Distance', ('Closer', 'Farther'))
             self.bookmark = gui.add_button_group('Viewpoint', ('Save view', 'Restore view'))
             self.up_axis = gui.add_dropdown('World up', ('Z up', 'Y up'), initial_value='Z up',
@@ -156,12 +156,14 @@ class InspectionWorkspace:
                 hint='Show a single in-browser photo dialog when you select a camera.')
             self.camera_info = gui.add_markdown('Click a camera frustum or choose an image above. Frustum optics are illustrative.')
         with gui.add_folder('Run details', expand_by_default=False):
+            self.open_run_btn = gui.add_button('Open run folder')
             self.details = gui.add_markdown('')
 
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
                         self.cameras, self.camera_thumbs, self.paths, self.grid, self.point_size, self.camera_size,
                         self.color, self.budget, self.trim):
             control.on_update(self.comparison_changed if control is self.b else self.color_changed if control is self.color else self.update)
+        self.profile.on_click(self.apply_profile)
         self.compare_button.on_click(self.comparison_changed)
         self.switch_button.on_click(self.switch_comparison)
         self.views.on_click(self.navigate)
@@ -175,6 +177,14 @@ class InspectionWorkspace:
         self.open_photo_btn.on_click(self.open_selected_photo)
         server.on_client_connect(lambda client: self.set_view(client, 'Fit'))
         self.update()
+
+    def apply_profile(self, event=None):
+        profile = self.profile.value
+        self.points.value = profile != 'Cameras'
+        self.cameras.value = profile != 'Geometry'
+        self.paths.value = profile != 'Geometry'
+        self.update()
+        self.navigation_info.content = f'**{profile}** · viewpoint preserved. Fit frames visible layers.'
 
     def switch_comparison(self, event=None):
         if self.a.value == self.b.value:
@@ -277,7 +287,10 @@ class InspectionWorkspace:
             sampled = points[indices]
             positions = np.array([c['pos'] for c in cameras]).reshape(-1, 3)
             if visible:
-                bounds.extend([sampled, positions])
+                if self.points.value:
+                    bounds.append(sampled)
+                if self.cameras.value or self.paths.value:
+                    bounds.append(positions)
             _, span = scene_bounds([sampled, positions])
             point_colors = tint if self.mode.value == 'Overlay' or self.color.value == 'Layer color' else colors[indices]
             if key == 'B' and self.color.value == 'B distance to A':
@@ -328,7 +341,7 @@ class InspectionWorkspace:
         self.handles.append(self.server.scene.add_grid('/inspection/grid', width=self.span*2, height=self.span*2,
             cell_size=self.span/20, section_size=self.span/4, plane='xy', position=(self.center[0], self.center[1], self.center[2]-self.span/2),
             cell_color=(48, 60, 65), section_color=(70, 86, 92), visible=self.grid.value))
-        if self.links.value and self.mode.value == 'Overlay' and 'B' in self.layers:
+        if self.links.value and (self.cameras.value or self.paths.value) and self.mode.value == 'Overlay' and 'B' in self.layers:
             a, b = self.layers['A']['cameras'], self.layers['B']['cameras']
             pairs = camera_pairs(a, b)
             if pairs:

@@ -84,6 +84,22 @@ class WorkspaceTests(unittest.TestCase):
         self.ui = InspectionWorkspace(self.server, {'Run A':'a', 'Run B':'b'}, 'Run A',
                                       'Fixture', self.loader, lambda: {'Run A':'a', 'Run B':'b'})
 
+    def test_inspection_profiles_preserve_geometry_and_viewpoint(self):
+        client = SimpleNamespace(camera=SimpleNamespace(position=np.array([9.,8,7]), look_at=np.zeros(3), up_direction=np.array([0.,0,1])))
+        self.server.get_clients = lambda: {1:client}
+        original = self.ui.layers['A']['points'].copy()
+        self.ui.profile.value = 'Cameras'
+        self.ui.apply_profile()
+        self.assertFalse(self.ui.points.value)
+        self.assertTrue(self.ui.paths.value)
+        self.ui.profile.value = 'Geometry'
+        self.ui.apply_profile()
+        self.assertTrue(self.ui.points.value)
+        self.assertFalse(self.ui.cameras.value)
+        self.assertFalse(self.ui.paths.value)
+        np.testing.assert_equal(client.camera.position, [9,8,7])
+        np.testing.assert_equal(self.ui.layers['A']['points'], original)
+
     def test_switch_and_color_preserve_viewpoint(self):
         client = SimpleNamespace(camera=SimpleNamespace(position=np.array([9.,8,7]), look_at=np.zeros(3), up_direction=np.array([0.,0,1])))
         self.server.get_clients = lambda: {1:client}

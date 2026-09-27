@@ -708,7 +708,7 @@ class _LegacyWorkspace3DViewer(tk.Frame):
 
         # 1. Project Point Cloud
         is_drag = getattr(self, "_is_dragging", False)
-        if self.points is not None and len(self.points) > 0:
+        if self.points is not None and len(self.points) > 0 and (not hasattr(self, 'show_points_var') or self.show_points_var.get()):
             if is_drag and len(self.points) > 25000:
                 stride = max(1, len(self.points) // 25000)
                 pts_active = self.points[::stride]
@@ -860,9 +860,9 @@ class _LegacyWorkspace3DViewer(tk.Frame):
                     sequence = [(x,y) for x,y,z,i in cam_screen_pts if self.cameras[i].get('layer','A') == layer]
                     if len(sequence)>1:
                         draw.line(sequence, fill='#70dbc0' if layer=='A' else '#ff9b7f', width=1)
-            self._camera_screen = cam_screen_pts
+            self._camera_screen = cam_screen_pts if self.show_cameras_var.get() else []
             for x,y,z,i in cam_screen_pts:
-                if i == self.selected_camera:
+                if i == self.selected_camera and self.show_cameras_var.get():
                     draw.ellipse((x-5,y-5,x+5,y+5),outline='#ffdc7d',width=2)
 
         # Update Tkinter Canvas Image

@@ -29,6 +29,21 @@ class NativeTests(unittest.TestCase):
         self.ui.apply_comparison();self.ui.reset_view();self.root.update()
         self.addCleanup(self.root.destroy)
 
+    def test_profiles_fit_visible_content_and_disable_hidden_camera_picking(self):
+        self.ui.inspection_profile.set('Geometry')
+        self.ui.apply_profile()
+        self.root.update()
+        self.assertEqual(self.ui._camera_screen, [])
+        self.assertTrue(self.ui.show_points_var.get())
+        self.ui.inspection_profile.set('Cameras')
+        self.ui.apply_profile()
+        self.assertFalse(self.ui.show_points_var.get())
+        self.assertTrue(self.ui.show_trajectory_var.get())
+        self.ui.points = np.array([[1000.,1000,1000]])
+        self.ui.reset_view()
+        self.assertLess(np.linalg.norm(self.ui.center), 5)
+        self.assertEqual(self.errors, [])
+
     def test_quiet_defaults_and_fixed_view_switch(self):
         center = self.ui.center.copy()
         self.ui.yaw = 42
