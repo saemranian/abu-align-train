@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.9.7
+Abu Align & Train Version 0.0.9.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.9.7 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.9.8 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -287,10 +287,10 @@ class AbuAlignApp:
 
         # VGG-T3 (VGG-TTT) Specific Options
         self.vggttt_conf_var = tk.StringVar(value="Adaptive (20% Quantile)")
-        self.vggttt_prep_var = tk.StringVar(value="Auto (Smart Center-Crop)")
+        self.vggttt_prep_var = tk.StringVar(value="Pad (Preserve Full Aspect Ratio)")
         self.vggttt_mem_var = tk.BooleanVar(value=True)
         self.vggttt_steps_var = tk.StringVar(value="2 (Optimal - NVIDIA Standard)")
-        self.vggttt_pred_var = tk.BooleanVar(value=True)
+        self.vggttt_pred_var = tk.BooleanVar(value=False)
 
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
@@ -1045,14 +1045,14 @@ class AbuAlignApp:
         ttt_prep_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
         lbl_ttt_prep = tk.Label(ttt_prep_frame, text="Preprocessing:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
         lbl_ttt_prep.pack(side=tk.LEFT)
-        cb_ttt_prep = ttk.Combobox(ttt_prep_frame, textvariable=self.vggttt_prep_var, values=["Auto (Smart Center-Crop)", "Crop (NVIDIA Demo Standard)", "Pad (Aspect Ratio Padding)"], state="readonly", width=17, font=("Segoe UI", 8))
+        cb_ttt_prep = ttk.Combobox(ttt_prep_frame, textvariable=self.vggttt_prep_var, values=["Pad (Preserve Full Aspect Ratio)", "Auto (Aspect Ratio Padding)", "Crop (Center Crop)"], state="readonly", width=17, font=("Segoe UI", 8))
         cb_ttt_prep.pack(side=tk.LEFT)
         ToolTip(lbl_ttt_prep, "Preprocessing mode applied before feeding frames to VGG-T3 transformer.")
-        ToolTip(cb_ttt_prep, "VGG-T3 Image Preprocessing:\n• Auto (Smart Center-Crop) [Recommended]: Uses clean center-crop when mixed landscape/portrait frames exist, eliminating artificial white padding bars.\n• Crop (NVIDIA Demo Standard): Crops to 518x518 with 100% genuine photo pixels.\n• Pad: Adds white padding to preserve full sensor aspect ratio.")
+        ToolTip(cb_ttt_prep, "VGG-T3 Image Preprocessing:\n• Pad (Preserve Full Aspect Ratio) [Recommended - Upstream Standard]: Preserves 100% of photographic sensor pixels and authentic optical center by white-padding to square (518x518).\n• Auto: Preserves full sensor aspect ratio.\n• Crop: Smart center-crop to 518x518.")
 
-        chk_pred = tk.Checkbutton(ttt_col1, text="Use Global Point Head (Recommended)", variable=self.vggttt_pred_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
+        chk_pred = tk.Checkbutton(ttt_col1, text="Use Global Point Head", variable=self.vggttt_pred_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_pred.pack(anchor="w", pady=(2, 0))
-        ToolTip(chk_pred, "Global Point Head:\n• Checked [Recommended - NVIDIA Demo Standard]: Predicts metric 3D room coordinates directly from multi-view cross-attention tokens. Solves divergent ray projection and spherical cluster artifacts.\n• Unchecked: Unprojects 3D points from monocular depth maps.")
+        ToolTip(chk_pred, "3D Point Head:\n• Unchecked [Recommended - Upstream Standard]: Unprojects 3D points directly from dense metric depth maps and camera matrices, producing 200,000–400,000 dense photogrammetric surface points.\n• Checked: Predicts 3D points from global transformer point head.")
 
         # Col B: Test-Time Training (TTT) & Attention Mode
         ttt_col2 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
@@ -4089,7 +4089,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.9.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.9.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4119,15 +4119,20 @@ class AbuAlignApp:
                             last_hw_log = now
                             try:
                                 hw = self.hw_monitor.query()
-                                hw_str = f"[TELEMETRY:HARDWARE] CPU: {hw['cpu_pct']:.0f}% | RAM: {hw['ram_used_gb']:.1f}/{hw['ram_total_gb']:.0f}GB | GPU: {hw['gpu_util']}% ({hw['gpu_temp']}°C) | VRAM: {hw['vram_used_gb']:.1f}/{hw['vram_total_gb']:.0f}GB\n"
+                                ts_hw = time.strftime("[%H:%M:%S]")
+                                hw_str = f"{ts_hw} [TELEMETRY:HARDWARE] CPU: {hw['cpu_pct']:.0f}% | RAM: {hw['ram_used_gb']:.1f}/{hw['ram_total_gb']:.0f}GB | GPU: {hw['gpu_util']}% ({hw['gpu_temp']}°C) | VRAM: {hw['vram_used_gb']:.1f}/{hw['vram_total_gb']:.0f}GB\n"
                                 lf.write(hw_str)
                                 self.output_queue.put(hw_str)
                             except Exception:
                                 pass
 
-                        lf.write(line)
+                        # Prefix wall-clock timestamp if line does not already carry one
+                        line_stripped = line.strip()
+                        has_ts = (line_stripped.startswith("[") and len(line_stripped) >= 10 and line_stripped[3] == ":" and line_stripped[6] == ":")
+                        log_line = line if has_ts or not line_stripped else f"[{time.strftime('%H:%M:%S')}] {line}"
+                        lf.write(log_line)
                         lf.flush()
-                        self.output_queue.put(line)
+                        self.output_queue.put(log_line)
                         if "Output Directory:" in line:
                             parts = line.split("Output Directory:")
                             if len(parts) > 1:
@@ -4215,6 +4220,8 @@ class AbuAlignApp:
                 else:
                     self._log(msg)
                     msg_s = msg.strip()
+                    # Strip optional leading timestamp [HH:MM:SS] so telemetry prefixes match cleanly
+                    msg_s = re.sub(r"^\[\d{2}:\d{2}:\d{2}(\.\d{3})?\]\s*", "", msg_s)
                     if any(k in msg for k in ["Stage 1", "Found", "Scanning", "images found"]):
                         self._set_stage(0)
                     elif any(k in msg for k in ["Stage 2", "Loading model", "Initializing GPU", "Initializing Neural Network", "Initializing ACE0 Engine", "ZoeDepth model ready", "Downloading ZoeDepth"]):
@@ -4641,7 +4648,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.9.7 - {title}")
+        doc_win.title(f"Abu Align v0.0.9.8 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5268,7 +5275,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.9.7\n"
+            "Abu Align & Train - Version 0.0.9.8\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

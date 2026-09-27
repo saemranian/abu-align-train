@@ -205,7 +205,7 @@ class TestVGGTTTEngine(unittest.TestCase):
             self.assertTrue((Path(tmp_dir) / "points.ply").is_file())
 
     def test_fast_load_and_preprocess_mixed_orientations(self):
-        """Verifies smart center-crop eliminates white padding on mixed landscape/portrait frames."""
+        """Verifies pad mode preserves full sensor aspect ratio and crop mode does smart center crop."""
         from PIL import Image
         from vggttt_engine import fast_load_and_preprocess_images
 
@@ -218,13 +218,19 @@ class TestVGGTTTEngine(unittest.TestCase):
 
             paths = [str(img_land), str(img_port)]
 
-            # Test auto mode (should trigger smart_crop on mixed orientations)
-            tensors, orig_dims, padding_boxes = fast_load_and_preprocess_images(paths, mode="auto", target_size=518)
+            # Test default / pad mode (upstream standard: preserves all authentic pixels)
+            tensors, orig_dims, padding_boxes = fast_load_and_preprocess_images(paths, mode="pad", target_size=518)
             self.assertEqual(tensors.shape, (2, 3, 518, 518))
             self.assertEqual(orig_dims[0], (900, 600))
             self.assertEqual(orig_dims[1], (600, 900))
-            self.assertEqual(padding_boxes[0][:4], (0, 0, 518, 518))
-            self.assertEqual(padding_boxes[1][:4], (0, 0, 518, 518))
+            self.assertEqual(padding_boxes[0][:4], (0, 84, 518, 350))
+            self.assertEqual(padding_boxes[1][:4], (84, 0, 350, 518))
+
+            # Test crop mode (smart_crop)
+            tensors_c, _, padding_boxes_c = fast_load_and_preprocess_images(paths, mode="crop", target_size=518)
+            self.assertEqual(tensors_c.shape, (2, 3, 518, 518))
+            self.assertEqual(padding_boxes_c[0][:4], (0, 0, 518, 518))
+            self.assertEqual(padding_boxes_c[1][:4], (0, 0, 518, 518))
 
     def test_chunked_frame_attention_adapter(self):
         """
