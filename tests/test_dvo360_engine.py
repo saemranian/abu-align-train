@@ -76,6 +76,11 @@ class Test360DVOEngine(unittest.TestCase):
         sig = inspect.signature(run_360dvo_reconstruction)
         self.assertIn("load_res", sig.parameters)
         self.assertEqual(sig.parameters["load_res"].default, 1024)
+        self.assertIn("use_cache", sig.parameters)
+        self.assertTrue(sig.parameters["use_cache"].default)
+        self.assertIn("clear_cache", sig.parameters)
+        self.assertFalse(sig.parameters["clear_cache"].default)
+        self.assertIn("cache_dir", sig.parameters)
 
 
 if __name__ == "__main__":

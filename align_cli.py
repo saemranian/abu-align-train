@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.0.0 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.0.1 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -2309,7 +2309,10 @@ def main():
             patch_lifetime=getattr(args, "dvo_patch_lifetime", 13),
             final_ba_iters=getattr(args, "dvo_final_refine", 12),
             gradient_bias=getattr(args, "dvo_gradient_bias", True),
-            keyframe_thresh=getattr(args, "dvo_keyframe_thresh", 15.0)
+            keyframe_thresh=getattr(args, "dvo_keyframe_thresh", 15.0),
+            use_cache=not getattr(args, "no_cache", False),
+            clear_cache=getattr(args, "clear_cache", False),
+            cache_dir=getattr(args, "cache_dir", None)
         )
         inf_elapsed = time.time() - inf_start
         print()

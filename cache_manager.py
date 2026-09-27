@@ -26,7 +26,15 @@ import numpy as np
 import torch
 
 
-def compute_dataset_hash(image_paths: List[str], engine: str, load_res: int, stride: int, chunk_size: Optional[int] = None, anchor_size: Optional[int] = None) -> str:
+def compute_dataset_hash(
+    image_paths: List[str],
+    engine: str,
+    load_res: int,
+    stride: int,
+    chunk_size: Optional[int] = None,
+    anchor_size: Optional[int] = None,
+    extra_params: Optional[Dict[str, Any]] = None
+) -> str:
     """
     Computes a deterministic SHA-256 fingerprint representing the exact input dataset,
     neural configuration, and windowing/anchor hyperparameters.
@@ -40,6 +48,9 @@ def compute_dataset_hash(image_paths: List[str], engine: str, load_res: int, str
         hasher.update(f"chunk_{chunk_size}".encode("utf-8"))
     if anchor_size is not None:
         hasher.update(f"anchor_{anchor_size}".encode("utf-8"))
+    if extra_params:
+        for k in sorted(extra_params.keys()):
+            hasher.update(f"{k}:{extra_params[k]}".encode("utf-8"))
 
     # Sample up to 100 paths with sizes and timestamps for ultra-fast validation
     step = max(1, len(image_paths) // 100)
@@ -258,6 +269,160 @@ def load_tracking_cache(
     except Exception as e:
         print(f"[Abu Cache Warning] Failed to load tracking cache: {e}")
         return None
+
+
+def save_360dvo_cache(
+    cache_dir: str,
+    cache_key: str,
+    source_dir: str,
+    metadata: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Saves 360DVO trajectory, tie points, transforms.json, and sparse COLMAP models
+    from source_dir to the cache_dir/cache_key directory.
+    """
+    target_dir = os.path.join(cache_dir, cache_key)
+    os.makedirs(target_dir, exist_ok=True)
+
+    files_to_copy = [
+        "360dvo_trajectory.txt",
+        "360dvo_points.ply",
+        "points3D.ply",
+        "points.ply",
+        "transforms.json",
+        "metadata.json"
+    ]
+    for fn in files_to_copy:
+        src = os.path.join(source_dir, fn)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, os.path.join(target_dir, fn))
+            except Exception:
+                pass
+
+    src_sparse = os.path.join(source_dir, "sparse")
+    if os.path.isdir(src_sparse):
+        dst_sparse = os.path.join(target_dir, "sparse")
+        try:
+            if os.path.isdir(dst_sparse):
+                shutil.rmtree(dst_sparse)
+            shutil.copytree(src_sparse, dst_sparse)
+        except Exception:
+            pass
+
+    src_osfm = os.path.join(source_dir, "opensfm")
+    if os.path.isdir(src_osfm):
+        dst_osfm = os.path.join(target_dir, "opensfm")
+        try:
+            if os.path.isdir(dst_osfm):
+                shutil.rmtree(dst_osfm)
+            shutil.copytree(src_osfm, dst_osfm)
+        except Exception:
+            pass
+
+    meta = metadata.copy() if metadata else {}
+    meta["created_at"] = time.time()
+    meta["cache_key"] = cache_key
+    meta["engine"] = "360dvo"
+    try:
+        with open(os.path.join(target_dir, "cache_meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except Exception:
+        pass
+
+    return target_dir
+
+
+def load_360dvo_cache(
+    cache_dir: str,
+    cache_key: str,
+    output_dir: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Checks if a valid 360DVO cache exists for cache_key.
+    If valid, restores trajectory, points, and COLMAP files to output_dir and returns metadata.
+    """
+    target_dir = os.path.join(cache_dir, cache_key)
+    traj_path = os.path.join(target_dir, "360dvo_trajectory.txt")
+    if not os.path.isfile(traj_path) or os.path.getsize(traj_path) == 0:
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    t0 = time.time()
+
+    files_to_restore = [
+        "360dvo_trajectory.txt",
+        "360dvo_points.ply",
+        "points3D.ply",
+        "points.ply",
+        "transforms.json",
+        "metadata.json"
+    ]
+    for fn in files_to_restore:
+        src = os.path.join(target_dir, fn)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, os.path.join(output_dir, fn))
+            except Exception:
+                pass
+
+    src_sparse = os.path.join(target_dir, "sparse")
+    if os.path.isdir(src_sparse):
+        dst_sparse = os.path.join(output_dir, "sparse")
+        try:
+            if os.path.isdir(dst_sparse):
+                shutil.rmtree(dst_sparse)
+            shutil.copytree(src_sparse, dst_sparse)
+        except Exception:
+            pass
+
+    src_osfm = os.path.join(target_dir, "opensfm")
+    if os.path.isdir(src_osfm):
+        dst_osfm = os.path.join(output_dir, "opensfm")
+        try:
+            if os.path.isdir(dst_osfm):
+                shutil.rmtree(dst_osfm)
+            shutil.copytree(src_osfm, dst_osfm)
+        except Exception:
+            pass
+
+    # Universal 3dgs_dataset/ directory staging
+    dataset_3dgs = os.path.join(output_dir, "3dgs_dataset")
+    os.makedirs(dataset_3dgs, exist_ok=True)
+    d3_sparse = os.path.join(dataset_3dgs, "sparse", "0")
+    sparse_0 = os.path.join(output_dir, "sparse", "0")
+    if os.path.isdir(sparse_0):
+        os.makedirs(d3_sparse, exist_ok=True)
+        for fn in os.listdir(sparse_0):
+            try:
+                shutil.copy2(os.path.join(sparse_0, fn), os.path.join(d3_sparse, fn))
+            except Exception:
+                pass
+    opensfm_dir = os.path.join(output_dir, "opensfm")
+    rec_src = os.path.join(opensfm_dir, "reconstruction.json")
+    if os.path.isfile(rec_src):
+        d3_osfm = os.path.join(dataset_3dgs, "opensfm")
+        os.makedirs(d3_osfm, exist_ok=True)
+        try:
+            shutil.copy2(rec_src, os.path.join(d3_osfm, "reconstruction.json"))
+            shutil.copy2(rec_src, os.path.join(dataset_3dgs, "reconstruction.json"))
+        except Exception:
+            pass
+
+    meta = {}
+    meta_path = os.path.join(target_dir, "cache_meta.json")
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    load_time = time.time() - t0
+    meta["load_time_sec"] = load_time
+    meta["trajectory_txt"] = os.path.join(output_dir, "360dvo_trajectory.txt")
+    meta["ply_out"] = os.path.join(output_dir, "360dvo_points.ply")
+    return meta
 
 
 def clear_cache(cache_dir: str) -> Tuple[int, int]:

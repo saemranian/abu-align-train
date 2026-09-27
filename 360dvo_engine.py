@@ -597,6 +597,9 @@ def run_360dvo_reconstruction(
     final_ba_iters: int = 12,
     gradient_bias: bool = True,
     keyframe_thresh: float = 15.0,
+    use_cache: bool = True,
+    clear_cache: bool = False,
+    cache_dir: Optional[str] = None,
     log_callback = None
 ) -> Tuple[object, np.ndarray, np.ndarray]:
     """
@@ -639,6 +642,73 @@ def run_360dvo_reconstruction(
     log("=" * 70)
 
     os.makedirs(output_dir, exist_ok=True)
+
+    sample_img = cv2.imread(image_paths[0])
+    h, w = sample_img.shape[:2]
+    trajectory_txt = os.path.join(output_dir, "360dvo_trajectory.txt")
+    ply_out = os.path.join(output_dir, "360dvo_points.ply")
+
+    # -------------------------------------------------------------
+    # Multi-Tier Smart Cache for 360DVO (.abu_cache)
+    # -------------------------------------------------------------
+    from cache_manager import (
+        compute_dataset_hash,
+        get_cache_root,
+        load_360dvo_cache,
+        save_360dvo_cache,
+        clear_cache as purge_abu_cache,
+    )
+    dataset_root = os.path.dirname(os.path.abspath(image_paths[0]))
+    cache_root = get_cache_root(dataset_root, cache_dir)
+    if clear_cache:
+        n_c, b_c = purge_abu_cache(cache_root)
+        log(f"[*] [Smart Cache] Cleared {n_c} cache entries ({b_c/(1024*1024):.1f} MB freed).")
+
+    cache_key = compute_dataset_hash(
+        image_paths=image_paths,
+        engine="360dvo",
+        load_res=load_res,
+        stride=stride,
+        extra_params={
+            "patches": patches_per_frame,
+            "ba_window": local_ba_window,
+            "scale": metric_scale,
+            "dense": dense_cloud,
+            "lifetime": patch_lifetime,
+            "final_ba": final_ba_iters,
+            "grad_bias": gradient_bias,
+        }
+    )
+
+    if use_cache:
+        cached_meta = load_360dvo_cache(cache_root, cache_key, output_dir)
+        if cached_meta is not None and os.path.isfile(trajectory_txt):
+            load_sec = cached_meta.get("load_time_sec", 0.05)
+            log("\n" + "=" * 70)
+            log(f" [SMART CACHE HIT] Loaded 360DVO trajectory & point cloud in {load_sec:.2f}s!")
+            log(f"                   Skipping neural visual odometry (Saved ~3-10 minutes).")
+            log("=" * 70 + "\n")
+            if os.path.isfile(ply_out):
+                try:
+                    from plyfile import PlyData
+                    pdata = PlyData.read(ply_out)
+                    v = pdata['vertex']
+                    dense_3d = np.stack([v['x'], v['y'], v['z']], axis=1).astype(np.float32)
+                    if 'red' in v:
+                        dense_rgb = np.stack([v['red'], v['green'], v['blue']], axis=1).astype(np.uint8)
+                except Exception:
+                    pass
+            rec_obj = None
+            sparse_0 = os.path.join(output_dir, "sparse", "0")
+            if os.path.isdir(sparse_0):
+                try:
+                    import pycolmap
+                    rec_obj = pycolmap.Reconstruction()
+                    rec_obj.read_text(sparse_0)
+                except Exception:
+                    rec_obj = None
+            return rec_obj, dense_3d, dense_rgb
+
     engine = ThreeSixtyDVOEngine(
         weights_path=weights_path,
         patches_per_frame=patches_per_frame,
@@ -649,11 +719,6 @@ def run_360dvo_reconstruction(
         enable_viz=enable_viz,
         port=port
     )
-
-    sample_img = cv2.imread(image_paths[0])
-    h, w = sample_img.shape[:2]
-    trajectory_txt = os.path.join(output_dir, "360dvo_trajectory.txt")
-    ply_out = os.path.join(output_dir, "360dvo_points.ply")
 
     # Check if WSL 360DVO or native package is present
     wsl_available = wsl_bridge and wsl_bridge.is_360dvo_available()
@@ -670,6 +735,15 @@ def run_360dvo_reconstruction(
         first_img_dir = os.path.dirname(os.path.abspath(image_paths[0]))
         wsl_img_dir = wsl_bridge.win_to_wsl_path(first_img_dir)
         wsl_out_dir = wsl_bridge.win_to_wsl_path(output_dir)
+
+        # Synchronize optimized host runner wrapper to WSL
+        runner_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scratch", "abu_360dvo_runner.py")
+        if os.path.isfile(runner_src):
+            try:
+                wsl_runner_src = wsl_bridge.win_to_wsl_path(runner_src)
+                wsl_bridge.run_command_in_wsl(f"cp '{wsl_runner_src}' '{wsl_bridge.WSL_360DVO_DIR}/abu_360dvo_runner.py'")
+            except Exception:
+                pass
 
         viz_arg = f"--viz --port {port}" if enable_viz else ""
         dense_arg = "--dense_cloud" if dense_cloud else ""
@@ -773,6 +847,27 @@ def run_360dvo_reconstruction(
                 rec_obj.read_text(sparse_0)
             except Exception:
                 rec_obj = None
+
+            if use_cache:
+                try:
+                    save_360dvo_cache(
+                        cache_dir=cache_root,
+                        cache_key=cache_key,
+                        source_dir=output_dir,
+                        metadata={
+                            "engine": "360dvo",
+                            "patches_per_frame": patches_per_frame,
+                            "stride": stride,
+                            "load_res": load_res,
+                            "local_ba_window": local_ba_window,
+                            "metric_scale": metric_scale,
+                            "dense_cloud": dense_cloud,
+                            "num_frames": len(image_paths),
+                        }
+                    )
+                    log(f"[*] [Smart Cache] 360DVO trajectory and point cloud cached successfully.")
+                except Exception as ce:
+                    log(f"[Abu Cache Warning] Failed to save 360DVO cache: {ce}")
 
             log("[SUCCESS] 360DVO Trajectory Alignment & COLMAP Packaging Completed via WSL2.\n")
             return rec_obj, dense_3d, dense_rgb
@@ -1041,6 +1136,23 @@ def run_360dvo_reconstruction(
         reconstruction.read_text(sparse_dir)
     except Exception:
         reconstruction = None
+
+    if use_cache:
+        try:
+            save_360dvo_cache(
+                cache_dir=cache_root,
+                cache_key=cache_key,
+                source_dir=output_dir,
+                metadata={
+                    "engine": "360dvo_fallback",
+                    "patches_per_frame": patches_per_frame,
+                    "stride": stride,
+                    "num_frames": len(image_paths),
+                }
+            )
+            log(f"[*] [Smart Cache] 360DVO fallback trajectory cached successfully.")
+        except Exception:
+            pass
 
     log("[SUCCESS] 360DVO Trajectory Alignment & COLMAP Packaging Completed.\n")
     return reconstruction, dense_3d, dense_rgb
