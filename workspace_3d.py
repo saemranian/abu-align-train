@@ -531,7 +531,8 @@ class _LegacyWorkspace3DViewer(tk.Frame):
         self._last_mouse_x = event.x
         self._last_mouse_y = event.y
 
-        self.yaw += dx * 0.5
+        # Match browser orbit controls: horizontal drag rotates the view oppositely.
+        self.yaw -= dx * 0.5
         self.pitch = max(-89.9, min(89.9, self.pitch + dy * 0.5))
         self.render()
 

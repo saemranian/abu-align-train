@@ -29,6 +29,20 @@ class NativeTests(unittest.TestCase):
         self.ui.apply_comparison();self.ui.reset_view();self.root.update()
         self.addCleanup(self.root.destroy)
 
+    def test_horizontal_orbit_direction_and_pan_mode(self):
+        self.ui.yaw = 0.; self.ui.pitch = 0.
+        self.ui._on_mouse_down(SimpleNamespace(x=100, y=100))
+        self.ui._on_orbit_drag(SimpleNamespace(x=120, y=100))
+        self.assertEqual(self.ui.yaw, -10.)
+        self.assertEqual(self.ui.pitch, 0.)
+        self.ui._on_orbit_drag(SimpleNamespace(x=100, y=100))
+        self.assertEqual(self.ui.yaw, 0.)
+        self.ui.navigation_mode.set('Pan')
+        before = self.ui.pan_x
+        self.ui._on_orbit_drag(SimpleNamespace(x=120, y=100))
+        self.assertEqual(self.ui.yaw, 0.)
+        self.assertGreater(self.ui.pan_x, before)
+
     def test_profiles_fit_visible_content_and_disable_hidden_camera_picking(self):
         self.ui.inspection_profile.set('Geometry')
         self.ui.apply_profile()
