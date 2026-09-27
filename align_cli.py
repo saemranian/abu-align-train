@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.9.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.0.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1671,14 +1671,14 @@ def main():
     # RealityScan / RealityCapture Options
     parser.add_argument("--rs_gui", action="store_true", default=False, help="Launch interactive RealityScan GUI window instead of running headless in background")
     parser.add_argument("--rs_prior_run", type=str, default=None, help="Custom prior alignment run folder or cameras.csv path to ingest")
-    parser.add_argument("--rs_feature_quality", choices=["High", "Normal"], default="High", help="Feature detection quality in RealityScan (default: High)")
+    parser.add_argument("--rs_feature_quality", choices=["High", "Normal", "Low", "high", "normal", "low"], default="High", help="Feature detection quality in RealityScan (default: High)")
     parser.add_argument("--rs_max_features_mpx", type=int, default=80000, help="Max features per megapixel in RealityScan (default: 80000)")
     parser.add_argument("--rs_max_features_image", type=int, default=320000, help="Max features per image in RealityScan (default: 320000)")
-    parser.add_argument("--rs_overlap", choices=["Low", "Medium", "High"], default="Low", help="Image overlap setting in RealityScan (default: Low)")
+    parser.add_argument("--rs_overlap", choices=["Low", "Medium", "High", "low", "medium", "high"], default="Low", help="Image overlap setting in RealityScan (default: Low)")
     parser.add_argument("--rs_downscale", type=int, default=1, help="Image downscale factor in RealityScan (default: 1)")
     parser.add_argument("--rs_max_reproj_error", type=float, default=2.0, help="Max feature reprojection error in RealityScan (default: 2.0)")
-    parser.add_argument("--rs_preselector_features", type=int, default=40000, help="Preselector features in RealityScan (default: 40000)")
-    parser.add_argument("--rs_sensitivity", choices=["Low", "Medium", "High", "Ultra"], default="High", help="Detector sensitivity in RealityScan (default: High)")
+    parser.add_argument("--rs_preselector_features", "--rs_preselector", dest="rs_preselector_features", type=int, default=40000, help="Preselector features in RealityScan (default: 40000)")
+    parser.add_argument("--rs_sensitivity", choices=["Low", "Medium", "High", "Ultra", "low", "medium", "high", "ultra"], default="High", help="Detector sensitivity in RealityScan (default: High)")
     parser.add_argument("--rs_distortion", choices=["Brown3", "Brown4", "Brown3WithTangential2", "Division"], default="Brown3", help="Lens distortion model in RealityScan (default: Brown3)")
     parser.add_argument("--no_rs_rematch", dest="rs_rematch", action="store_false", default=True, help="Disable force component rematch in RealityScan")
     parser.add_argument("--no_rs_export_colmap", dest="rs_export_colmap", action="store_false", default=True, help="Disable COLMAP export from RealityScan")
