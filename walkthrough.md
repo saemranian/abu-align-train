@@ -1,39 +1,31 @@
-# v0.0.9.4 — Purposeful 3D inspection presets
+# v0.0.9.6 — Shared visual language and minimal icons
 
-## Critique and phases
-The same dense scene served every inspection task. Looking at surface detail
-required several layer toggles; examining trajectories required removing points.
-Fit included invisible content, undermining otherwise simple navigation.
-
-Phase 1: consistent Overview, Geometry and Cameras presets in both viewers.
-Overview shows points, cameras and trajectories. Geometry isolates points.
-Cameras isolates frustums and trajectories. Presets preserve the current viewpoint
-and source reconstruction data; they do not change A/B comparison selection.
-
-Phase 2: Fit now uses visible-layer bounds. Native rendering supports a separate
-Points toggle, skips hidden point rasterization, and does not pick hidden cameras
-or draw their selection markers. Browser Geometry mode also hides camera offset
-links. Native manual layer changes report Custom rather than a stale preset name.
-
-Phase 3: moved browser Open run folder to Run details, keeping navigation focused
-on the scene. Native profile selector is integrated into the wrapping toolbar.
+## Review and changes
+Added locally rendered, cached monochrome line icons in ui_icons.py. Text labels
+remain visible. Main tabs, section headings, shared buttons and tool dialogs now
+use consistent icons; browser viewer actions use built-in Viser/Tabler icons.
+Shared button icons follow disabled state and dynamic labels. Disabled buttons
+use an arrow cursor. Entry/checkbox focus colors and disabled text follow the
+shared dark palette. Reduced button/tab padding accommodates icons.
+Visual inspection found clipped engine descriptions. Cards now use wider minimum
+columns and wrap text within their actual bounds. The app heading retains its A
+brand mark without a redundant section icon.
 
 ## Verification
-42 tests passed in 36.673 seconds across test_viewer_workspace,
-test_native_inspection and test_desktop_ui. Following final refinements, all 26
-viewer/native tests passed in 6.549 seconds. Tests instantiate real Tk and Viser
-interfaces using synthetic data and cover source/view preservation, layer presets,
-visible-camera fitting, hidden-camera picking, and minimum-size layout.
-Run: python -m unittest discover -s tests -p test_viewer_workspace.py
-and repeat for test_native_inspection.py and test_desktop_ui.py.
-No manual visual review or production dataset benchmark was performed this pass.
+Initial desktop/native/preset suite: 32 tests passed in 58.243 seconds.
+Final desktop suite: 17 passed in 58.908 seconds; rig suite: 11 passed in 49.023
+seconds; browser viewer suite: 15 passed in 1.031 seconds.
+Commands: python -m unittest discover -s tests -p test_desktop_ui.py
+(repeat for test_rig_designer.py and test_viewer_workspace.py).
+Tests cover responsive layouts, dialog construction, icon reuse, disabled states,
+text retention and tab icons. Isolated desktop preview visually inspected using
+the computer-use skill; post-fix card wrapping verified by layout tests.
+Viser produced a non-failing unclosed event-loop warning during test cleanup.
 
 ## Memory and release
-No training/alignment was run. VRAM and production FPS are unmeasured. Native
-camera-only inspection skips point rasterization; source preview caches are retained
-for quick switching. Existing sampling budgets remain unchanged.
-Modified implementation: native_inspection.py, viewer_workspace.py, workspace_3d.py.
-Tests: tests/test_native_inspection.py and tests/test_viewer_workspace.py.
-Release headers, launchers, VERSION.txt and documentation synchronized.
-Backup: versions/v0.0.9.4/. Concurrent vggttt_engine.py and its test modifications
-are excluded from the UI commit; backup uses the committed engine baseline.
+Icons are cached per Tk root/type/color/size. No new dependencies or downloads.
+No training/alignment, production FPS or VRAM benchmark was run.
+Changed sources: desktop_ui.py, ui_icons.py, viewer_workspace.py,
+version_manager.py, tests/test_desktop_ui.py. Release headers, launchers,
+VERSION.txt and documentation synchronized. No engine behavior changed.
+Backup: versions/v0.0.9.6/ with ui_icons.py included.

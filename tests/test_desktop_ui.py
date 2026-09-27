@@ -12,6 +12,25 @@ class DesktopTests(unittest.TestCase):
     setUp = test_gui_presets.PresetTests.setUp
     close_root = test_gui_presets.PresetTests.close_root
 
+    def test_shared_icons_keep_labels_and_follow_disabled_state(self):
+        from desktop_ui import button, DISABLED
+        from ui_icons import line_icon
+        control = button(self.root, 'Save profile', lambda: None)
+        control.pack()
+        self.assertEqual(control.cget('text'), 'Save profile')
+        enabled = str(control.cget('image'))
+        self.assertTrue(enabled)
+        control.configure(state='disabled')
+        self.assertNotEqual(str(control.cget('image')), enabled)
+        self.assertEqual(control.cget('cursor'), 'arrow')
+        control.configure(state='normal', text='Refresh')
+        self.assertEqual(control.cget('text'), 'Refresh')
+        self.assertEqual(control.cget('cursor'), 'hand2')
+        self.assertIs(line_icon(control, 'refresh'), line_icon(control, 'refresh'))
+        for tab in self.app.workspace_tabs.tabs():
+            self.assertTrue(self.app.workspace_tabs.tab(tab, 'image'))
+        control.destroy()
+
     def test_all_engine_groups_fit_at_minimum_and_default_size(self):
         errors = []
         self.root.report_callback_exception = lambda *error: errors.append(error)

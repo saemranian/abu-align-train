@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Tuple, Any
 import numpy as np
 from PIL import Image
+from viser import Icon
 from scipy.spatial.transform import Rotation
 from scipy.spatial import cKDTree
 
@@ -110,7 +111,7 @@ class InspectionWorkspace:
         self.profile = gui.add_button_group('Inspect', ('Overview', 'Geometry', 'Cameras'))
         with gui.add_folder('Navigate'):
             self.views = gui.add_button_group('View', ('Fit', 'Top', 'Front', 'Right'))
-            self.fit_traj_btn = gui.add_button('Fit cameras')
+            self.fit_traj_btn = gui.add_button('Fit cameras', icon=Icon.CAMERA)
             self.zoom = gui.add_button_group('Distance', ('Closer', 'Farther'))
             self.bookmark = gui.add_button_group('Viewpoint', ('Save view', 'Restore view'))
             self.up_axis = gui.add_dropdown('World up', ('Z up', 'Y up'), initial_value='Z up',
@@ -124,8 +125,8 @@ class InspectionWorkspace:
             self.mode = gui.add_dropdown('Show', ('A only', 'B only', 'Overlay'), initial_value='A only', disabled=len(names)<2)
             self.registration = gui.add_checkbox('Register B to A', False,
                 hint='Fits rotation, translation and scale from identical image names. Changes the preview only.')
-            self.compare_button = gui.add_button('Compare A and B', disabled=len(names)<2)
-            self.switch_button = gui.add_button('Switch A / B', disabled=len(names)<2)
+            self.compare_button = gui.add_button('Compare A and B', icon=Icon.A_B, disabled=len(names)<2)
+            self.switch_button = gui.add_button('Switch A / B', icon=Icon.ARROWS_EXCHANGE, disabled=len(names)<2)
             self.links = gui.add_checkbox('Camera offsets', True)
             gui.add_markdown('**A · mint** / **B · coral** · Overlay uses layer colors.')
             with gui.add_folder('How comparison works', expand_by_default=False):
@@ -135,7 +136,7 @@ class InspectionWorkspace:
                     'Residuals measure agreement, not ground-truth accuracy. They use the same cameras fitted '
                     'during registration. Scene units are not necessarily meters. Source files are never changed.')
             self.comparison = gui.add_markdown('Choose a different run for B to compare.')
-            self.refresh = gui.add_button('Refresh available runs')
+            self.refresh = gui.add_button('Refresh available runs', icon=Icon.REFRESH)
         with gui.add_folder('Scene layers', expand_by_default=False):
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
@@ -151,12 +152,12 @@ class InspectionWorkspace:
         with gui.add_folder('Inspect a camera', expand_by_default=False):
             self.camera = gui.add_dropdown('Camera', ('No cameras',))
             self.camera_actions = gui.add_button_group('Selection', ('Previous', 'Next', 'Focus', 'Look through'))
-            self.open_photo_btn = gui.add_button('View photo')
+            self.open_photo_btn = gui.add_button('View photo', icon=Icon.PHOTO)
             self.auto_open_photo = gui.add_checkbox('Preview photo on select', False,
                 hint='Show a single in-browser photo dialog when you select a camera.')
             self.camera_info = gui.add_markdown('Click a camera frustum or choose an image above. Frustum optics are illustrative.')
         with gui.add_folder('Run details', expand_by_default=False):
-            self.open_run_btn = gui.add_button('Open run folder')
+            self.open_run_btn = gui.add_button('Open run folder', icon=Icon.FOLDER)
             self.details = gui.add_markdown('')
 
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
@@ -565,7 +566,7 @@ class InspectionWorkspace:
             with modal:
                 gui.add_markdown(f'Layer {key} · Camera {index + 1} / {len(self.layers[key]["cameras"])}')
                 gui.add_image(arr, format='jpeg')
-                close_btn = gui.add_button('Close preview')
+                close_btn = gui.add_button('Close preview', icon=Icon.X)
                 close_btn.on_click(lambda _: modal.close())
         except Exception as e:
             print(f"[viewer] Error opening browser photo modal: {e}")

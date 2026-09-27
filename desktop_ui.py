@@ -3,6 +3,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
+from ui_icons import icon_name, line_icon
 
 
 BG = "#111518"
@@ -23,9 +24,13 @@ def style_entry(widget):
                      highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
 
 
-def wrap_choices(frame, minimum=170):
+def wrap_choices(frame, minimum=190):
     """Keep selection cards readable at narrow window widths."""
     children = frame.winfo_children()
+    for child in children:
+        if isinstance(child, (tk.Radiobutton, tk.Label)):
+            child.configure(justify='left', anchor='w')
+            child.bind('<Configure>', lambda event: event.widget.configure(wraplength=max(80, event.width-24)), add='+')
     columns = [None]
     def arrange(event):
         count = max(1, min(len(children), event.width // minimum))
@@ -40,6 +45,9 @@ def wrap_choices(frame, minimum=170):
 
 
 def label(parent, text, size=10, muted=False, **kwargs):
+    if size >= 15 and text != 'Abu Align & Train' and icon_name(text) and 'image' not in kwargs:
+        kwargs.update(image=line_icon(parent, icon_name(text), ACCENT, 18), compound='left')
+        kwargs.setdefault('padx', 6)
     return tk.Label(parent, text=text, bg=parent.cget("bg"),
                     fg=MUTED if muted else TEXT, font=("Segoe UI", size), **kwargs)
 
@@ -48,6 +56,10 @@ class StateAwareButton(tk.Button):
     """Let related presentation controls follow the existing button lifecycle."""
     def configure(self, cnf=None, **kwargs):
         result = super().configure(cnf, **kwargs)
+        if getattr(self, '_uses_line_icon', False):
+            name = icon_name(str(self.cget('text')))
+            color = DISABLED if str(self.cget('state')) == 'disabled' else self.cget('fg')
+            super().configure(image=line_icon(self, name, color) if name else '', cursor='arrow' if str(self.cget('state')) == 'disabled' else 'hand2')
         listener = getattr(self, "state_listener", None)
         if listener is not None:
             listener(str(self.cget("state")))
@@ -64,9 +76,12 @@ def button(parent, text, command, primary=False, **kwargs):
                        activeforeground=BG if primary else TEXT,
                        disabledforeground="#738087", relief="flat", bd=0,
                        highlightthickness=1, highlightbackground=parent.cget("bg"),
-                       highlightcolor=ACCENT, padx=14, pady=8,
+                       highlightcolor=ACCENT, padx=10, pady=8,
                        font=("Segoe UI", 10, "bold" if primary else "normal"),
                        cursor="hand2", takefocus=True, **kwargs)
+    if 'image' not in kwargs:
+        widget._uses_line_icon = True
+        widget.configure(compound='left')
     widget.bind("<Return>", lambda e: widget.invoke())
     widget.bind("<Enter>", lambda e: widget.configure(
         highlightbackground=ACCENT if str(widget.cget("state")) != "disabled" else parent.cget("bg")))
@@ -94,7 +109,7 @@ def configure_theme(app):
     style.configure("TNotebook", background=BG, borderwidth=0, bordercolor=BG,
                     lightcolor=BG, darkcolor=BG, tabmargins=(0, 0, 0, 8))
     style.configure("TNotebook.Tab", background=BG, foreground=MUTED,
-                    padding=(22, 12), borderwidth=0, bordercolor=BG,
+                    padding=(16, 12), borderwidth=0, bordercolor=BG,
                     lightcolor=BG, darkcolor=BG)
     style.map("TNotebook.Tab", background=[("selected", SURFACE), ("active", FIELD)],
               foreground=[("selected", ACCENT), ("active", TEXT)],
@@ -109,6 +124,10 @@ def configure_theme(app):
                     troughcolor=FIELD, borderwidth=0, lightcolor=ACCENT,
                     darkcolor=ACCENT, bordercolor=FIELD, thickness=5)
     style.configure("TScale", background=SURFACE, troughcolor=FIELD)
+    style.configure("TEntry", fieldbackground=FIELD, foreground=TEXT, bordercolor=BORDER, padding=6)
+    style.map("TEntry", bordercolor=[("focus", ACCENT)], foreground=[("disabled", DISABLED)])
+    style.configure("TCheckbutton", background=SURFACE, foreground=TEXT, padding=(4, 5))
+    style.map("TCheckbutton", foreground=[("disabled", DISABLED), ("active", ACCENT)])
 
 
 def polish_controls(parent):
@@ -117,7 +136,7 @@ def polish_controls(parent):
         if isinstance(widget, (tk.Radiobutton, tk.Checkbutton)):
             widget.configure(font=("Segoe UI", 10), bg=SURFACE, fg=TEXT,
                              activebackground=SURFACE, activeforeground=ACCENT,
-                             selectcolor=BG, highlightthickness=1,
+                             selectcolor=BG, disabledforeground=DISABLED, highlightthickness=1,
                              highlightbackground=SURFACE, highlightcolor=ACCENT,
                              bd=0, pady=5, cursor="hand2", takefocus=True)
         elif isinstance(widget, ttk.Combobox):
@@ -149,6 +168,9 @@ def polish_dialog(dialog):
                 if isinstance(widget, tk.LabelFrame):
                     widget.configure(fg=TEXT, padx=12, pady=10)
             elif isinstance(widget, tk.Button):
+                name = icon_name(str(widget.cget('text')))
+                if name and not widget.cget('image'):
+                    widget.configure(image=line_icon(widget, name, TEXT), compound='left', padx=10, pady=7)
                 widget.configure(bg=FIELD, fg=TEXT, activebackground=BORDER,
                                  activeforeground=TEXT, relief="flat", bd=0,
                                  highlightthickness=1, highlightbackground=FIELD,
@@ -485,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.9.5", 9, muted=True)
+    app.version_label = label(header, "v0.0.9.6", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -643,10 +665,10 @@ def build_workspace(app, tooltip):
     activity = tk.Frame(app.workspace_tabs, bg=SURFACE, padx=20, pady=16)
     from workspace_3d import Workspace3DViewer
     app.workspace_3d = Workspace3DViewer(app.workspace_tabs, dataset_provider=lambda: app.dataset_var.get())
-    app.workspace_tabs.add(align_page, text="01  Alignment")
-    app.workspace_tabs.add(train_page, text="02  Training")
-    app.workspace_tabs.add(activity, text="03  Activity")
-    app.workspace_tabs.add(app.workspace_3d, text="04  3D Workspace")
+    app.workspace_tabs.add(align_page, image=line_icon(root, "target", MUTED), compound="left", text="01  Alignment")
+    app.workspace_tabs.add(train_page, image=line_icon(root, "play", MUTED), compound="left", text="02  Training")
+    app.workspace_tabs.add(activity, image=line_icon(root, "activity", MUTED), compound="left", text="03  Activity")
+    app.workspace_tabs.add(app.workspace_3d, image=line_icon(root, "cube", MUTED), compound="left", text="04  3D Workspace")
     app.align_page = align_page
     app.train_page = train_page
     app.activity_tab = activity
