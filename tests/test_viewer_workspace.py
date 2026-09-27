@@ -20,6 +20,11 @@ def sample():
 
 
 class GeometryTests(unittest.TestCase):
+    def test_matching_export_prefixes_without_ambiguous_basenames(self):
+        a = [dict(name='images/a.jpg'), dict(name='left/b.jpg'), dict(name='right/b.jpg')]
+        b = [dict(name='C:/dataset/a.jpg'), dict(name='b.jpg')]
+        self.assertEqual(camera_pairs(a, b), [(0, 0)])
+
     def test_directed_cloud_distances_and_empty_input(self):
         distances, count = cloud_distances(np.array([[0, 0, 0], [2, 0, 0]]), np.array([[0, 3, 0], [2, 0, 0]]))
         np.testing.assert_allclose(distances, [3, 0])
@@ -78,6 +83,25 @@ class WorkspaceTests(unittest.TestCase):
         self.loader = Mock(side_effect=lambda path: sample())
         self.ui = InspectionWorkspace(self.server, {'Run A':'a', 'Run B':'b'}, 'Run A',
                                       'Fixture', self.loader, lambda: {'Run A':'a', 'Run B':'b'})
+
+    def test_small_points_and_explicit_comparison_activation(self):
+        self.ui.point_size.value = 0.0001
+        self.ui.comparison_changed()
+        self.assertEqual(self.ui.point_size.value, 0.0001)
+        self.assertEqual(self.ui.mode.value, 'Overlay')
+        self.assertEqual(len(self.ui.camera_options), 8)
+        self.assertIn('RMS', self.ui.comparison.content)
+
+    def test_photo_preview_does_not_launch_external_application(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            photo = Path(directory)/'test.jpg'
+            Image.new('RGB', (40, 20)).save(photo)
+            with patch.object(self.ui, '_resolve_photo', return_value=str(photo)), patch('os.startfile') as launch:
+                self.ui.open_selected_photo()
+                self.ui.open_selected_photo()
+                launch.assert_not_called()
+                self.assertIsNotNone(self.ui._photo_modal)
 
     def test_real_api_loads_and_keeps_camera_on_display_changes(self):
         self.assertIn('Ready', self.ui.status.content)

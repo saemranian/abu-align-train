@@ -8,7 +8,7 @@ from tkinter import ttk
 import numpy as np
 from scipy.spatial.transform import Rotation
 from PIL import Image, ImageTk
-from desktop_ui import BG, SURFACE, FIELD, TEXT, MUTED, ACCENT, button, label, ScrollPage
+from desktop_ui import BG, SURFACE, FIELD, TEXT, MUTED, ACCENT, BORDER, button, label, ScrollPage
 from rig_designer_ui import wrap_row, friendly_choices
 from viewer_workspace import camera_pairs, similarity, transform_cameras, cloud_distances, scene_bounds
 
@@ -33,9 +33,9 @@ class CameraPhotoViewer(tk.Toplevel):
         top_bar = tk.Frame(self, bg=SURFACE, padx=12, pady=8)
         top_bar.pack(fill="x", side="top")
         self.title_lbl = tk.Label(top_bar, text="Camera Photo", font=("Segoe UI", 10, "bold"), fg=TEXT, bg=SURFACE)
-        self.title_lbl.pack(side="left")
+        self.title_lbl.pack(anchor="w")
         self.meta_lbl = tk.Label(top_bar, text="", font=("Segoe UI", 9), fg=MUTED, bg=SURFACE)
-        self.meta_lbl.pack(side="right")
+        self.meta_lbl.pack(side="bottom", anchor="w", pady=(4, 0))
 
         # Bottom Action Bar
         bottom_bar = tk.Frame(self, bg=SURFACE, padx=12, pady=8)
@@ -49,15 +49,15 @@ class CameraPhotoViewer(tk.Toplevel):
                              bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
         btn_next.pack(side="left", padx=2)
 
-        btn_focus = tk.Button(bottom_bar, text="🎯 Focus 3D", command=lambda: self.on_focus() if self.on_focus else None,
+        btn_focus = tk.Button(bottom_bar, text="Focus", command=lambda: self.on_focus() if self.on_focus else None,
                               bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
         btn_focus.pack(side="left", padx=(10, 2))
 
-        btn_look = tk.Button(bottom_bar, text="👁️ Look Through", command=lambda: self.on_look() if self.on_look else None,
+        btn_look = tk.Button(bottom_bar, text="Look through", command=lambda: self.on_look() if self.on_look else None,
                              bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", padx=8, pady=4, cursor="hand2")
         btn_look.pack(side="left", padx=2)
 
-        btn_sys = tk.Button(bottom_bar, text="📂 Open in Windows Viewer", command=self._open_system_viewer,
+        btn_sys = tk.Button(bottom_bar, text="Open original", command=self._open_system_viewer,
                             bg=ACCENT, fg="#111518", font=("Segoe UI", 9, "bold"), activebackground="#8ef0d8", relief="flat", padx=10, pady=4, cursor="hand2")
         btn_sys.pack(side="right", padx=4)
 
@@ -77,12 +77,14 @@ class CameraPhotoViewer(tk.Toplevel):
         pos = camera_dict.get("pos", np.zeros(3))
         pos_str = f"XYZ: ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})"
 
-        self.title_lbl.configure(text=f"📷 {name}  [{index + 1} / {total}]")
+        self.title_lbl.configure(text=f"{os.path.basename(name)}  ·  {index + 1} / {total}")
         self.title(f"Photo: {name} - Camera {index + 1}/{total}")
 
         if img_path and os.path.isfile(img_path):
             try:
-                self._raw_pil = Image.open(img_path).convert("RGB")
+                with Image.open(img_path) as source:
+                    from PIL import ImageOps
+                    self._raw_pil = ImageOps.exif_transpose(source).convert("RGB")
                 w, h = self._raw_pil.size
                 self.meta_lbl.configure(text=f"{w}x{h} px · {pos_str}")
                 self._render_photo()
@@ -116,7 +118,7 @@ class CameraPhotoViewer(tk.Toplevel):
             return
 
         iw, ih = self._raw_pil.size
-        scale = min(cw / iw, ch / ih)
+        scale = min((cw-24) / iw, (ch-24) / ih, 1.0)
         nw = max(1, int(iw * scale))
         nh = max(1, int(ih * scale))
 
@@ -175,7 +177,7 @@ class NativeInspection:
         label(header, 'Reconstruction', muted=True).grid(row=0, column=0, padx=(0, 10))
         self.run_combo = ttk.Combobox(header, textvariable=self.run_choice_var, state='readonly', width=20, postcommand=self.refresh_runs)
         self.run_combo.grid(row=0, column=1, sticky='ew', padx=(0, 10))
-        self.run_combo.bind('<<ComboboxSelected>>', lambda e: self.load_selected_run())
+        self.run_combo.bind('<<ComboboxSelected>>', lambda e: self.start_comparison())
         button(header, 'Refresh', self._reload_runs).grid(row=0, column=2, padx=3)
         button(header, 'Compare', self.toggle_comparison).grid(row=0, column=3, padx=3)
         button(header, 'Inspect', self.toggle_inspector).grid(row=0, column=4, padx=3)
@@ -197,7 +199,7 @@ class NativeInspection:
         settings = tk.Frame(self.comparison_panel, bg=SURFACE)
         settings.pack(fill='x', pady=6)
         for text, variable in [('Register B to A', self.register_runs), ('Color B by distance to A', self.distance_colors)]:
-            tk.Checkbutton(settings, text=text, variable=variable, command=self.apply_comparison,
+            tk.Checkbutton(settings, text=text, variable=variable, command=self.comparison_settings_changed,
                 bg=SURFACE, fg=TEXT, selectcolor=FIELD, activebackground=SURFACE).pack(anchor='w', pady=4)
         self.compare_info = label(self.comparison_panel, 'A · mint / B · coral. Registration uses matching image names; distances use scene units.', muted=True, anchor='w', justify='left')
         self.compare_info.pack(fill='x')
@@ -225,7 +227,7 @@ class NativeInspection:
         label(self.layer_bar, 'Point size', muted=True).pack(side='left')
         size = ttk.Combobox(self.layer_bar, textvariable=self.point_size_var, values=(1,2,3,4), state='readonly', width=3)
         size.pack(side='left'); size.bind('<<ComboboxSelected>>', lambda e:self.render())
-        for title, var in [('Cameras',self.show_cameras_var), ('Sequence',self.show_trajectory_var)]:
+        for title, var in [('Cameras',self.show_cameras_var), ('Trajectory',self.show_trajectory_var)]:
             tk.Checkbutton(self.layer_bar, text=title, variable=var, command=self.render, bg=SURFACE,
                 fg=TEXT, selectcolor=FIELD, activebackground=SURFACE).pack(side='left')
         wrap_row(self.layer_bar)
@@ -270,8 +272,22 @@ class NativeInspection:
         if self._compare_visible:
             self.compare_scroll.pack(side='right',fill='y',before=self.canvas)
             self.refresh_runs()
+            if 'B' in self.layers:
+                self.compare_mode.set('Overlay')
+                self.apply_comparison()
+                self.reset_view()
         else:
             self.compare_scroll.pack_forget()
+
+    def start_comparison(self):
+        self.compare_mode.set('Overlay')
+        self._fit_comparison = True
+        self.load_selected_run()
+
+    def comparison_settings_changed(self):
+        if self.distance_colors.get():
+            self.compare_mode.set('Overlay')
+        self.apply_comparison()
 
     def refresh_runs(self):
         runs = super().refresh_runs()
@@ -279,6 +295,11 @@ class NativeInspection:
         self.compare_combo.configure(values=names, state='readonly' if len(names)>1 else 'disabled')
         if self.comparison_run.get() not in names:
             self.comparison_run.set(names[1] if len(names)>1 else '')
+        selected = self.run_choice_var.get()
+        if selected == 'Latest Run (Auto)' and names:
+            selected = names[0]
+        if self.comparison_run.get() == selected and len(names) > 1:
+            self.comparison_run.set(next(n for n in names if n != selected))
         return runs
 
     def _reload_runs(self):
@@ -347,6 +368,8 @@ class NativeInspection:
                     self.active_run_name=a
                     self.active_run_dir=layers['A']['path']
                     self.apply_comparison()
+                    if getattr(self, '_fit_comparison', False):
+                        self.reset_view(); self._fit_comparison = False
                     if self._first_scene:
                         self.reset_view(); self._first_scene=False
             if self._pending_load:
@@ -476,7 +499,7 @@ class NativeInspection:
             return
         cam = self.cameras[self.selected_camera]
         from workspace_3d import resolve_camera_photo_path
-        run_dir = getattr(self, "active_run_dir", "")
+        run_dir = self.layers.get(cam.get('layer', 'A'), {}).get('path', getattr(self, 'active_run_dir', ''))
         dataset_dir = None
         if hasattr(self, "master") and hasattr(self.master, "dataset_var"):
             dataset_dir = self.master.dataset_var.get()

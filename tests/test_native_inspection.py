@@ -29,6 +29,22 @@ class NativeTests(unittest.TestCase):
         self.ui.apply_comparison();self.ui.reset_view();self.root.update()
         self.addCleanup(self.root.destroy)
 
+    def test_photo_dialog_and_comparison_activation(self):
+        from native_inspection import CameraPhotoViewer
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            photo = Path(directory)/'test.jpg'
+            Image.new('RGB', (100, 50)).save(photo)
+            window = CameraPhotoViewer(self.root)
+            window.show_camera(self.ui.cameras[0], str(photo), 0, 4)
+            self.root.update()
+            self.assertEqual(window._raw_pil.size, (100, 50))
+            window.destroy()
+        self.ui.toggle_comparison()
+        self.assertEqual(self.ui.compare_mode.get(), 'Overlay')
+        self.assertEqual(len(self.ui.points), 8)
+        self.assertEqual(self.errors, [])
+
     def test_minimum_layout_with_comparison_expanded(self):
         self.ui.toggle_comparison();self.root.update()
         self.assertGreater(self.ui.canvas.winfo_height(),200)

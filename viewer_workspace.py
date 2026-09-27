@@ -25,7 +25,23 @@ def camera_pairs(a, b):
             names[name] = i
         return {name: i for name, i in names.items() if name not in duplicates}
     left, right = index(a), index(b)
-    return [(left[name], right[name]) for name in left.keys() & right.keys()]
+    pairs = [(left[name], right[name]) for name in sorted(left.keys() & right.keys())]
+    # Exporters often prepend images/ or an absolute dataset directory.
+    # Only use basename fallback when it is unique in both complete inputs.
+    def basenames(cameras):
+        result = {}
+        for i, camera in enumerate(cameras):
+            name = camera['name'].replace('\\', '/').rsplit('/', 1)[-1]
+            result.setdefault(name, []).append(i)
+        return result
+    aa, bb = basenames(a), basenames(b)
+    used_a, used_b = {i for i,j in pairs}, {j for i,j in pairs}
+    for name in sorted(aa.keys() & bb.keys()):
+        if len(aa[name]) == len(bb[name]) == 1:
+            i,j = aa[name][0],bb[name][0]
+            if i not in used_a and j not in used_b:
+                pairs.append((i,j))
+    return pairs
 
 
 def similarity(source, target):
@@ -108,6 +124,7 @@ class InspectionWorkspace:
             self.mode = gui.add_dropdown('Show', ('A only', 'B only', 'Overlay'), initial_value='A only', disabled=len(names)<2)
             self.registration = gui.add_checkbox('Register B to A', False,
                 hint='Fits rotation, translation and scale from identical image names. Changes the preview only.')
+            self.compare_button = gui.add_button('Compare A and B', disabled=len(names)<2)
             self.links = gui.add_checkbox('Camera offsets', True)
             gui.add_markdown('**A · mint** / **B · coral** · Overlay uses layer colors.')
             with gui.add_folder('How comparison works', expand_by_default=False):
@@ -122,9 +139,9 @@ class InspectionWorkspace:
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
             self.camera_thumbs = gui.add_checkbox('Frustum thumbnails', True)
-            self.paths = gui.add_checkbox('Camera sequence', True, hint='Connects camera centers in file order; not an inferred capture path.')
+            self.paths = gui.add_checkbox('Camera trajectory', True, hint='Connects camera centers in file order; not an inferred capture path.')
             self.grid = gui.add_checkbox('Ground grid', False)
-            self.point_size = gui.add_slider('Point size', 0.001, 0.03, 0.001, 0.004)
+            self.point_size = gui.add_number('Point size', initial_value=0.004, min=0.000001, max=1.0, step=0.000001, hint='Scene units. Values down to 0.000001 are supported.')
             self.camera_size = gui.add_slider('Camera size', 0.2, 3.0, 0.1, 1.0)
             self.color = gui.add_dropdown('Point color', ('Original', 'Layer color', 'B distance to A'), initial_value='Original')
             self.budget = gui.add_dropdown('Points per run', ('100,000', '300,000', '1,000,000'), initial_value='300,000')
@@ -133,9 +150,9 @@ class InspectionWorkspace:
         with gui.add_folder('Inspect a camera', expand_by_default=False):
             self.camera = gui.add_dropdown('Camera', ('No cameras',))
             self.camera_actions = gui.add_button_group('Selection', ('Previous', 'Next', 'Focus', 'Look through'))
-            self.open_photo_btn = gui.add_button('🖼️ Open Image in Window')
-            self.auto_open_photo = gui.add_checkbox('Open image on select', True,
-                hint='Automatically open high-res photo in separate window when a camera is selected or clicked.')
+            self.open_photo_btn = gui.add_button('View photo')
+            self.auto_open_photo = gui.add_checkbox('Preview photo on select', False,
+                hint='Show a single in-browser photo dialog when you select a camera.')
             self.camera_info = gui.add_markdown('Click a camera frustum or choose an image above. Frustum optics are illustrative.')
         with gui.add_folder('Run details', expand_by_default=False):
             self.details = gui.add_markdown('')
@@ -143,7 +160,8 @@ class InspectionWorkspace:
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
                         self.cameras, self.camera_thumbs, self.paths, self.grid, self.point_size, self.camera_size,
                         self.color, self.budget, self.trim):
-            control.on_update(self.update)
+            control.on_update(self.comparison_changed if control in (self.b, self.color) else self.update)
+        self.compare_button.on_click(self.comparison_changed)
         self.views.on_click(self.navigate)
         self.fit_traj_btn.on_click(self.fit_trajectory)
         self.open_run_btn.on_click(self.open_run_folder)
@@ -155,6 +173,14 @@ class InspectionWorkspace:
         self.open_photo_btn.on_click(self.open_selected_photo)
         server.on_client_connect(lambda client: self.set_view(client, 'Fit'))
         self.update()
+
+    def comparison_changed(self, event=None):
+        if self.a.value != self.b.value:
+            self.mode.value = 'Overlay'
+        self.update()
+        if self.mode.value == 'Overlay':
+            for client in self.clients(event):
+                self.set_view(client, 'Fit')
 
     def clients(self, event):
         return [event.client] if getattr(event, 'client', None) else list(self.server.get_clients().values())
@@ -204,7 +230,7 @@ class InspectionWorkspace:
                                     f'RMS **{np.sqrt(np.mean(errors**2)):.4g}** scene units.\n\n'
                                     'Inter-run agreement, not ground-truth accuracy.')
                     else:
-                        summary += '\n\nNo camera differences available. Names must match exactly, including relative paths.'
+                        summary += '\n\nNo camera differences available. Use matching image names; ambiguous duplicate filenames are excluded.'
                     layers['B'] = b
                 self.layers = layers
                 self.comparison.content = summary
@@ -274,11 +300,11 @@ class InspectionWorkspace:
                 handle = self.server.scene.add_camera_frustum(f'/inspection/{key}/camera/{i}',
                     fov=np.radians(60), aspect=1.5, scale=span*.018*self.camera_size.value,
                     color=tint, position=camera['pos'], wxyz=camera['wxyz'],
-                    image=cached_thumb, format='jpeg',
+                    image=cached_thumb if self.camera_thumbs.value else None, format='jpeg',
                     visible=visible and self.cameras.value)
-                handle.on_click(lambda event, value=name: self.select_camera(value))
+                handle.on_click(lambda event, value=name: self.select_camera(value, event))
                 self.handles.append(handle)
-                if self.camera_thumbs.value and cached_thumb is None and cam_name:
+                if self.camera_thumbs.value and cache_key not in self._thumb_cache and cam_name:
                     self._thumb_executor.submit(self._fetch_thumbnail_and_update, cam_name, run_path, handle)
             details.append(f'**{key} · {self.a.value if key == "A" else self.b.value}**\n\n'
                            f'{len(sampled):,} displayed / {len(layer["points"]):,} finite points · '
@@ -448,11 +474,12 @@ class InspectionWorkspace:
             except Exception as e:
                 print(f"[viewer] Error opening run folder: {e}")
 
-    def select_camera(self, name):
+    def select_camera(self, name, event=None):
         self.camera.value = name
         self.inspect_camera()
-        if self.auto_open_photo.value:
-            self.open_selected_photo()
+        if event is not None and self.auto_open_photo.value:
+            self.open_selected_photo(event)
+
 
     def inspect_camera(self, event=None):
         if self.selection_handle is not None:
@@ -480,6 +507,9 @@ class InspectionWorkspace:
             photo_info + '\n\nFrustum FOV is illustrative (60°), not calibrated optics.'
         )
 
+        if event is not None and self.auto_open_photo.value:
+            self.open_selected_photo(event)
+
     def open_selected_photo(self, event=None):
         if self.camera.value not in self.camera_options:
             return
@@ -493,19 +523,20 @@ class InspectionWorkspace:
             self.camera_info.content = f'**{cam_name}**\n\n⚠️ Image file not found on disk for this camera.'
             return
         try:
-            os.startfile(photo_path)
-        except Exception as e:
-            print(f"[viewer] Error opening photo with startfile: {e}")
-        try:
             with Image.open(photo_path) as img:
                 img = img.convert('RGB')
                 img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
                 arr = np.asarray(img, dtype=np.uint8)
-            modal = self.server.gui.add_modal(f'Photo: {os.path.basename(photo_path)}')
+            previous = getattr(self, '_photo_modal', None)
+            if previous is not None:
+                previous.close()
+            gui = event.client.gui if getattr(event, 'client', None) else self.server.gui
+            modal = gui.add_modal(os.path.basename(photo_path))
+            self._photo_modal = modal
             with modal:
-                self.server.gui.add_markdown(f'**File:** `{photo_path}`\n\n**Camera:** `{cam_name}`')
-                self.server.gui.add_image(arr, format='jpeg')
-                close_btn = self.server.gui.add_button('Close')
+                gui.add_markdown(f'Layer {key} · Camera {index + 1} / {len(self.layers[key]["cameras"])}')
+                gui.add_image(arr, format='jpeg')
+                close_btn = gui.add_button('Close preview')
                 close_btn.on_click(lambda _: modal.close())
         except Exception as e:
             print(f"[viewer] Error opening browser photo modal: {e}")
@@ -518,7 +549,7 @@ class InspectionWorkspace:
             if action in ('Previous', 'Next'):
                 names = list(self.camera_options)
                 index = names.index(self.camera.value)
-                self.select_camera(names[(index+(-1 if action == 'Previous' else 1)) % len(names)])
+                self.select_camera(names[(index+(-1 if action == 'Previous' else 1)) % len(names)], event)
                 return
             key, index = self.camera_options[self.camera.value]
             camera = self.layers[key]['cameras'][index]
@@ -547,5 +578,7 @@ class InspectionWorkspace:
                 previous = control.value
                 control.options = list(runs)
                 control.value = previous if previous in runs else next(iter(runs))
-            self.b.disabled = self.mode.disabled = len(runs) < 2
+            self.b.disabled = self.mode.disabled = self.compare_button.disabled = len(runs) < 2
+            if len(runs) > 1 and self.b.value == self.a.value:
+                self.b.value = next(n for n in runs if n != self.a.value)
             self.update()
