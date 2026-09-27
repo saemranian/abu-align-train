@@ -158,14 +158,12 @@ def enable_memory_efficient_patch_and_frame_attention(
         intermediates = []
         for _ in range(aggregator.aa_block_size):
             block = aggregator.frame_blocks[frame_idx]
-            out_chunks = []
+            tokens_next = torch.empty_like(tokens)
             for i in range(0, total_frames, chunk_size):
                 tok_chunk = tokens[i : i + chunk_size]
                 pos_chunk = pos[i : i + chunk_size] if pos is not None else None
-                out_chunk = block(tok_chunk, pos=pos_chunk, pos_max=pos_max)
-                out_chunks.append(out_chunk)
-            tokens = torch.cat(out_chunks, dim=0)
-            del out_chunks
+                tokens_next[i : i + chunk_size] = block(tok_chunk, pos=pos_chunk, pos_max=pos_max)
+            tokens = tokens_next
             frame_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
@@ -173,7 +171,119 @@ def enable_memory_efficient_patch_and_frame_attention(
 
     aggregator._process_frame_attention = _chunked_process_frame_attention
 
-    # 2. Zero-Spill Streamed Aggregator Forward
+    # 2. True Streamed Fast-Weight Global Attention Blocks (Zero-Spill GPU Pipelined)
+    if hasattr(aggregator, "_process_global_attention"):
+        orig_process_global_attention = aggregator._process_global_attention
+
+    def _streamed_process_global_attention(
+        tokens, B, S, P, C, global_idx, pos=None, pos_max=None,
+        patch_h=None, patch_w=None, num_prefix_tokens=0, num_suffix_tokens=0, **kwargs
+    ):
+        total_tokens = S * P
+        if tokens.shape != (B, total_tokens, C):
+            tokens = tokens.view(B, S, P, C).view(B, total_tokens, C)
+
+        if pos is not None and pos.shape != (B, total_tokens, 2):
+            pos = pos.view(B, S, P, 2).view(B, total_tokens, 2)
+
+        intermediates = []
+        from vggttt.nets.ttt_attention import FastWeightAttention
+        from vggttt.nets.ttt import zeropower_via_newtonschulz5, fast_weight_swish_glu_fwd, silu_backprop
+
+        for _ in range(aggregator.aa_block_size):
+            block = aggregator.global_blocks[global_idx]
+            attn = getattr(block, "attn", None)
+
+            if isinstance(attn, FastWeightAttention):
+                # Chunk size aligned to whole images
+                chunk_tokens = chunk_size * (patch_h * patch_w + num_prefix_tokens) if patch_h and patch_w else chunk_size * P
+                boundaries = attn.get_chunk_boundaries(total_tokens, chunk_tokens, num_prefix_tokens, num_suffix_tokens, patch_h, patch_w)
+
+                # Initialize fast weights
+                w0 = attn.w0.repeat(B, 1, 1).clone()
+                w1 = attn.w1.repeat(B, 1, 1).clone()
+                w2 = attn.w2.repeat(B, 1, 1).clone()
+                w0_norm = w0.norm(dim=1, keepdim=True)
+                w1_norm = w1.norm(dim=1, keepdim=True)
+                w2_norm = w2.norm(dim=1, keepdim=True)
+
+                # Detect number of TTT gradient update steps
+                info = kwargs.get("info")
+                ttt_op_order = info.get("ttt_op_order") if info else None
+                if ttt_op_order:
+                    num_steps = sum(1 for op in ttt_op_order if getattr(op, "compute_grad", False) and getattr(op, "update", False))
+                    if num_steps == 0:
+                        num_steps = getattr(attn, "num_steps", 2)
+                else:
+                    num_steps = getattr(attn, "num_steps", 2)
+
+                # Step 1: Gradient accumulation passes (chunked on GPU, 0 MB PCIe offloading)
+                for step in range(num_steps):
+                    grads = {"w0": torch.zeros_like(w0), "w1": torch.zeros_like(w1), "w2": torch.zeros_like(w2)}
+                    for c_start, c_end in boundaries:
+                        xc = block.norm1(tokens[:, c_start:c_end, :])
+                        pos_c = pos[:, c_start:c_end] if pos is not None else None
+                        c_pfx = num_prefix_tokens
+                        c_sfx = max(0, num_suffix_tokens - (total_tokens - c_end))
+                        qkv_lr = attn._compute_qkv_lr_impl(xc, pos_c, pos_max, patch_h, patch_w, c_sfx, c_pfx)
+                        ki, vi = qkv_lr["k"], qkv_lr["v"]
+                        lr0i, lr1i, lr2i = qkv_lr["lr0"], qkv_lr["lr1"], qkv_lr["lr2"]
+
+                        gate_before_act = ki @ w0
+                        hidden_before_mul = ki @ w2
+                        hidden = torch.nn.functional.silu(gate_before_act, inplace=False) * hidden_before_mul
+
+                        dhidden = vi @ w1.transpose(-1, -2)
+                        dhidden_before_mul = dhidden * torch.nn.functional.silu(gate_before_act, inplace=False)
+                        dgate = dhidden * hidden_before_mul
+                        dgate_before_act = silu_backprop(dgate, gate_before_act)
+
+                        grads["w1"] += (hidden * lr1i).transpose(-1, -2) @ vi
+                        grads["w0"] += (ki * lr0i).transpose(-1, -2) @ dgate_before_act
+                        grads["w2"] += (ki * lr2i).transpose(-1, -2) @ dhidden_before_mul
+                        del qkv_lr, ki, vi, lr0i, lr1i, lr2i, gate_before_act, hidden, dhidden, dgate, dgate_before_act, xc
+
+                    # Update fast weights via Newton-Schulz orthogonalization
+                    weight = 1.0 ** step
+                    w1 = w1 + weight * zeropower_via_newtonschulz5(grads["w1"], attn.muon_update_steps)
+                    w0 = w0 + weight * zeropower_via_newtonschulz5(grads["w0"], attn.muon_update_steps)
+                    w2 = w2 + weight * zeropower_via_newtonschulz5(grads["w2"], attn.muon_update_steps)
+                    del grads
+
+                    w0 = w0 / (w0.norm(dim=1, keepdim=True) + 1e-5) * w0_norm
+                    w1 = w1 / (w1.norm(dim=1, keepdim=True) + 1e-5) * w1_norm
+                    w2 = w2 / (w2.norm(dim=1, keepdim=True) + 1e-5) * w2_norm
+
+                # Step 2: Apply pass chunk by chunk writing directly into tokens_next
+                tokens_next = torch.empty_like(tokens)
+                for c_start, c_end in boundaries:
+                    xc = block.norm1(tokens[:, c_start:c_end, :])
+                    pos_c = pos[:, c_start:c_end] if pos is not None else None
+                    c_pfx = num_prefix_tokens
+                    c_sfx = max(0, num_suffix_tokens - (total_tokens - c_end))
+                    qkv_lr = attn._compute_qkv_lr_impl(xc, pos_c, pos_max, patch_h, patch_w, c_sfx, c_pfx)
+                    qi = qkv_lr["q"]
+                    oi = fast_weight_swish_glu_fwd(qi, w0, w1, w2)
+                    c_len = c_end - c_start
+                    oi_re = oi.view(B, attn.num_heads, c_len, attn.head_dim).permute(0, 2, 1, 3).reshape(B, c_len, C)
+                    attn_chunk = attn._proj(oi_re)
+                    residual_chunk = tokens[:, c_start:c_end, :] + block.drop_path1(block.ls1(attn_chunk))
+                    mlp_chunk = block.drop_path2(block.ls2(block.mlp(block.norm2(residual_chunk))))
+                    tokens_next[:, c_start:c_end, :] = residual_chunk + mlp_chunk
+                    del qkv_lr, qi, oi, oi_re, attn_chunk, residual_chunk, mlp_chunk, xc
+
+                tokens = tokens_next
+            else:
+                tokens = block(tokens, pos=pos, patch_h=patch_h, patch_w=patch_w, num_prefix_tokens=num_prefix_tokens, **kwargs)
+
+            global_idx += 1
+            intermediates.append(tokens.view(B, S, P, C))
+
+        return tokens, global_idx, intermediates
+
+        aggregator._process_global_attention = _streamed_process_global_attention
+
+    # 3. Zero-Spill Streamed Aggregator Forward
     orig_aggregator_forward = aggregator.forward
 
     def _zero_spill_aggregator_forward(

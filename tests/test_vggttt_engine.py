@@ -283,6 +283,55 @@ class TestVGGTTTEngine(unittest.TestCase):
         self.assertEqual(len(inters), 1)
         torch.testing.assert_close(out_tokens, expected, atol=1e-6, rtol=1e-6)
 
+    def test_streamed_global_attention_adapter(self):
+        """Verifies that _streamed_process_global_attention executes on mock blocks."""
+        import torch
+        import torch.nn as nn
+        from vggttt_engine import enable_memory_efficient_patch_and_frame_attention
+
+        class MockGlobalBlock(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attn = nn.Identity()
+
+            def forward(self, x, **kwargs):
+                return x + 0.5
+
+        class MockAggregator(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.aa_block_size = 1
+                self.aa_block_num = 1
+                self.patch_size = 14
+                self.frame_blocks = nn.ModuleList([nn.Identity()])
+                self.global_blocks = nn.ModuleList([MockGlobalBlock()])
+                self._resnet_mean = torch.tensor([0.485, 0.456, 0.406])
+                self._resnet_std = torch.tensor([0.229, 0.224, 0.225])
+
+            def _process_frame_attention(self, tokens, B, S, P, C, frame_idx, pos=None, pos_max=None):
+                return tokens, frame_idx + 1, [tokens]
+
+            def _process_global_attention(self, tokens, B, S, P, C, global_idx, pos=None, **kwargs):
+                return tokens + 0.5, global_idx + 1, [tokens + 0.5]
+
+        class MockModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.aggregator = MockAggregator()
+
+        model = MockModel()
+        enable_memory_efficient_patch_and_frame_attention(model, chunk_size=16)
+
+        B, S, P, C = 1, 32, 10, 32
+        tokens = torch.randn(B, S * P, C)
+
+        out_tokens, global_idx, inters = model.aggregator._process_global_attention(
+            tokens, B, S, P, C, 0
+        )
+        self.assertEqual(out_tokens.shape, (B, S * P, C))
+        self.assertEqual(global_idx, 1)
+        self.assertEqual(len(inters), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
