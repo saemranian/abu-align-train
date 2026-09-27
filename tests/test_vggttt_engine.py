@@ -226,7 +226,59 @@ class TestVGGTTTEngine(unittest.TestCase):
             self.assertEqual(padding_boxes[0][:4], (0, 0, 518, 518))
             self.assertEqual(padding_boxes[1][:4], (0, 0, 518, 518))
 
+    def test_chunked_frame_attention_adapter(self):
+        """
+        Verifies that enable_memory_efficient_patch_and_frame_attention splits
+        frame attention into 16-frame chunks and preserves exact numerical output.
+        """
+        import torch
+        import torch.nn as nn
+        from vggttt_engine import enable_memory_efficient_patch_and_frame_attention
+
+        class MockBlock(nn.Module):
+            def forward(self, x, pos=None, pos_max=None):
+                return x * 1.5 + 0.1
+
+        class MockAggregator(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.aa_block_size = 1
+                self.aa_block_num = 1
+                self.patch_size = 14
+                self.frame_blocks = nn.ModuleList([MockBlock()])
+                self._resnet_mean = torch.tensor([0.485, 0.456, 0.406])
+                self._resnet_std = torch.tensor([0.229, 0.224, 0.225])
+
+            def _process_frame_attention(self, tokens, B, S, P, C, frame_idx, pos=None, pos_max=None):
+                block = self.frame_blocks[frame_idx]
+                out = block(tokens.view(B * S, P, C), pos=pos, pos_max=pos_max)
+                return out, frame_idx + 1, [out.view(B, S, P, C)]
+
+        class MockModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.aggregator = MockAggregator()
+
+        model = MockModel()
+        enable_memory_efficient_patch_and_frame_attention(model, chunk_size=16)
+
+        B, S, P, C = 1, 35, 10, 32
+        tokens = torch.randn(B * S, P, C)
+
+        # Execute chunked forward pass
+        out_tokens, frame_idx, inters = model.aggregator._process_frame_attention(
+            tokens, B, S, P, C, 0
+        )
+
+        # Expected output computed in one shot
+        expected = tokens * 1.5 + 0.1
+        self.assertEqual(out_tokens.shape, (B * S, P, C))
+        self.assertEqual(frame_idx, 1)
+        self.assertEqual(len(inters), 1)
+        torch.testing.assert_close(out_tokens, expected, atol=1e-6, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

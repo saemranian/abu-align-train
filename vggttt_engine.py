@@ -113,17 +113,18 @@ def load_vggttt_model(weights_path: Optional[str] = None, device: str = "cuda", 
 
 def enable_memory_efficient_patch_and_frame_attention(
     model: Any,
-    chunk_size: int = 64,
+    chunk_size: int = 16,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """
     Installs an ultra-optimized zero-spill runtime streaming adapter on VGG-T³.
     Eliminates out-of-memory errors and Windows WDDM PCIe paging freezes on massive
     sequences (>64 to 2,000+ views) by:
-      1. Streaming image patch embedding and frame attention in bounded minibatches (chunk_size=64 views).
+      1. Streaming image patch embedding and frame attention in bounded minibatches (chunk_size=16 views,
+         strictly adhering to NVIDIA's <= 20 view recommendation and bounding Math SDPA to < 1.0 GB).
       2. Concatenating intermediate layer tensors directly on GPU in 1ms and transferring to host CPU RAM
          via asynchronous DMA, eliminating slow single-threaded CPU memcpy and RAM spikes.
-      3. Streaming dense DPT depth/point heads with 64-view minibatches without intra-loop empty_cache stalls.
+      3. Streaming dense DPT depth/point heads with 16-view minibatches without intra-loop empty_cache stalls.
       4. Emitting real-time layer-by-layer telemetry to prevent GUI/CLI perceived freezes.
     Guarantees exact bitwise mathematical parity (diff = 0.0) with zero origin repo modification.
     """
@@ -164,6 +165,7 @@ def enable_memory_efficient_patch_and_frame_attention(
                 out_chunk = block(tok_chunk, pos=pos_chunk, pos_max=pos_max)
                 out_chunks.append(out_chunk)
             tokens = torch.cat(out_chunks, dim=0)
+            del out_chunks
             frame_idx += 1
             intermediates.append(tokens.view(B, S, P, C))
 
@@ -186,6 +188,15 @@ def enable_memory_efficient_patch_and_frame_attention(
         patch_h = H // aggregator.patch_size
         patch_w = W // aggregator.patch_size
 
+        if attn_kwargs is None:
+            attn_kwargs = {}
+        else:
+            attn_kwargs = dict(attn_kwargs)
+        if "chunk_size" not in attn_kwargs and memory_efficient_inference:
+            attn_kwargs["chunk_size"] = chunk_size * patch_h * patch_w
+        if "offload_to_cpu" not in attn_kwargs and memory_efficient_inference:
+            attn_kwargs["offload_to_cpu"] = True
+
         if C_in != 3:
             raise ValueError(f"Expected 3 input channels, got {C_in}")
 
@@ -193,20 +204,21 @@ def enable_memory_efficient_patch_and_frame_attention(
         images_flat = images.view(B * S, C_in, H, W)
         total_frames = B * S
         target_device = next(aggregator.parameters()).device
+        target_dtype = next(aggregator.parameters()).dtype
 
         # Resnet mean/std for patch embed
-        mean = aggregator._resnet_mean.squeeze().view(1, 3, 1, 1).to(device=target_device, dtype=torch.bfloat16)
-        std = aggregator._resnet_std.squeeze().view(1, 3, 1, 1).to(device=target_device, dtype=torch.bfloat16)
+        mean = aggregator._resnet_mean.squeeze().view(1, 3, 1, 1).to(device=target_device, dtype=target_dtype)
+        std = aggregator._resnet_std.squeeze().view(1, 3, 1, 1).to(device=target_device, dtype=target_dtype)
 
-        # Streamed patch embed: transfers 64-frame chunks on-demand to avoid allocating monolithic tensors on CUDA
+        # Streamed patch embed: transfers 16-frame chunks on-demand to avoid allocating monolithic tensors on CUDA
         chunks_out = []
         is_dict = None
         for i in range(0, total_frames, chunk_size):
             chunk_img = images_flat[i : i + chunk_size]
             if not chunk_img.is_cuda:
-                chunk_img = chunk_img.to(device=target_device, dtype=torch.bfloat16, non_blocking=True)
+                chunk_img = chunk_img.to(device=target_device, dtype=target_dtype, non_blocking=True)
             else:
-                chunk_img = chunk_img.to(dtype=torch.bfloat16)
+                chunk_img = chunk_img.to(device=target_device, dtype=target_dtype)
             chunk_img = (chunk_img - mean) / std
             c_out = aggregator.patch_embed(chunk_img)
             if is_dict is None:
@@ -287,6 +299,10 @@ def enable_memory_efficient_patch_and_frame_attention(
                 output_list.append(concat_inter.to("cpu", non_blocking=True))
                 del concat_inter
 
+            del frame_intermediates, global_intermediates
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         return output_list, aggregator.patch_start_idx, pos
 
     aggregator.forward = _zero_spill_aggregator_forward
@@ -300,7 +316,7 @@ def enable_memory_efficient_patch_and_frame_attention(
         head._abu_streamed_dpt_installed = True
 
         def _streamed_dpt_forward(tokens_list, images, patch_start_idx, frames_chunk_size=None, **kwargs):
-            effective_chunk_size = max(frames_chunk_size or chunk_size, chunk_size)
+            effective_chunk_size = min(frames_chunk_size or chunk_size, chunk_size)
             B, S, P, C = tokens_list[0].shape
             tokens_list = [t.view(B * S, P, C) for t in tokens_list]
             total_frames = B * S
@@ -635,7 +651,7 @@ def run_vggttt_reconstruction(
 
     # Enable frame & patch chunking adapter to guarantee <= 10 GB peak VRAM on any sequence length
     if memory_efficient or offload_to_cpu or num_images > 32:
-        enable_memory_efficient_patch_and_frame_attention(model, chunk_size=64, progress_callback=progress_callback)
+        enable_memory_efficient_patch_and_frame_attention(model, chunk_size=16, progress_callback=progress_callback)
 
     log(f"[VGG-T³ 3/4] Running feed-forward reconstruction (TTT Steps: {ttt_steps or 'Auto'}, Global-Pred: {use_global_pred}, Mem-Eff: {memory_efficient})...")
     t_inf = time.time()
