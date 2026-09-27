@@ -163,7 +163,7 @@ class NativeInspection:
         self.distance_colors = tk.BooleanVar(self, False)
         self.navigation_mode = tk.StringVar(self, 'Orbit')
         self.camera_choice = tk.StringVar(self, '')
-        self.auto_open_photo_var = tk.BooleanVar(self, True)
+        self.auto_open_photo_var = tk.BooleanVar(self, False)
         self._compare_visible = False
         self._inspector_visible = False
         self.scene_body = tk.Frame(self, bg=BG)
@@ -177,10 +177,12 @@ class NativeInspection:
         label(header, 'Reconstruction', muted=True).grid(row=0, column=0, padx=(0, 10))
         self.run_combo = ttk.Combobox(header, textvariable=self.run_choice_var, state='readonly', width=20, postcommand=self.refresh_runs)
         self.run_combo.grid(row=0, column=1, sticky='ew', padx=(0, 10))
-        self.run_combo.bind('<<ComboboxSelected>>', lambda e: self.start_comparison())
+        self.run_combo.bind('<<ComboboxSelected>>', lambda e: self.load_selected_run())
         button(header, 'Refresh', self._reload_runs).grid(row=0, column=2, padx=3)
-        button(header, 'Compare', self.toggle_comparison).grid(row=0, column=3, padx=3)
-        button(header, 'Inspect', self.toggle_inspector).grid(row=0, column=4, padx=3)
+        self.compare_toggle = button(header, 'Compare', self.toggle_comparison)
+        self.compare_toggle.grid(row=0, column=3, padx=3)
+        self.inspect_toggle = button(header, 'Inspect', self.toggle_inspector)
+        self.inspect_toggle.grid(row=0, column=4, padx=3)
         button(header, 'Report', self.show_reconstruction_report).grid(row=0, column=5, padx=3)
 
         self.comparison_panel = tk.Frame(self.compare_scroll.body, bg=SURFACE, pady=6)
@@ -191,11 +193,12 @@ class NativeInspection:
         label(row, 'B · Compare with', muted=True).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0,6))
         self.compare_combo = ttk.Combobox(row, textvariable=self.comparison_run, state='readonly', width=20)
         self.compare_combo.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0,12))
-        self.compare_combo.bind('<<ComboboxSelected>>', lambda e: self.load_selected_run())
+        self.compare_combo.bind('<<ComboboxSelected>>', lambda e: self.start_comparison())
         self.mode_combo = ttk.Combobox(row, textvariable=self.compare_mode, values=('A only', 'B only', 'Overlay'), state='readonly', width=11)
         label(row, 'Show', muted=True).grid(row=2,column=0,sticky='w')
         self.mode_combo.grid(row=2, column=1)
         self.mode_combo.bind('<<ComboboxSelected>>', lambda e: self.apply_comparison())
+        button(row, 'Switch A / B', self.switch_comparison).grid(row=3, column=0, columnspan=2, sticky='ew', pady=(8, 4))
         settings = tk.Frame(self.comparison_panel, bg=SURFACE)
         settings.pack(fill='x', pady=6)
         for text, variable in [('Register B to A', self.register_runs), ('Color B by distance to A', self.distance_colors)]:
@@ -224,7 +227,7 @@ class NativeInspection:
         color.pack(side='left'); color.bind('<<ComboboxSelected>>', lambda e:self.render())
         friendly_choices(color,self.color_mode_var,{'rgb':'Natural','depth':'Depth','elevation':'Elevation','white':'White'})
         self.color_mode_var.trace_add('write',lambda *_:self.render())
-        label(self.layer_bar, 'Point size', muted=True).pack(side='left')
+        label(self.layer_bar, 'Size · px', muted=True).pack(side='left')
         size = ttk.Combobox(self.layer_bar, textvariable=self.point_size_var, values=(1,2,3,4), state='readonly', width=3)
         size.pack(side='left'); size.bind('<<ComboboxSelected>>', lambda e:self.render())
         for title, var in [('Cameras',self.show_cameras_var), ('Trajectory',self.show_trajectory_var)]:
@@ -241,16 +244,19 @@ class NativeInspection:
         self.camera_combo = ttk.Combobox(inspect, textvariable=self.camera_choice, width=15, state='disabled')
         self.camera_combo.grid(row=0,column=1,sticky='ew',padx=(0,8))
         self.camera_combo.bind('<<ComboboxSelected>>', self._select_named_camera)
-        for i,(title,cmd) in enumerate([('Previous',lambda:self.step_camera(-1)),('Next',lambda:self.step_camera(1)),
-                                      ('Focus',self.focus_camera),('Look through',self.look_through)],2):
-            button(inspect,title,cmd).grid(row=0,column=i,padx=3)
-        button(inspect, '🖼️ View Photo', self.open_selected_camera_window).grid(row=0, column=6, padx=3)
-        tk.Checkbutton(inspect, text="Auto-open Photo", variable=self.auto_open_photo_var,
-                       bg=SURFACE, fg=TEXT, selectcolor=FIELD, activebackground=SURFACE, font=("Segoe UI", 8)).grid(row=0, column=7, padx=(6, 2))
+        actions = tk.Frame(inspect, bg=SURFACE)
+        actions.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(6, 0))
+        for title, cmd in [('Previous',lambda:self.step_camera(-1)), ('Next',lambda:self.step_camera(1)),
+                           ('Focus',self.focus_camera), ('Look through',self.look_through),
+                           ('View photo',self.open_selected_camera_window)]:
+            button(actions,title,cmd).pack(side='left')
+        tk.Checkbutton(actions, text='Auto preview', variable=self.auto_open_photo_var,
+                       bg=SURFACE, fg=TEXT, selectcolor=FIELD, activebackground=SURFACE).pack(side='left')
+        wrap_row(actions)
         inspect.pack_forget()
         self.stats_lbl = label(self, 'Choose a completed alignment to inspect.', muted=True, anchor='w')
         self.stats_lbl.pack(side='bottom',fill='x',padx=12,pady=(4,8))
-        label(self, 'Drag: orbit · Right / Shift-drag: pan · Scroll: zoom · F: fit · 1 / 3 / 7: views · Click a camera to inspect', muted=True, anchor='w').pack(side='bottom',fill='x',padx=12,pady=4)
+        label(self, 'Drag: orbit · Right / Shift-drag: pan · Scroll: zoom · F: fit · 1 / 3 / 7: views · B: switch A/B · Click camera: inspect', muted=True, anchor='w').pack(side='bottom',fill='x',padx=12,pady=4)
         self.compare_scroll.bind_navigation()
 
     def _build_canvas(self):
@@ -261,6 +267,7 @@ class NativeInspection:
 
     def toggle_inspector(self):
         self._inspector_visible=not self._inspector_visible
+        self.inspect_toggle.configure(text='Hide inspect' if self._inspector_visible else 'Inspect')
         for panel in (self.layer_bar,self.inspector_bar):
             if self._inspector_visible:
                 panel.pack(fill='x',before=self.scene_body)
@@ -269,6 +276,7 @@ class NativeInspection:
 
     def toggle_comparison(self):
         self._compare_visible = not self._compare_visible
+        self.compare_toggle.configure(text='Hide compare' if self._compare_visible else 'Compare')
         if self._compare_visible:
             self.compare_scroll.pack(side='right',fill='y',before=self.canvas)
             self.refresh_runs()
@@ -278,6 +286,13 @@ class NativeInspection:
                 self.reset_view()
         else:
             self.compare_scroll.pack_forget()
+
+    def switch_comparison(self):
+        if 'B' not in self.layers:
+            self.compare_info.configure(text='Choose a second completed run to switch A / B.')
+            return
+        self.compare_mode.set('B only' if self.compare_mode.get() == 'A only' else 'A only')
+        self.apply_comparison()
 
     def start_comparison(self):
         self.compare_mode.set('Overlay')
@@ -524,7 +539,7 @@ class NativeInspection:
         self.canvas.bind('<Shift-B1-Motion>',self._on_pan_drag)
         for key,command in {'f':self.reset_view,'1':lambda:self.set_preset_view(0,0),'3':lambda:self.set_preset_view(90,0),
             '7':lambda:self.set_preset_view(0,89.9),'plus':lambda:self._zoom(.85),'equal':lambda:self._zoom(.85),
-            'minus':lambda:self._zoom(1.15),'bracketleft':lambda:self.step_camera(-1),'bracketright':lambda:self.step_camera(1)}.items():
+            'minus':lambda:self._zoom(1.15),'b':self.switch_comparison,'bracketleft':lambda:self.step_camera(-1),'bracketright':lambda:self.step_camera(1)}.items():
             self.canvas.bind(f'<KeyPress-{key}>',lambda e,cmd=command:(cmd(),'break')[-1])
 
     def _on_mouse_down(self,event):

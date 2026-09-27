@@ -1,50 +1,45 @@
-# v0.0.9.2 — Viewer comparison and photo inspection fixes
+# v0.0.9.3 — Focused 3D inspection workflow
 
-## Findings and changes
-Comparison appeared inactive because selecting a comparison run left A-only visibility
-unchanged; opening the native Compare panel also left B hidden. Selecting B now
-activates Overlay and fits both reconstructions. The browser has an explicit
-Compare A and B action. Refresh avoids assigning the same run to A and B when
-another result exists. Display-only changes retain the existing viewpoint.
+## Design critique and implementation
+The viewers exposed too many competing visual elements and actions. Native photo
+selection interrupted navigation, inspector actions could overflow horizontally,
+and panel buttons did not communicate whether their panels were open. Browser
+photo planes obscured geometry, and changing point color reset comparison framing.
 
-Camera matching now prioritizes exact relative paths and then uniquely occurring
-basenames across export prefixes. Ambiguous basenames are never paired. This allows
-camera-center residuals and optional similarity registration across common engine
-exports. Both point clouds and camera trajectories retain A mint / B coral colors.
-Trajectories connect file-order camera centers, not inferred capture chronology.
+Phase 1 — predictable comparison: implemented Switch A / B in both viewers without
+moving the viewpoint. Native viewport shortcut B provides the same action; Tab
+retains keyboard focus navigation. Corrected reversed native A/B selection callbacks:
+A selection loads the reference; B selection activates and fits comparison.
 
-The browser point-size slider imposed a 0.001 minimum and step. It is now a numeric
-field with 0.000001 minimum/step, preserving 0.0001 and smaller supported values.
-The native raster viewer still uses pixel-sized points; its units differ.
+Phase 2 — quieter presentation: photo planes are opt-in in the browser; native
+photo popups are opt-in, consistent with browser previews. Photo availability is
+concise and the browser View photo action is disabled when no photo is available.
+Navigation action labels use plain text. Native point sizes explicitly show px.
 
-Browser photos use one replaceable, concise in-browser preview without also opening
-Windows Photos. Automatic preview is opt-in. Frustum thumbnail visibility now respects
-the toggle even for cached images. Explicitly selected photos are still available.
-Native photo inspection fixes the missing BORDER import that prevented construction,
-resolves B images from the B run, uses concise filenames, a separate metadata line,
-simplified actions, EXIF orientation, and padded fit without enlarging small images.
+Phase 3 — responsive controls: native camera selection gets its own row and actions
+wrap below it. Compare/Inspect buttons report their open state with Hide labels.
+Browser point-color changes preserve the viewpoint and chosen A/B mode; distance
+coloring activates the overlay without resetting navigation.
 
 ## Verification
-48 tests passed in 37.716 seconds across test_viewer_workspace, test_native_inspection,
-test_fast_viewer, test_desktop_ui, and test_gui_presets. After final control refinements,
-22 viewer/native regression tests passed in 5.509 seconds.
-Run: python -m unittest discover -s tests -p test_viewer_workspace.py
-and python -m unittest discover -s tests -p test_native_inspection.py.
-Tests instantiate real Viser APIs and Tk windows with synthetic reconstructions.
-They cover unique-name fallback, ambiguity rejection, sub-0.001 size retention,
-comparison activation, registration, photo dialog construction, and no external
-photo application launch. User production datasets were not available for validation.
-No claim of a manual browser visual review in this pass.
+40 tests passed in 55.571 seconds across test_viewer_workspace,
+test_native_inspection and test_desktop_ui. New regression cases verify fixed-view
+A/B switching, quieter defaults, photo availability, and native inspector bounds.
+Commands: python -m unittest discover -s tests -p test_viewer_workspace.py
+(repeat for test_native_inspection.py and test_desktop_ui.py).
+Browser synthetic preview confirmed Compare shows 70,000 combined points and
+Switch A / B returns to 35,000 reference points with the same framing. The control
+panel was visually inspected in the narrow in-app browser. No production dataset
+or calibrated visual accuracy benchmark was used.
 
-## Memory and limits
-No alignment/training or GPU allocation was requested. VRAM and production FPS were
-not benchmarked. Existing two-run preview caches and sample limits remain in effect.
-Photo handles close after loading. Comparisons measure sampled agreement in scene
-units, not ground-truth accuracy. Registration needs three noncollinear matched
-cameras; ambiguous or insufficient matches produce an explanatory error.
+## Memory and release
+No training/alignment or GPU benchmark was run; VRAM/FPS metrics are unmeasured.
+Disabling photo planes by default avoids background thumbnail work until requested.
+Source geometry is unchanged. Existing preview budgets and two-run caches remain.
+Modified: native_inspection.py, viewer_workspace.py, their regression tests,
+version headers, VERSION.txt, launchers and release notes.
+Consolidated backup: versions/v0.0.9.3/.
 
-## Release
-Modified implementation: viewer_workspace.py, native_inspection.py.
-Regression tests: tests/test_viewer_workspace.py, tests/test_native_inspection.py.
-Version headers, VERSION.txt, launchers, and release documentation are synchronized.
-Canonical consolidated backup: versions/v0.0.9.2/.
+Concurrent engine edit: vggttt_engine.py changed during packaging. It is excluded
+from this UI commit; the backup uses its committed baseline. All other Python
+modules and release assets were verified against the workspace.

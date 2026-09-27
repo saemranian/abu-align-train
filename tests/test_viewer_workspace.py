@@ -84,6 +84,20 @@ class WorkspaceTests(unittest.TestCase):
         self.ui = InspectionWorkspace(self.server, {'Run A':'a', 'Run B':'b'}, 'Run A',
                                       'Fixture', self.loader, lambda: {'Run A':'a', 'Run B':'b'})
 
+    def test_switch_and_color_preserve_viewpoint(self):
+        client = SimpleNamespace(camera=SimpleNamespace(position=np.array([9.,8,7]), look_at=np.zeros(3), up_direction=np.array([0.,0,1])))
+        self.server.get_clients = lambda: {1:client}
+        self.ui.switch_comparison()
+        self.assertEqual(self.ui.mode.value, 'B only')
+        self.ui.switch_comparison()
+        self.assertEqual(self.ui.mode.value, 'A only')
+        self.ui.color.value = 'Layer color'
+        self.ui.color_changed()
+        self.assertEqual(self.ui.mode.value, 'A only')
+        np.testing.assert_equal(client.camera.position, [9,8,7])
+        self.assertFalse(self.ui.camera_thumbs.value)
+        self.assertTrue(self.ui.open_photo_btn.disabled)
+
     def test_small_points_and_explicit_comparison_activation(self):
         self.ui.point_size.value = 0.0001
         self.ui.comparison_changed()

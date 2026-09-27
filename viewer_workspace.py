@@ -109,8 +109,8 @@ class InspectionWorkspace:
         self.status = gui.add_markdown('Loading reconstruction…')
         with gui.add_folder('Navigate'):
             self.views = gui.add_button_group('View', ('Fit', 'Top', 'Front', 'Right'))
-            self.fit_traj_btn = gui.add_button('🎯 Fit the trajectory')
-            self.open_run_btn = gui.add_button('📂 Open Run Folder')
+            self.fit_traj_btn = gui.add_button('Fit cameras')
+            self.open_run_btn = gui.add_button('Open run folder')
             self.zoom = gui.add_button_group('Distance', ('Closer', 'Farther'))
             self.bookmark = gui.add_button_group('Viewpoint', ('Save view', 'Restore view'))
             self.up_axis = gui.add_dropdown('World up', ('Z up', 'Y up'), initial_value='Z up',
@@ -125,6 +125,7 @@ class InspectionWorkspace:
             self.registration = gui.add_checkbox('Register B to A', False,
                 hint='Fits rotation, translation and scale from identical image names. Changes the preview only.')
             self.compare_button = gui.add_button('Compare A and B', disabled=len(names)<2)
+            self.switch_button = gui.add_button('Switch A / B', disabled=len(names)<2)
             self.links = gui.add_checkbox('Camera offsets', True)
             gui.add_markdown('**A · mint** / **B · coral** · Overlay uses layer colors.')
             with gui.add_folder('How comparison works', expand_by_default=False):
@@ -138,7 +139,7 @@ class InspectionWorkspace:
         with gui.add_folder('Scene layers', expand_by_default=False):
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
-            self.camera_thumbs = gui.add_checkbox('Frustum thumbnails', True)
+            self.camera_thumbs = gui.add_checkbox('Photo planes', False)
             self.paths = gui.add_checkbox('Camera trajectory', True, hint='Connects camera centers in file order; not an inferred capture path.')
             self.grid = gui.add_checkbox('Ground grid', False)
             self.point_size = gui.add_number('Point size', initial_value=0.004, min=0.000001, max=1.0, step=0.000001, hint='Scene units. Values down to 0.000001 are supported.')
@@ -160,8 +161,9 @@ class InspectionWorkspace:
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
                         self.cameras, self.camera_thumbs, self.paths, self.grid, self.point_size, self.camera_size,
                         self.color, self.budget, self.trim):
-            control.on_update(self.comparison_changed if control in (self.b, self.color) else self.update)
+            control.on_update(self.comparison_changed if control is self.b else self.color_changed if control is self.color else self.update)
         self.compare_button.on_click(self.comparison_changed)
+        self.switch_button.on_click(self.switch_comparison)
         self.views.on_click(self.navigate)
         self.fit_traj_btn.on_click(self.fit_trajectory)
         self.open_run_btn.on_click(self.open_run_folder)
@@ -172,6 +174,18 @@ class InspectionWorkspace:
         self.camera_actions.on_click(self.camera_action)
         self.open_photo_btn.on_click(self.open_selected_photo)
         server.on_client_connect(lambda client: self.set_view(client, 'Fit'))
+        self.update()
+
+    def switch_comparison(self, event=None):
+        if self.a.value == self.b.value:
+            self.status.content = 'Choose a different run for B before switching.'
+            return
+        self.mode.value = 'B only' if self.mode.value == 'A only' else 'A only'
+        self.update()
+
+    def color_changed(self, event=None):
+        if self.color.value == 'B distance to A' and self.a.value != self.b.value:
+            self.mode.value = 'Overlay'
         self.update()
 
     def comparison_changed(self, event=None):
@@ -325,6 +339,7 @@ class InspectionWorkspace:
         self.camera.value = old if old in self.camera_options else self.camera.options[0]
         self.camera.disabled = not bool(self.camera_options)
         self.camera_actions.disabled = not bool(self.camera_options)
+        self.open_photo_btn.disabled = not bool(self.camera_options)
         self.inspect_camera()
         self.details.content = '\n\n---\n\n'.join(details)
 
@@ -500,7 +515,8 @@ class InspectionWorkspace:
             color=(255, 220, 125), line_width=3, position=camera['pos'], wxyz=camera['wxyz'],
             image=thumb, format='jpeg',
             visible=self.cameras.value)
-        photo_info = f'\n\n📷 Photo: `{photo_path}`' if photo_path else '\n\n📷 Photo: *(not found on disk)*'
+        self.open_photo_btn.disabled = not bool(photo_path)
+        photo_info = '\n\nPhoto available' if photo_path else '\n\nPhoto unavailable on disk'
         self.camera_info.content = (
             f'**{cam_name}**\n\n'
             f'Layer {key} · position ' + ', '.join(f'{v:.4g}' for v in camera['pos']) +
@@ -578,7 +594,7 @@ class InspectionWorkspace:
                 previous = control.value
                 control.options = list(runs)
                 control.value = previous if previous in runs else next(iter(runs))
-            self.b.disabled = self.mode.disabled = self.compare_button.disabled = len(runs) < 2
+            self.b.disabled = self.mode.disabled = self.compare_button.disabled = self.switch_button.disabled = len(runs) < 2
             if len(runs) > 1 and self.b.value == self.a.value:
                 self.b.value = next(n for n in runs if n != self.a.value)
             self.update()

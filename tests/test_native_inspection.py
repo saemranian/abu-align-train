@@ -29,6 +29,22 @@ class NativeTests(unittest.TestCase):
         self.ui.apply_comparison();self.ui.reset_view();self.root.update()
         self.addCleanup(self.root.destroy)
 
+    def test_quiet_defaults_and_fixed_view_switch(self):
+        center = self.ui.center.copy()
+        self.ui.yaw = 42
+        self.ui.switch_comparison()
+        self.assertEqual(self.ui.compare_mode.get(), 'B only')
+        self.ui.switch_comparison()
+        self.assertEqual(self.ui.compare_mode.get(), 'A only')
+        np.testing.assert_equal(self.ui.center, center)
+        self.assertEqual(self.ui.yaw, 42)
+        self.assertFalse(self.ui.auto_open_photo_var.get())
+        self.ui.toggle_inspector()
+        self.root.update()
+        self.assertEqual(self.ui.inspect_toggle.cget('text'), 'Hide inspect')
+        for child in self.ui.inspector_bar.winfo_children():
+            self.assertLessEqual(child.winfo_x()+child.winfo_width(), self.ui.inspector_bar.winfo_width())
+
     def test_photo_dialog_and_comparison_activation(self):
         from native_inspection import CameraPhotoViewer
         from PIL import Image
