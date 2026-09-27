@@ -485,7 +485,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.0.8.8", 9, muted=True)
+    app.version_label = label(header, "v0.0.8.9", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -689,10 +689,51 @@ def build_workspace(app, tooltip):
     tk.Checkbutton(cache, text="Reuse cached results", variable=app.cache_var).pack(side="left")
     button(cache, "Clear cache", app._clear_dataset_cache).pack(side="left", padx=14)
     app.vggt_cache_frame = tk.Frame(cache, bg=SURFACE)
-    for title, var, options in [("Chunk", app.chunk_size_var, ["16", "24", "32", "48", "64", "96", "128", "160", "192", "224", "256", "320", "384", "448", "512", "768", "1024"]),
-                                ("Overlap", app.anchor_var, ["4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256"])]:
-        combo = field(app.vggt_cache_frame, title, var, options, width=6)
-        combo.configure(state="normal")
+    app.chunk_combo = field(app.vggt_cache_frame, "Chunk", app.chunk_size_var,
+                            ["16", "24", "32", "48", "64", "96", "128", "160", "192", "224", "256", "320", "384", "448", "512", "768", "1024"], width=6)
+    app.chunk_combo.configure(state="normal")
+    tooltip(app.chunk_combo, "Frames per Window (Chunk Size):\nNumber of camera frames processed concurrently in each neural sliding window.\n• Default: 96 frames.\n• On high-VRAM GPUs (RTX 4090 / 24GB): Increase to 192, 256, or 384 frames to drastically reduce window transitions and eliminate drift on large datasets (1000+ photos).")
+
+    app.anchor_combo = field(app.vggt_cache_frame, "Overlap", app.anchor_var,
+                             ["4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256"], width=6)
+    app.anchor_combo.configure(state="normal")
+    tooltip(app.anchor_combo, "Anchor Overlap Frames:\nNumber of overlapping frames connecting consecutive sliding windows for Umeyama coordinate alignment.\n• Default: 24 frames.\n• Higher overlap (48, 96, 128, 256) provides much stiffer, more accurate multi-view alignment and prevents disjoint clusters across large scenes.\n• Overlap cannot exceed Chunk Size (software automatically expands Chunk if Overlap is larger).")
+
+    _sync_lock = [False]
+    def _on_overlap_changed(*_):
+        if _sync_lock[0]:
+            return
+        try:
+            cur_overlap = int(str(app.anchor_var.get()).strip())
+            cur_chunk = int(str(app.chunk_size_var.get()).strip())
+            if cur_overlap >= cur_chunk:
+                _sync_lock[0] = True
+                options = [32, 48, 64, 96, 128, 160, 192, 224, 256, 320, 384, 448, 512, 768, 1024]
+                suitable = [opt for opt in options if opt > cur_overlap]
+                target_chunk = suitable[0] if suitable else cur_overlap + 64
+                app.chunk_size_var.set(str(target_chunk))
+        except Exception:
+            pass
+        finally:
+            _sync_lock[0] = False
+
+    def _on_chunk_changed(*_):
+        if _sync_lock[0]:
+            return
+        try:
+            cur_overlap = int(str(app.anchor_var.get()).strip())
+            cur_chunk = int(str(app.chunk_size_var.get()).strip())
+            if cur_chunk <= cur_overlap:
+                _sync_lock[0] = True
+                target_overlap = max(4, cur_chunk // 2)
+                app.anchor_var.set(str(target_overlap))
+        except Exception:
+            pass
+        finally:
+            _sync_lock[0] = False
+
+    app.anchor_var.trace_add("write", _on_overlap_changed)
+    app.chunk_size_var.trace_add("write", _on_chunk_changed)
     app.engine_var.trace_add("write", lambda *_: app._update_align_panel())
     app._update_align_panel()
 

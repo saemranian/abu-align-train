@@ -26,16 +26,20 @@ import numpy as np
 import torch
 
 
-def compute_dataset_hash(image_paths: List[str], engine: str, load_res: int, stride: int) -> str:
+def compute_dataset_hash(image_paths: List[str], engine: str, load_res: int, stride: int, chunk_size: Optional[int] = None, anchor_size: Optional[int] = None) -> str:
     """
-    Computes a deterministic SHA-256 fingerprint representing the exact input dataset
-    and neural configuration.
+    Computes a deterministic SHA-256 fingerprint representing the exact input dataset,
+    neural configuration, and windowing/anchor hyperparameters.
     """
     hasher = hashlib.sha256()
     hasher.update(str(engine).lower().encode("utf-8"))
     hasher.update(str(load_res).encode("utf-8"))
     hasher.update(str(stride).encode("utf-8"))
     hasher.update(str(len(image_paths)).encode("utf-8"))
+    if chunk_size is not None:
+        hasher.update(f"chunk_{chunk_size}".encode("utf-8"))
+    if anchor_size is not None:
+        hasher.update(f"anchor_{anchor_size}".encode("utf-8"))
 
     # Sample up to 100 paths with sizes and timestamps for ultra-fast validation
     step = max(1, len(image_paths) // 100)

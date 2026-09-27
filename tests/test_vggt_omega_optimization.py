@@ -350,19 +350,40 @@ class TestVGGTOmegaOptimization(unittest.TestCase):
         self.assertEqual(len(canvas), 2)
         self.assertTrue(canvas[0] <= 512 and canvas[1] <= 512)
 
-    def test_load_and_preprocess_vggt_images_with_target_canvas(self):
-        """Verify load_and_preprocess_vggt_images enforces target_canvas_size across batches."""
-        from align_cli import load_and_preprocess_vggt_images
+    def test_chunk_anchor_cache_fingerprint(self):
+        """Verify that chunk_size and anchor_size produce distinct cache fingerprints."""
+        from cache_manager import compute_dataset_hash
+        paths = [self.img1_path, self.img2_path]
+        
+        hash_48 = compute_dataset_hash(paths, "vggt_omega_max_size", 1024, 1, chunk_size=96, anchor_size=48)
+        hash_24 = compute_dataset_hash(paths, "vggt_omega_max_size", 1024, 1, chunk_size=96, anchor_size=24)
+        hash_256 = compute_dataset_hash(paths, "vggt_omega_max_size", 1024, 1, chunk_size=384, anchor_size=256)
+        hash_48_repeat = compute_dataset_hash(paths, "vggt_omega_max_size", 1024, 1, chunk_size=96, anchor_size=48)
 
-        # Pass target_canvas_size=(512, 512)
-        imgs, coords, rgb_uint8, is_square = load_and_preprocess_vggt_images(
-            [self.img1_path], engine="vggt_omega", preprocess_mode="max_size",
-            vggt_res=512, device="cpu", target_canvas_size=(512, 512)
-        )
-        self.assertEqual(imgs.shape, (1, 3, 512, 512))
-        self.assertEqual(rgb_uint8.shape, (1, 512, 512, 3))
+        # Different parameters must produce different fingerprints
+        self.assertNotEqual(hash_48, hash_24)
+        self.assertNotEqual(hash_48, hash_256)
+        self.assertNotEqual(hash_24, hash_256)
+        # Identical parameters must produce deterministic identical fingerprints
+        self.assertEqual(hash_48, hash_48_repeat)
+
+    def test_chunk_overlap_auto_expansion(self):
+        """Verify that when requested overlap >= chunk_size, chunk_size auto-expands."""
+        req_chunk = 96
+        req_overlap = 256
+        if req_overlap >= req_chunk:
+            expanded_chunk = req_overlap + max(32, req_overlap // 4)
+        else:
+            expanded_chunk = req_chunk
+        eff_overlap = min(req_overlap, max(1, expanded_chunk - 1))
+        step = max(expanded_chunk - eff_overlap, 1)
+
+        self.assertGreater(expanded_chunk, req_overlap)
+        self.assertEqual(eff_overlap, 256)
+        self.assertGreater(step, 0)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

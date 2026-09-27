@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.8 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.8.9 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -718,7 +718,34 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
 
     dataset_root = os.path.dirname(image_paths[0])
     cache_root = get_cache_root(dataset_root, getattr(args, "cache_dir", None))
-    cache_key = compute_dataset_hash(image_paths, f"{engine}_{vggt_preprocess_mode}", img_load_res, args.stride)
+
+    # Resolve effective chunk size and anchor overlap for auto-chunking & cache fingerprinting
+    eff_chunk = getattr(args, "chunk_size", None)
+    eff_anchor = getattr(args, "anchor_size", None)
+    if num_frames > 48 and getattr(args, "auto_chunk", True):
+        if eff_chunk is None or eff_chunk <= 0:
+            eff_chunk = 96 if engine == "vggt_omega" else 48
+        if eff_anchor is None or eff_anchor <= 0:
+            eff_anchor = 24 if engine == "vggt_omega" else 12
+
+        # Auto-expand chunk size if user requests large overlap >= chunk_size
+        if eff_anchor >= eff_chunk:
+            expanded_chunk = eff_anchor + max(32, eff_anchor // 4)
+            print(f"      * [Auto-Expansion] Requested Overlap ({eff_anchor}) >= Chunk Size ({eff_chunk}).")
+            print(f"                         Auto-expanding Chunk Size to {expanded_chunk} frames to maintain forward progress.")
+            eff_chunk = expanded_chunk
+
+        # Ensure overlap leaves at least 1 frame forward step (overlap < chunk_size)
+        eff_anchor = min(eff_anchor, max(1, eff_chunk - 1))
+
+    cache_key = compute_dataset_hash(
+        image_paths,
+        f"{engine}_{vggt_preprocess_mode}",
+        img_load_res,
+        args.stride,
+        chunk_size=eff_chunk,
+        anchor_size=eff_anchor,
+    )
     use_cache = not getattr(args, "no_cache", False)
 
     if getattr(args, "clear_cache", False):
@@ -787,18 +814,11 @@ def run_vggt_reconstruction(engine, model, image_paths, num_frames, total_images
             torch.cuda.empty_cache()
 
     elif num_frames > 48 and args.auto_chunk:
-        user_chunk = getattr(args, "chunk_size", None)
-        user_anchor = getattr(args, "anchor_size", None)
-        if user_chunk is not None and user_chunk > 0:
-            chunk_size = user_chunk
-        else:
-            chunk_size = 96 if engine == "vggt_omega" else 48
-
-        if user_anchor is not None and user_anchor > 0:
-            overlap = user_anchor
-        else:
-            overlap = 24 if engine == "vggt_omega" else 12
-        overlap = min(overlap, max(chunk_size // 2, 1))
+        chunk_size = eff_chunk if eff_chunk is not None else (96 if engine == "vggt_omega" else 48)
+        overlap = eff_anchor if eff_anchor is not None else (24 if engine == "vggt_omega" else 12)
+        if overlap >= chunk_size:
+            chunk_size = overlap + max(32, overlap // 4)
+        overlap = min(overlap, max(1, chunk_size - 1))
         step = max(chunk_size - overlap, 1)
 
         chunk_ranges = []
