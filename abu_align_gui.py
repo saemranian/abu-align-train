@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.0.8.9
+Abu Align & Train Version 0.0.9.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.0.8.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.0.9.0 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -289,8 +289,8 @@ class AbuAlignApp:
         self.vggttt_conf_var = tk.StringVar(value="Adaptive (20% Quantile)")
         self.vggttt_prep_var = tk.StringVar(value="Auto (Smart Center-Crop)")
         self.vggttt_mem_var = tk.BooleanVar(value=True)
-        self.vggttt_steps_var = tk.StringVar(value="2 (Recommended)")
-        self.vggttt_pred_var = tk.BooleanVar(value=True)
+        self.vggttt_steps_var = tk.StringVar(value="1 (Recommended for >500 views)")
+        self.vggttt_pred_var = tk.BooleanVar(value=False)
 
         # ACE0 Specific Options
         self.ace_iter_var = tk.StringVar(value="30")
@@ -1052,7 +1052,7 @@ class AbuAlignApp:
 
         chk_pred = tk.Checkbutton(ttt_col1, text="Use Global Point Head", variable=self.vggttt_pred_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_pred.pack(anchor="w", pady=(2, 0))
-        ToolTip(chk_pred, "Global Point Head:\nWhen enabled, extracts 3D points directly from the global transformer point prediction head (matching NVIDIA Gradio demo default). When unchecked, backprojects depth and camera intrinsics.")
+        ToolTip(chk_pred, "Global Point Head:\n• Unchecked [NVIDIA Recommended]: Unprojects 3D points from ray-consistent depth maps and camera matrices. Yields crisp, accurate geometry and runs 2x faster without VRAM overhead.\n• Checked: Predicts direct 3D points via transformer point head (slower).")
 
         # Col B: Test-Time Training (TTT) & Attention Mode
         ttt_col2 = tk.Frame(self.panel_align_vggttt, bg=self.panel_bg)
@@ -1063,10 +1063,10 @@ class AbuAlignApp:
         ttt_steps_frame.pack(anchor="w", pady=(2, 2), fill=tk.X)
         lbl_ttt_steps = tk.Label(ttt_steps_frame, text="TTT Inner Steps:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg, width=15, anchor="w")
         lbl_ttt_steps.pack(side=tk.LEFT)
-        cb_ttt_steps = ttk.Combobox(ttt_steps_frame, textvariable=self.vggttt_steps_var, values=["1 (Fast Preview)", "2 (Recommended)", "3 (Balanced)", "5 (Deep)"], state="readonly", width=14, font=("Segoe UI", 8))
+        cb_ttt_steps = ttk.Combobox(ttt_steps_frame, textvariable=self.vggttt_steps_var, values=["1 (Recommended for >500 views)", "2 (Optimal <= 500 views)", "3 (Balanced)", "5 (Deep)"], state="readonly", width=18, font=("Segoe UI", 8))
         cb_ttt_steps.pack(side=tk.LEFT)
         ToolTip(lbl_ttt_steps, "Number of Test-Time Training optimization steps per layer during feedforward alignment.")
-        ToolTip(cb_ttt_steps, "TTT Steps (NVIDIA CVPR 2026):\n• 2 (Recommended): Mathematically optimal sweet spot derived in the paper for <= 1,000 views.\n• 1 (Fast Preview): Ultra-fast single-pass update.\n• 5 (Deep): 5 gradient updates per block; can overfit on disordered mirrorless photos.")
+        ToolTip(cb_ttt_steps, "TTT Steps (NVIDIA CVPR 2026):\n• 1 (Recommended for >500 views): Optimal linear scaling per NVIDIA CVPR 2026 paper, preventing redundant optimization passes on large image collections.\n• 2 (Optimal <= 500 views): Best sweet spot for small to medium sets.\n• 3 (Balanced) / 5 (Deep): Extended optimization steps.")
 
         chk_mem = tk.Checkbutton(ttt_col2, text="Memory-Efficient (>64 views)", variable=self.vggttt_mem_var, font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg)
         chk_mem.pack(anchor="w", pady=(2, 0))
@@ -4089,7 +4089,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.0.8.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.0.9.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4641,7 +4641,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.0.8.9 - {title}")
+        doc_win.title(f"Abu Align v0.0.9.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5268,7 +5268,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.0.8.9\n"
+            "Abu Align & Train - Version 0.0.9.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.0.8.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.0.9.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1689,9 +1689,9 @@ def main():
     parser.add_argument("--vggttt_mem_eff", action="store_true", default=False, help="Enable memory-efficient linear attention inference in VGG-T3 for large sequences (>64 views)")
     parser.add_argument("--vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_true", default=None, help="Stream intermediate attention chunk outputs to CPU memory to prevent VRAM spill on large sequences")
     parser.add_argument("--no_vggttt_offload_cpu", dest="vggttt_offload_cpu", action="store_false", help="Keep all attention states in GPU VRAM")
-    parser.add_argument("--vggttt_ttt_steps", type=int, default=2, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: 2)")
-    parser.add_argument("--vggttt_global_pred", dest="vggttt_global_pred", action="store_true", default=True, help="Use global transformer point head for 3D point cloud rather than unprojected depth (NVIDIA demo default)")
-    parser.add_argument("--no_vggttt_global_pred", dest="vggttt_global_pred", action="store_false", help="Disable global point head and unproject from depth maps")
+    parser.add_argument("--vggttt_ttt_steps", type=int, default=None, help="Test-Time Training (TTT) inner optimization steps in VGG-T3 (default: auto; 1 for >300 views, 2 for <=300 views)")
+    parser.add_argument("--vggttt_global_pred", dest="vggttt_global_pred", action="store_true", default=False, help="Use global transformer point head for 3D point cloud rather than unprojected depth")
+    parser.add_argument("--no_vggttt_global_pred", dest="vggttt_global_pred", action="store_false", help="Disable global point head and unproject from depth maps (NVIDIA recommended for crisp geometry and 2x speed)")
     parser.add_argument("--vggttt_prep_mode", type=str, choices=["auto", "crop", "pad"], default="auto", help="VGG-T3 image preprocessing mode: 'auto' (smart center crop for mixed orientations), 'crop', or 'pad'")
     # Video Frame Extraction Options
     parser.add_argument("--video_fps", type=float, default=5.0, help="Target FPS when extracting from video input (default: 5.0)")
@@ -2321,8 +2321,8 @@ def main():
         print(f"      * Preprocessing Mode:   {getattr(args, 'vggttt_prep_mode', 'auto').upper()}")
         print(f"      * Confidence Threshold: {getattr(args, 'vggttt_conf', 'adaptive')}")
         print(f"      * Memory Efficient:     {getattr(args, 'vggttt_mem_eff', False)}")
-        print(f"      * TTT Steps:            {getattr(args, 'vggttt_ttt_steps', 2)}")
-        print(f"      * Global Point Head:    {getattr(args, 'vggttt_global_pred', True)}")
+        print(f"      * TTT Steps:            {getattr(args, 'vggttt_ttt_steps', None) or 'Auto (Adaptive)'}")
+        print(f"      * Global Point Head:    {getattr(args, 'vggttt_global_pred', False)}")
         inf_start = time.time()
         from vggttt_engine import run_vggttt_reconstruction
         reconstruction, dense_3d, dense_rgb = run_vggttt_reconstruction(
@@ -2334,8 +2334,8 @@ def main():
             conf_threshold=getattr(args, "vggttt_conf", "adaptive"),
             memory_efficient=getattr(args, "vggttt_mem_eff", False),
             offload_to_cpu=getattr(args, "vggttt_offload_cpu", None),
-            ttt_steps=getattr(args, "vggttt_ttt_steps", 2),
-            use_global_pred=getattr(args, "vggttt_global_pred", True),
+            ttt_steps=getattr(args, "vggttt_ttt_steps", None),
+            use_global_pred=getattr(args, "vggttt_global_pred", False),
             prep_mode=getattr(args, "vggttt_prep_mode", "auto"),
             progress_callback=print,
         )
