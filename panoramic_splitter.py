@@ -274,6 +274,318 @@ def euler_to_rotation_matrix(yaw_deg: float, pitch_deg: float, roll_deg: float =
 
 
 # ======================================================================
+# RealityScan / RealityCapture Standard Photogrammetry & Compounding
+# ======================================================================
+
+RC_CSV_HEADER = "#name,x,y,alt,yaw,pitch,roll,f_35mm,px_norm,py_norm,k1,k2,k3,k4,t1,t2\n"
+
+
+def basis(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Orthonormal right/up/forward basis in local rig frame, with roll applied simultaneously."""
+    y = math.radians(yaw_deg)
+    p = math.radians(pitch_deg)
+    r = math.radians(roll_deg)
+    forward = np.array([math.cos(p) * math.sin(y), math.sin(p), math.cos(p) * math.cos(y)], dtype=np.float64)
+    right = np.array([math.cos(y), 0.0, -math.sin(y)], dtype=np.float64)
+    up = np.array([-math.sin(p) * math.sin(y), math.cos(p), -math.sin(p) * math.cos(y)], dtype=np.float64)
+    rolled_right = right * math.cos(r) + up * math.sin(r)
+    rolled_up = up * math.cos(r) - right * math.sin(r)
+    return rolled_right, rolled_up, forward
+
+
+def get_rc_axes(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Constructs the 3 orthonormal body axes in RealityCapture world frame (X-east, Y-north, Z-up)
+    for a panorama or camera with given (yaw, pitch, roll).
+    Yaw: 0=North (+Y), 90=East (+X)
+    Pitch: 0=Nadir (-Z), 90=Horizontal, 180=Zenith (+Z)
+    """
+    p_rad = math.radians(pitch_deg)
+    y_rad = math.radians(yaw_deg)
+    r_rad = math.radians(roll_deg)
+    fwd = np.array([math.sin(p_rad) * math.sin(y_rad), math.sin(p_rad) * math.cos(y_rad), -math.cos(p_rad)], dtype=np.float64)
+    fwd_norm = np.linalg.norm(fwd)
+    if fwd_norm > 1e-12:
+        fwd /= fwd_norm
+    else:
+        fwd = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+    w0 = np.array([math.cos(y_rad), -math.sin(y_rad), 0.0], dtype=np.float64)
+    w0_norm = np.linalg.norm(w0)
+    if w0_norm > 1e-6:
+        w0 /= w0_norm
+        u0 = np.cross(w0, fwd)
+        u0_norm = np.linalg.norm(u0)
+        if u0_norm > 1e-6:
+            u0 /= u0_norm
+        else:
+            u0 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    else:
+        u0 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        w0 = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+    up = math.cos(r_rad) * u0 + math.sin(r_rad) * w0
+    up_norm = np.linalg.norm(up)
+    if up_norm > 1e-12:
+        up /= up_norm
+    else:
+        up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+    right = np.cross(fwd, up)
+    if np.dot(right, w0) < 0:
+        right = -right
+    right_norm = np.linalg.norm(right)
+    if right_norm > 1e-12:
+        right /= right_norm
+    else:
+        right = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+    return right, up, fwd
+
+
+def rc_axes_to_euler(fwd: np.ndarray, up: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Extracts canonical RealityCapture / RealityScan Euler angles (yaw, pitch, roll)
+    from optical axes in RC world space.
+    """
+    fwd_norm = np.linalg.norm(fwd)
+    if fwd_norm > 1e-12:
+        fwd = fwd / fwd_norm
+    else:
+        fwd = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+    up_norm = np.linalg.norm(up)
+    if up_norm > 1e-12:
+        up = up / up_norm
+    else:
+        up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+    yaw = float(np.degrees(np.arctan2(fwd[0], fwd[1])) % 360.0)
+    pitch = float(np.degrees(np.arccos(np.clip(-fwd[2], -1.0, 1.0))))
+    yaw_rad = math.radians(yaw)
+    w0 = np.array([math.cos(yaw_rad), -math.sin(yaw_rad), 0.0], dtype=np.float64)
+    w0_norm = np.linalg.norm(w0)
+    if w0_norm > 1e-6:
+        w0 /= w0_norm
+        u0 = np.cross(w0, fwd)
+        u0_norm = np.linalg.norm(u0)
+        if u0_norm > 1e-6:
+            u0 /= u0_norm
+            roll = float(np.degrees(np.arctan2(np.dot(up, w0), np.dot(up, u0))))
+        else:
+            roll = 0.0
+    else:
+        roll = 0.0
+    return round(yaw, 4), round(pitch, 4), round(roll, 4)
+
+
+def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
+    """
+    Loads 360DVO camera positions and orientations from cameras.csv or 360dvo_trajectory.txt.
+    Supports RealityCapture standard CSV format and robotics TUM trajectory format.
+    Returns:
+        {
+            "count": int,
+            "poses": List[Dict],
+            "by_name": Dict[str, Dict],
+            "by_stem": Dict[str, Dict],
+            "by_idx": Dict[int, Dict]
+        }
+    """
+    result = {
+        "count": 0,
+        "poses": [],
+        "by_name": {},
+        "by_stem": {},
+        "by_idx": {},
+    }
+    if not trajectory_path or not os.path.isfile(trajectory_path):
+        return result
+
+    try:
+        with open(trajectory_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [l.strip() for l in f if l.strip()]
+
+        if not lines:
+            return result
+
+        first_line = lines[0].lower()
+        is_csv = "," in lines[0] or first_line.startswith("#name") or first_line.startswith("name") or first_line.startswith("#image")
+
+        if is_csv:
+            start_row = 1 if (first_line.startswith("#") or "name" in first_line or "yaw" in first_line) else 0
+            idx = 0
+            for line in lines[start_row:]:
+                if line.startswith("#"):
+                    continue
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 7:
+                    try:
+                        name = parts[0]
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        alt = float(parts[3])
+                        yaw = float(parts[4])
+                        pitch = float(parts[5])
+                        roll = float(parts[6])
+                        f_35mm = float(parts[7]) if len(parts) > 7 else 35.0
+                        rec = {
+                            "name": name,
+                            "x": x,
+                            "y": y,
+                            "alt": alt,
+                            "yaw": yaw,
+                            "pitch": pitch,
+                            "roll": roll,
+                            "f_35mm": f_35mm,
+                            "index": idx,
+                        }
+                        result["poses"].append(rec)
+                        result["by_name"][name] = rec
+                        result["by_name"][os.path.basename(name)] = rec
+                        result["by_stem"][Path(name).stem] = rec
+                        result["by_idx"][idx] = rec
+                        idx += 1
+                    except (ValueError, IndexError):
+                        continue
+        else:
+            # TUM Trajectory format: timestamp tx ty tz qx qy qz qw
+            M_world = np.array([
+                [1.0,  0.0,  0.0],
+                [0.0,  0.0,  1.0],
+                [0.0, -1.0,  0.0]
+            ], dtype=np.float64)
+
+            idx = 0
+            for line in lines:
+                if line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 8:
+                    try:
+                        t = float(parts[0])
+                        tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
+                        qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
+
+                        # Quat to matrix c2w
+                        norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+                        if norm > 1e-12:
+                            qx /= norm; qy /= norm; qz /= norm; qw /= norm
+                        R_c2w = np.array([
+                            [1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy - qz*qw), 2.0*(qx*qz + qy*qw)],
+                            [2.0*(qx*qy + qz*qw), 1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz - qx*qw)],
+                            [2.0*(qx*qz - qy*qw), 2.0*(qy*qz + qx*qw), 1.0 - 2.0*(qx*qx + qy*qy)]
+                        ], dtype=np.float64)
+
+                        C_rc = M_world @ np.array([tx, ty, tz], dtype=np.float64)
+                        fwd_rc = M_world @ (R_c2w @ np.array([0.0, 0.0, 1.0]))
+                        up_rc = M_world @ (R_c2w @ np.array([0.0, -1.0, 0.0]))
+                        yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
+
+                        name = f"frame_{idx:05d}"
+                        rec = {
+                            "name": name,
+                            "x": C_rc[0],
+                            "y": C_rc[1],
+                            "alt": C_rc[2],
+                            "yaw": yaw,
+                            "pitch": pitch,
+                            "roll": roll,
+                            "f_35mm": 35.0,
+                            "timestamp": t,
+                            "index": idx,
+                        }
+                        result["poses"].append(rec)
+                        result["by_name"][name] = rec
+                        result["by_stem"][name] = rec
+                        result["by_idx"][idx] = rec
+                        idx += 1
+                    except (ValueError, IndexError):
+                        continue
+
+        result["count"] = len(result["poses"])
+    except Exception:
+        pass
+
+    return result
+
+
+def compound_realitycapture_pose(
+    pano_pose: Optional[Dict[str, Any]],
+    rig_cam: Tuple[str, float, float, float, float],
+    crop_w: int,
+    crop_h: int,
+    k1: float = 0.0,
+    k2: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Compounds a 360 panorama 6-DoF pose with a virtual rig camera offset into
+    RealityScan / RealityCapture standard Euler orientation and coordinates.
+    """
+    cam_name, rig_yaw, rig_pitch, rig_roll, fov_deg = rig_cam
+
+    if pano_pose is not None:
+        x = float(pano_pose.get("x", 0.0))
+        y = float(pano_pose.get("y", 0.0))
+        alt = float(pano_pose.get("alt", 0.0))
+        p_yaw = float(pano_pose.get("yaw", 0.0))
+        p_pitch = float(pano_pose.get("pitch", 90.0))
+        p_roll = float(pano_pose.get("roll", 0.0))
+    else:
+        x, y, alt = 0.0, 0.0, 0.0
+        p_yaw = 0.0
+        p_pitch = 90.0
+        p_roll = 0.0
+
+    r_p, u_p, f_p = get_rc_axes(p_yaw, p_pitch, p_roll)
+    R_rig_to_rc = np.column_stack([r_p, u_p, f_p])
+
+    rig_r, rig_u, rig_f = basis(rig_yaw, rig_pitch, rig_roll)
+
+    fwd_rc = R_rig_to_rc @ rig_f
+    up_rc = R_rig_to_rc @ rig_u
+
+    yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
+
+    fov_rad = math.radians(fov_deg)
+    fx = (float(crop_w) / 2.0) / math.tan(fov_rad / 2.0)
+    f_35mm = fx * (36.0 / max(crop_w, crop_h))
+
+    return {
+        "x": x,
+        "y": y,
+        "alt": alt,
+        "yaw": yaw,
+        "pitch": pitch,
+        "roll": roll,
+        "f_35mm": f_35mm,
+        "px_norm": 0.0,
+        "py_norm": 0.0,
+        "k1": float(k1),
+        "k2": float(k2),
+        "k3": 0.0,
+        "k4": 0.0,
+        "t1": 0.0,
+        "t2": 0.0,
+    }
+
+
+def format_rc_csv_line(img_name: str, pose: Dict[str, Any]) -> str:
+    """Formats a single line for RealityCapture cameras.csv."""
+    def fmt_v(v):
+        if abs(v) < 1e-12:
+            return "0"
+        return f"{v:.10g}"
+
+    return (
+        f"{img_name},{pose['x']:.6f},{pose['y']:.6f},{pose['alt']:.6f},"
+        f"{pose['yaw']:.4f},{pose['pitch']:.4f},{pose['roll']:.4f},{pose['f_35mm']:.4f},"
+        f"{pose['px_norm']:.6f},{pose['py_norm']:.6f},"
+        f"{fmt_v(pose['k1'])},{fmt_v(pose['k2'])},0,0,0,0\n"
+    )
+
+
+# ======================================================================
 # Panoramic Rig Splitter Class
 # ======================================================================
 
@@ -476,11 +788,15 @@ def split_panorama_dataset(
     video_frame_stride: int = 1,
     video_max_frames: int = 0,
     export_transforms_json: bool = True,
+    export_realityscan_csv: bool = True,
+    subfolder_per_perspective: bool = True,
+    dvo_trajectory_csv: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Splits an entire directory of 360° panoramas OR a 360° video file into rectilinear pinhole views
-    and exports a transforms.json manifest ready for COLMAP, Nerfstudio, PFGS360, or LichtFeld.
+    and exports a transforms.json manifest ready for COLMAP, Nerfstudio, PFGS360, or LichtFeld,
+    along with RealityScan / RealityCapture standard cameras.csv tables for every perspective.
     """
     if not HAS_CV2:
         raise RuntimeError("OpenCV (cv2) is required for panoramic rig projection.")
@@ -488,11 +804,20 @@ def split_panorama_dataset(
     start_time = time.time()
     in_abs = str(Path(input_dir).resolve())
     out_abs = str(Path(output_dir).resolve())
-    images_out = os.path.join(out_abs, "images")
-    os.makedirs(images_out, exist_ok=True)
+    os.makedirs(out_abs, exist_ok=True)
 
     out_w = crop_width if crop_width is not None else crop_size
     out_h = crop_height if crop_height is not None else crop_size
+
+    # Output directory layout
+    if subfolder_per_perspective:
+        perspectives_base = os.path.join(out_abs, "perspectives")
+        os.makedirs(perspectives_base, exist_ok=True)
+        images_out = perspectives_base
+    else:
+        perspectives_base = None
+        images_out = os.path.join(out_abs, "images")
+        os.makedirs(images_out, exist_ok=True)
 
     # 1. Build Rig Array
     mode_lower = mode.lower()
@@ -518,6 +843,17 @@ def split_panorama_dataset(
     else:  # "ring"
         rig = get_horizontal_ring_rig(num_cameras=num_cameras, fov_deg=fov_deg)
         rig_title = f"{num_cameras}-Camera Horizontal Ring"
+
+    # Ingest 360DVO trajectory prior if provided
+    traj_data = None
+    if dvo_trajectory_csv and os.path.isfile(dvo_trajectory_csv):
+        traj_data = load_dvo_trajectory(dvo_trajectory_csv)
+
+    # RealityScan CSV row collections:
+    # 1. Master rows for out_abs/cameras.csv
+    # 2. Per-camera rows: Dict[cam_name, List[str]]
+    rc_master_rows = [RC_CSV_HEADER]
+    rc_camera_rows = {c[0]: [RC_CSV_HEADER] for c in rig}
 
     video_exts = {".mp4", ".mov", ".insv", ".mkv", ".avi"}
     is_video_input = os.path.isfile(in_abs) and (os.path.splitext(in_abs.lower())[1] in video_exts)
@@ -578,17 +914,57 @@ def split_panorama_dataset(
                 base_name = f"frame_{saved_frame_idx:05d}"
                 timestamp_sec = frame_idx / native_fps
 
+                # Locate 360DVO pose prior for this frame
+                pano_pose = None
+                if traj_data and traj_data["count"] > 0:
+                    v_stem = f"frame_{saved_frame_idx:05d}"
+                    v_idx = saved_frame_idx - 1
+                    if v_stem in traj_data["by_stem"]:
+                        pano_pose = traj_data["by_stem"][v_stem]
+                    elif v_idx in traj_data["by_idx"]:
+                        pano_pose = traj_data["by_idx"][v_idx]
+
                 crops = splitter.split_panorama(frame)
                 for cam_name, crop_img in crops.items():
-                    out_filename = f"{base_name}_{cam_name}{ext}"
-                    out_filepath = os.path.join(images_out, out_filename)
+                    rig_cam_tuple = next((c for c in rig if c[0] == cam_name), (cam_name, 0.0, 0.0, 0.0, fov_deg))
+
+                    if subfolder_per_perspective:
+                        cam_dir = os.path.join(perspectives_base, cam_name)
+                        os.makedirs(cam_dir, exist_ok=True)
+                        file_in_cam = f"{base_name}{ext}"
+                        out_filepath = os.path.join(cam_dir, file_in_cam)
+                        rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
+                        local_name = file_in_cam
+                    else:
+                        out_filename = f"{base_name}_{cam_name}{ext}"
+                        out_filepath = os.path.join(images_out, out_filename)
+                        rel_path_root = f"images/{out_filename}"
+                        local_name = out_filename
+
                     cv2.imwrite(out_filepath, crop_img, encode_params)
                     total_views_saved += 1
+
+                    # RealityScan / RealityCapture standard pose
+                    if export_realityscan_csv:
+                        comp_pose = compound_realitycapture_pose(
+                            pano_pose=pano_pose,
+                            rig_cam=rig_cam_tuple,
+                            crop_w=out_w,
+                            crop_h=out_h,
+                            k1=k1,
+                            k2=k2,
+                        )
+                        master_line = format_rc_csv_line(rel_path_root, comp_pose)
+                        rc_master_rows.append(master_line)
+
+                        local_line = format_rc_csv_line(local_name, comp_pose)
+                        if cam_name in rc_camera_rows:
+                            rc_camera_rows[cam_name].append(local_line)
 
                     if export_transforms_json:
                         c2w = splitter.get_c2w_matrix(cam_name)
                         transforms_frames.append({
-                            "file_path": f"images/{out_filename}",
+                            "file_path": rel_path_root,
                             "transform_matrix": c2w.tolist(),
                             "camera_angle_name": cam_name,
                             "source_frame": saved_frame_idx,
@@ -652,18 +1028,61 @@ def split_panorama_dataset(
                 continue
 
             base_name = Path(fname).stem
+
+            # Locate 360DVO pose prior for this image
+            pano_pose = None
+            if traj_data and traj_data["count"] > 0:
+                if fname in traj_data["by_name"]:
+                    pano_pose = traj_data["by_name"][fname]
+                elif os.path.basename(fname) in traj_data["by_name"]:
+                    pano_pose = traj_data["by_name"][os.path.basename(fname)]
+                elif base_name in traj_data["by_stem"]:
+                    pano_pose = traj_data["by_stem"][base_name]
+                elif idx in traj_data["by_idx"]:
+                    pano_pose = traj_data["by_idx"][idx]
+
             crops = splitter.split_panorama(img)
 
             for cam_name, crop_img in crops.items():
-                out_filename = f"{base_name}_{cam_name}{ext}"
-                out_filepath = os.path.join(images_out, out_filename)
+                rig_cam_tuple = next((c for c in rig if c[0] == cam_name), (cam_name, 0.0, 0.0, 0.0, fov_deg))
+
+                if subfolder_per_perspective:
+                    cam_dir = os.path.join(perspectives_base, cam_name)
+                    os.makedirs(cam_dir, exist_ok=True)
+                    file_in_cam = f"{base_name}{ext}"
+                    out_filepath = os.path.join(cam_dir, file_in_cam)
+                    rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
+                    local_name = file_in_cam
+                else:
+                    out_filename = f"{base_name}_{cam_name}{ext}"
+                    out_filepath = os.path.join(images_out, out_filename)
+                    rel_path_root = f"images/{out_filename}"
+                    local_name = out_filename
+
                 cv2.imwrite(out_filepath, crop_img, encode_params)
                 total_views_saved += 1
+
+                # RealityScan / RealityCapture standard pose
+                if export_realityscan_csv:
+                    comp_pose = compound_realitycapture_pose(
+                        pano_pose=pano_pose,
+                        rig_cam=rig_cam_tuple,
+                        crop_w=out_w,
+                        crop_h=out_h,
+                        k1=k1,
+                        k2=k2,
+                    )
+                    master_line = format_rc_csv_line(rel_path_root, comp_pose)
+                    rc_master_rows.append(master_line)
+
+                    local_line = format_rc_csv_line(local_name, comp_pose)
+                    if cam_name in rc_camera_rows:
+                        rc_camera_rows[cam_name].append(local_line)
 
                 if export_transforms_json:
                     c2w = splitter.get_c2w_matrix(cam_name)
                     transforms_frames.append({
-                        "file_path": f"images/{out_filename}",
+                        "file_path": rel_path_root,
                         "transform_matrix": c2w.tolist(),
                         "camera_angle_name": cam_name,
                         "source_file": fname,
@@ -699,9 +1118,41 @@ def split_panorama_dataset(
         with open(transforms_path, "w", encoding="utf-8") as tf:
             json.dump(transforms_data, tf, indent=2)
 
+    # 3. Export RealityScan / RealityCapture cameras.csv Files
+    cameras_csv_path = None
+    if export_realityscan_csv and len(rc_master_rows) > 1:
+        # A. Master cameras.csv in root output directory
+        cameras_csv_path = os.path.join(out_abs, "cameras.csv")
+        with open(cameras_csv_path, "w", encoding="utf-8") as f:
+            f.writelines(rc_master_rows)
+
+        # B. If flat images/ directory exists, also mirror cameras.csv in images/
+        if not subfolder_per_perspective and os.path.isdir(images_out):
+            try:
+                shutil.copy2(cameras_csv_path, os.path.join(images_out, "cameras.csv"))
+            except Exception:
+                pass
+
+        # C. Export individual cameras.csv inside each perspective folder
+        if subfolder_per_perspective and perspectives_base and os.path.isdir(perspectives_base):
+            for cam_name, rows in rc_camera_rows.items():
+                cam_dir = os.path.join(perspectives_base, cam_name)
+                if os.path.isdir(cam_dir):
+                    cam_csv = os.path.join(cam_dir, "cameras.csv")
+                    with open(cam_csv, "w", encoding="utf-8") as f:
+                        f.writelines(rows)
+
+        # D. Always export a dedicated cameras_csv/ folder with per-perspective tables
+        csv_dir = os.path.join(out_abs, "cameras_csv")
+        os.makedirs(csv_dir, exist_ok=True)
+        for cam_name, rows in rc_camera_rows.items():
+            cam_csv = os.path.join(csv_dir, f"{cam_name}_cameras.csv")
+            with open(cam_csv, "w", encoding="utf-8") as f:
+                f.writelines(rows)
+
     elapsed = time.time() - start_time
 
-    # 3. Export rig_manifest.json with Full Telemetry
+    # 4. Export rig_manifest.json with Full Telemetry
     overlap_val = calculate_overlap(len(rig), fov_deg) if mode_lower == "ring" else None
     rig_meta = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -719,6 +1170,9 @@ def split_panorama_dataset(
         "is_video_source": is_video_input,
         "total_source_panoramas": total_source_items,
         "total_views_exported": total_views_saved,
+        "subfolder_per_perspective": subfolder_per_perspective,
+        "dvo_trajectory_used": dvo_trajectory_csv if (traj_data and traj_data["count"] > 0) else None,
+        "cameras_csv_path": cameras_csv_path,
         "elapsed_seconds": round(elapsed, 2),
         "transforms_path": transforms_path if export_transforms_json else None,
         "cameras": [
@@ -743,6 +1197,8 @@ def split_panorama_dataset(
         "total_views": total_views_saved,
         "output_dir": out_abs,
         "images_dir": images_out,
+        "subfolder_per_perspective": subfolder_per_perspective,
+        "cameras_csv_path": cameras_csv_path,
         "transforms_path": transforms_path if export_transforms_json else None,
         "elapsed_seconds": round(elapsed, 2),
     }
@@ -771,6 +1227,9 @@ def main():
     parser.add_argument("-f", "--format", choices=["jpg", "png"], default="jpg", help="Output image format")
     parser.add_argument("-q", "--quality", type=int, default=95, help="JPEG quality (1-100)")
     parser.add_argument("--no-transforms", action="store_true", help="Skip generating transforms.json")
+    parser.add_argument("--no-rc-csv", action="store_true", help="Skip exporting RealityScan / RealityCapture cameras.csv")
+    parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
+    parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
 
     args = parser.parse_args()
 
@@ -794,6 +1253,8 @@ def main():
     if abs(args.distortion_k1) > 1e-6:
         print(f"[*] Distortion (k1):   {args.distortion_k1}")
     print(f"[*] Format & Quality:  {args.format.upper()} (quality {args.quality})")
+    if args.dvo_trajectory:
+        print(f"[*] 360DVO Trajectory: {args.dvo_trajectory}")
 
     res = split_panorama_dataset(
         input_dir=input_path,
@@ -810,6 +1271,9 @@ def main():
         image_format=args.format,
         quality=args.quality,
         export_transforms_json=not args.no_transforms,
+        export_realityscan_csv=not args.no_rc_csv,
+        subfolder_per_perspective=not args.flat_images,
+        dvo_trajectory_csv=args.dvo_trajectory,
         progress_callback=lambda cur, tot, name: print(f"    Processing {cur}/{tot}: {name}", end="\r"),
     )
     print()

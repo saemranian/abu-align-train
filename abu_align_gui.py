@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.0.1
+Abu Align & Train Version 0.1.0.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.0.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.0.2 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2101,6 +2101,11 @@ class AbuAlignApp:
         fmt_var = tk.StringVar(value="jpg")
         qual_var = tk.IntVar(value=95)
         export_tf_var = tk.BooleanVar(value=True)
+        export_rc_csv_var = tk.BooleanVar(value=True)
+        subfolder_per_cam_var = tk.BooleanVar(value=True)
+
+        # 360DVO Trajectory Prior
+        dvo_csv_var = tk.StringVar(value="")
 
         # Visualizer canvas mode
         canvas_view_mode_var = tk.StringVar(value="3d")  # "3d", "polar", "equirect"
@@ -2185,6 +2190,96 @@ class AbuAlignApp:
                 out_var.set(f)
 
         tk.Button(r2, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_out_folder).pack(side=tk.RIGHT)
+
+        # Row 3: 360DVO Trajectory Prior (cameras.csv)
+        r3 = tk.Frame(paths_card, bg=self.panel_bg)
+        r3.pack(fill=tk.X, pady=2)
+        tk.Label(r3, text="360DVO Prior:", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
+        dvo_entry = tk.Entry(r3, textvariable=dvo_csv_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        dvo_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
+
+        def browse_dvo_csv():
+            init_dir = in_var.get() if os.path.isdir(in_var.get()) else os.path.dirname(in_var.get())
+            f = filedialog.askopenfilename(
+                initialdir=init_dir,
+                title="Select 360DVO cameras.csv or 360dvo_trajectory.txt",
+                filetypes=[("360DVO Trajectory", "cameras.csv *.csv *.txt"), ("All Files", "*.*")]
+            )
+            if f:
+                dvo_csv_var.set(f)
+                update_dvo_badge()
+
+        def auto_detect_dvo_trajectory():
+            src = in_var.get().strip()
+            if not src:
+                return
+            src_dir = src if os.path.isdir(src) else os.path.dirname(src)
+            candidates = [
+                os.path.join(src_dir, "cameras.csv"),
+                os.path.join(src_dir, "360dvo_trajectory.txt"),
+                os.path.join(src_dir, "Postshot_RealityCapture", "cameras.csv"),
+            ]
+            res_dir = os.path.join(src_dir, "results")
+            if os.path.isdir(res_dir):
+                for sub in sorted(os.listdir(res_dir), reverse=True):
+                    sub_p = os.path.join(res_dir, sub)
+                    if os.path.isdir(sub_p):
+                        candidates.append(os.path.join(sub_p, "cameras.csv"))
+                        candidates.append(os.path.join(sub_p, "Postshot_RealityCapture", "cameras.csv"))
+                        candidates.append(os.path.join(sub_p, "360dvo_trajectory.txt"))
+            parent_dir = os.path.dirname(src_dir)
+            p_res_dir = os.path.join(parent_dir, "results")
+            if os.path.isdir(p_res_dir):
+                for sub in sorted(os.listdir(p_res_dir), reverse=True):
+                    sub_p = os.path.join(p_res_dir, sub)
+                    if os.path.isdir(sub_p):
+                        candidates.append(os.path.join(sub_p, "cameras.csv"))
+                        candidates.append(os.path.join(sub_p, "Postshot_RealityCapture", "cameras.csv"))
+                        candidates.append(os.path.join(sub_p, "360dvo_trajectory.txt"))
+
+            for cand in candidates:
+                if os.path.isfile(cand) and os.path.getsize(cand) > 10:
+                    dvo_csv_var.set(cand)
+                    update_dvo_badge()
+                    return
+
+        tk.Button(r3, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#059669", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_dvo_trajectory).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(r3, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_dvo_csv).pack(side=tk.LEFT)
+
+        # 360DVO Prior Telemetry Badge
+        dvo_badge_lbl = tk.Label(
+            paths_card,
+            text="(Optional) Ingest 360DVO trajectory prior for metric georeferenced camera positions.",
+            font=("Segoe UI", 8),
+            fg=self.text_secondary,
+            bg=self.bg_dark,
+            padx=6,
+            pady=3,
+            anchor="w",
+            relief=tk.FLAT
+        )
+        dvo_badge_lbl.pack(fill=tk.X, pady=(2, 2))
+
+        def update_dvo_badge():
+            path_val = dvo_csv_var.get().strip()
+            if path_val and os.path.isfile(path_val):
+                traj = ps.load_dvo_trajectory(path_val)
+                n = traj.get("count", 0)
+                if n > 0:
+                    dvo_badge_lbl.config(
+                        text=f"✓ 360DVO Trajectory: Loaded {n:,} camera positions (X, Y, Alt, Yaw, Pitch, Roll ready for compounding)",
+                        fg="#10b981"
+                    )
+                else:
+                    dvo_badge_lbl.config(
+                        text=f"⚠ 360DVO Trajectory: File found but contains 0 valid camera records.",
+                        fg="#f59e0b"
+                    )
+            else:
+                dvo_badge_lbl.config(
+                    text="(Optional) Ingest 360DVO trajectory prior for metric georeferenced camera positions.",
+                    fg=self.text_secondary
+                )
 
         # Media Telemetry Badge
         media_badge_lbl = tk.Label(
@@ -2427,6 +2522,36 @@ class AbuAlignApp:
             activebackground=self.panel_bg
         )
         tf_chk.pack(side=tk.LEFT)
+
+        # RealityScan / RealityCapture cameras.csv Row
+        o4 = tk.Frame(optics_card, bg=self.panel_bg)
+        o4.pack(fill=tk.X, pady=(3, 1))
+
+        rc_csv_chk = tk.Checkbutton(
+            o4,
+            text="Export cameras.csv (RealityScan standard)",
+            variable=export_rc_csv_var,
+            font=("Segoe UI", 8, "bold"),
+            fg="#10b981",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        rc_csv_chk.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(rc_csv_chk, "Exports standard 16-column RealityCapture cameras.csv with metric coordinates (x,y,alt), Nadir pitch [0°,180°], heading yaw, roll, and 35mm focal equivalent.")
+
+        subfolder_chk = tk.Checkbutton(
+            o4,
+            text="Folder per perspective (with cameras.csv)",
+            variable=subfolder_per_cam_var,
+            font=("Segoe UI", 8),
+            fg=self.text_primary,
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        subfolder_chk.pack(side=tk.LEFT)
+        ToolTip(subfolder_chk, "Organizes views into perspectives/<camera_name>/ folders, writing a local cameras.csv inside each folder for direct drag-and-drop into RealityCapture.")
 
         # -----------------------------------------------------------------
         # RIGHT COLUMN: Interactive Visualizer Canvas & Telemetry Dashboard
@@ -3245,6 +3370,7 @@ class AbuAlignApp:
             else:
                 media_badge_lbl.config(text=f"📄 Single Panorama File ({os.path.basename(p)})", fg="#10b981")
 
+            auto_detect_dvo_trajectory()
             sync_math_and_ui()
 
         def on_auto_res():
@@ -3285,6 +3411,7 @@ class AbuAlignApp:
         video_stride_var.trace_add("write", sync_math_and_ui)
         video_max_frames_var.trace_add("write", sync_math_and_ui)
         canvas_view_mode_var.trace_add("write", sync_math_and_ui)
+        dvo_csv_var.trace_add("write", lambda *_: update_dvo_badge())
 
         # Actions
         def set_as_dataset():
@@ -3362,6 +3489,9 @@ class AbuAlignApp:
                         video_frame_stride=v_stride,
                         video_max_frames=v_max_f,
                         export_transforms_json=tf,
+                        export_realityscan_csv=export_rc_csv_var.get(),
+                        subfolder_per_perspective=subfolder_per_cam_var.get(),
+                        dvo_trajectory_csv=dvo_csv_var.get().strip() or None,
                         progress_callback=on_progress,
                     )
                     tot = res.get("total_views", 0)
@@ -3379,7 +3509,9 @@ class AbuAlignApp:
                         close_btn.config(state=tk.NORMAL)
                         use_ds_btn.config(state=tk.NORMAL)
                         open_folder_btn.config(state=tk.NORMAL)
-                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} pinhole views ({ow}x{oh}) in {out_d} ({sec}s).\n")
+                        rc_csv_info = res.get("cameras_csv_path")
+                        csv_note = " (cameras.csv exported)" if rc_csv_info else ""
+                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} pinhole views ({ow}x{oh}) in {out_d}{csv_note} ({sec}s).\n")
 
                     dialog.after(0, on_done)
                 except Exception as ex:
@@ -4089,7 +4221,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.0.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.0.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4648,7 +4780,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.0.1 - {title}")
+        doc_win.title(f"Abu Align v0.1.0.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5275,7 +5407,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.0.1\n"
+            "Abu Align & Train - Version 0.1.0.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

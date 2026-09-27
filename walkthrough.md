@@ -1,67 +1,92 @@
-# v0.1.0.1 — 360DVO CUDA Frame Ingestion & Multi-Tier Smart Caching
+# v0.1.0.2 — 360° Rig Designer: RealityScan Standard cameras.csv Export & 360DVO Trajectory Compounding
 
 ## Overview & Outcome
-Abu Align & Train **v0.1.0.1** delivers two critical performance enhancements for the **360DVO Deep Omnidirectional Visual Odometry Engine (IEEE RA-L 2026)**:
-1. **CUDA Frame Ingestion & Asynchronous Viser Decoupling**:
-   * **Root Cause of GPU Starvation**: In the user's previous run (`16-33-14.log`), the RTX 4090 idled at **0%–3% GPU utilization (31°C)** and ~2 FPS because:
-     * Sequential single-threaded disk I/O over the WSL2 9P filesystem bridge (`/mnt/c/`) choked frame arrival.
-     * Single-threaded CPU downsampling via `cv2.INTER_AREA` consumed 150ms–200ms per frame.
-     * Upstream `Viser.update()` synchronously converted tensors from GPU to CPU, generated a $3840 \times 1920$ canvas, encoded full PNGs on CPU, and broadcast WebSockets on every single frame.
-   * **Optimization**:
-     * Implemented parallel multi-threaded prefetching (`concurrent.futures.ThreadPoolExecutor`) with up to 8 worker threads in [`scratch/abu_360dvo_runner.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/scratch/abu_360dvo_runner.py).
-     * Replaced heavy CPU area downsampling with high-accuracy fast bilinear interpolation (`cv2.INTER_LINEAR`), cutting resize overhead by 4x.
-     * Decoupled `Viser.update()` to an asynchronous background worker thread and throttled PNG updates so WebSocket communication never halts the real-time GPU tracking pipeline.
-     * Expanded stream buffer queue from 8 to 16 items.
-     * Deployed automatically to WSL `/home/ahmad/360DVO/abu_360dvo_runner.py`.
-2. **Multi-Tier Smart Caching Integration (`.abu_cache`)**:
-   * **Root Cause of Missing Cache**: Previously, `.abu_cache` only tracked VGGT / VGGT-Omega models. 360DVO had zero cache hooks in [`cache_manager.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/cache_manager.py) or [`360dvo_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/360dvo_engine.py).
-   * **Optimization**:
-     * Extended `compute_dataset_hash()` in `cache_manager.py` to accept `extra_params` (patch density, ODBA BA window, metric scale, etc.) for deterministic SHA-256 fingerprinting.
-     * Added `save_360dvo_cache()` and `load_360dvo_cache()` to persist and restore `360dvo_trajectory.txt`, `360dvo_points.ply`, `transforms.json`, `metadata.json`, and COLMAP `sparse/0/` models.
-     * Wired cache check and automatic cache persistence into [`360dvo_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/360dvo_engine.py), [`dvo360_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/dvo360_engine.py), and [`align_cli.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/align_cli.py).
-     * Reruns on the same dataset/hyperparameters now achieve an instant **`[SMART CACHE HIT]` in < 0.1s**.
-3. **100% Upstream Cleanliness**:
-   * Submodules `vgg-ttt/` and `vggt-omega/` remain 100% clean and pristine.
-   * Upstream WSL repository `/home/ahmad/360DVO/` git status remains completely untouched; all logic is cleanly driven via Abu Align's external runner wrapper.
+Abu Align & Train **v0.1.0.2** integrates full photogrammetric camera orientation and positioning export adhering to the **RealityScan / RealityCapture standard** within the **360° Rig Designer**, paired with automatic ingestion and 6-DoF compounding of **360DVO** trajectory results:
+
+1. **RealityScan / RealityCapture Standard `cameras.csv` Export**:
+   * **Coordinate System & Body Frame**: Strict Z-up world frame, where optical ray forward vector determines orientation:
+     * **Nadir Pitch**: $[0^\circ, 180^\circ]$ where $0^\circ$ is Nadir (pointing straight down), $90^\circ$ is horizontal, and $180^\circ$ is Zenith (pointing straight up).
+     * **Azimuth Yaw**: $[0^\circ, 360^\circ)$ measured clockwise from North (+Y) to East (+X).
+     * **Roll**: $[-180^\circ, 180^\circ]$ rotational angle around the optical viewing ray.
+     * **35mm Focal Length**: Canonical sensor-equivalent focal length $f_{35\text{mm}} = f_x \cdot \frac{36.0}{\max(W, H)}$.
+     * **Format**: `#name,x,y,alt,yaw,pitch,roll,f_35mm,px_norm,py_norm,k1,k2,k3,k4,t1,t2`
+   * **Multi-Tier File Organization**:
+     * **Per-Perspective Folders**: When enabled (default), each perspective camera directory (`output_dir/perspectives/<cam_name>/`) contains its own local `cameras.csv` using local relative image names (`frame_00001.jpg`), enabling seamless drag-and-drop into RealityCapture or RealityScan without filename or path remapping errors.
+     * **Master Table**: `output_dir/cameras.csv` indexes every single generated pinhole perspective across all virtual rig cameras.
+     * **Per-Camera Directory**: `output_dir/cameras_csv/<cam_name>_cameras.csv` isolates each rig angle for modular photogrammetric chunking.
+
+2. **360DVO Trajectory Prior Ingestion & 6-DoF Compounding**:
+   * Accepts previous 360DVO alignment outputs (either RealityCapture `cameras.csv` or TUM `360dvo_trajectory.txt`).
+   * Rigorously compounds the 6-DoF panorama trajectory pose with virtual rig camera angular offsets in $SO(3)$:
+     $$\mathbf{R}_{\text{world}\to\text{cam}} = \mathbf{R}_{\text{world}\to\text{pano}} \cdot \mathbf{R}_{\text{rig\_cam}}$$
+     $$\mathbf{t}_{\text{cam}} = \mathbf{t}_{\text{pano}} + \mathbf{R}_{\text{world}\to\text{pano}} \cdot \mathbf{t}_{\text{rig\_cam}}$$
+   * Robust multi-mode frame matching supports exact image filename, stem lookup (e.g. `frame_00042`), or sequential index lookup.
+   * If no 360DVO trajectory prior is supplied, exports zero-centered poses reflecting the true virtual rig orientations.
+
+3. **360DVO Engine Automatic CSV Generation**:
+   * Updated `360dvo_engine.py` and `dvo360_engine.py` to automatically transform TUM trajectories (`360dvo_trajectory.txt`) into RealityCapture `cameras.csv` upon completion of WSL2 or fallback tracking.
+   * Preserved byte-for-byte SHA256 parity (`6BDF2B5D452AA84103B08009B2FB6177F6F02C651E8069670247B9A23ED937F9`).
+
+4. **Interactive GUI & Workflow Controls**:
+   * **Source Tab**: Added `360DVO Prior:` row with interactive entry, `[🔍 Auto-detect]`, `[Browse...]`, and live badge displaying the count of matched camera poses.
+   * **Export Tab**: Added toggles for `Export cameras.csv (RealityScan standard)` and `Folder per perspective (with cameras.csv)`.
+   * **CLI Options**: Added `--no-rc-csv`, `--flat-images`, and `--dvo-trajectory` flags to `panoramic_splitter.py`.
 
 ---
 
-## Architectural Changes
+## Architectural & Compounding Flow
 
 ```mermaid
 flowchart TD
-    subgraph Host ["Windows Desktop (Host)"]
-        UI["Abu Align GUI / CLI"]
-        CM["cache_manager.py (.abu_cache)"]
-        ENG["360dvo_engine.py / dvo360_engine.py"]
+    subgraph Input ["Input Data"]
+        EQUI["360 Equirectangular Video / Frames"]
+        DVO["360DVO cameras.csv or 360dvo_trajectory.txt"]
     end
 
-    subgraph WSL ["WSL2 Ubuntu (RTX 4090)"]
-        RUN["abu_360dvo_runner.py (Parallel Prefetch + Decoupled Viser)"]
-        DPVO["360DVO / DPVO (cuda_corr.so + cuda_ba.so + DAS-Feat)"]
-        VIS["Viser Server (Async Daemon Thread)"]
+    subgraph Rig ["360° Rig Designer Engine"]
+        CONF["Rig Configuration (Yaw, Pitch, Roll, FOV, Resolution)"]
+        COMP["SO(3) Rigid Compounding: R_cam = R_pano * R_rig"]
+        SPLIT["Panoramic Splitter (CUDA / CPU Grid Sampling)"]
     end
 
-    UI -->|1. Check Cache| ENG
-    ENG -->|Cache Key SHA-256| CM
-    CM -->|Cache Hit: Instant Return <0.1s| ENG
-    ENG -->|Cache Miss: Launch WSL| RUN
-    RUN -->|8-Thread Parallel Read| DPVO
-    DPVO -->|Async Non-Blocking| VIS
-    DPVO -->|Output Trajectory & PLY| ENG
-    ENG -->|Save Results to Cache| CM
+    subgraph Output ["Photogrammetry Ready Export"]
+        MAST["Master cameras.csv"]
+        P1["perspectives/cam_0/ (frame_00001.jpg + cameras.csv)"]
+        P2["perspectives/cam_1/ (frame_00001.jpg + cameras.csv)"]
+        PN["perspectives/cam_N/ (frame_00001.jpg + cameras.csv)"]
+        RC["RealityCapture / RealityScan Drag-and-Drop"]
+    end
+
+    EQUI --> SPLIT
+    CONF --> COMP
+    DVO --> COMP
+    COMP --> SPLIT
+    SPLIT --> MAST
+    SPLIT --> P1
+    SPLIT --> P2
+    SPLIT --> PN
+    P1 --> RC
+    P2 --> RC
+    PN --> RC
 ```
 
 ---
 
-## Automated Verification & Test Results
-* **New Test Suite**: `tests/test_360dvo_cache.py`
-  * `test_compute_dataset_hash_with_extra_params`: PASSED
-  * `test_save_and_load_360dvo_cache`: PASSED
-  * `test_360dvo_cache_miss`: PASSED
-  * `test_clear_cache`: PASSED
-* **Engine Tests**: `tests/test_dvo360_engine.py` (3 tests): PASSED
-* **Submodule Cleanliness**:
+## Verification & Automated Test Results
+
+* **Dedicated Test Suite**: `tests/test_rig_cameras_csv.py` (10 tests, 0.145s)
+  * `test_basis_orthonormality`: Verified basis vectors are strictly orthonormal for arbitrary angles.
+  * `test_basis_cardinal_directions`: Verified Front, Right, Back, Left, Zenith, Nadir optical directions.
+  * `test_rc_axes_to_euler_roundtrip`: 75-angle randomized stress test with $< 10^{-4}$ deg error.
+  * `test_nadir_zenith_pitch`: Verified Nadir = $0^\circ$, Zenith = $180^\circ$, Horizontal = $90^\circ$.
+  * `test_load_dvo_trajectory_csv`: Verified parsing of RealityCapture `cameras.csv` tables.
+  * `test_load_dvo_trajectory_tum`: Verified parsing of TUM format trajectories.
+  * `test_compound_pose_identity_pano`: Verified rig angular offsets are preserved at identity trajectory.
+  * `test_compound_pose_rotated_pano`: Verified proper rotation group multiplication under non-trivial trajectory poses.
+  * `test_split_dataset_with_rc_csv_subfolders`: Verified generation of per-perspective local `cameras.csv` and master `cameras.csv`.
+  * `test_split_dataset_flat_layout`: Verified backward compatibility with flat layout.
+* **Full Regression Suite**: 133 tests passed in 60.789s (0 failures, 0 regressions).
+* **Upstream Cleanliness**:
   * `vgg-ttt/`: 100% clean
   * `vggt-omega/`: 100% clean
-  * `360DVO`: 100% clean
+  * WSL `/home/ahmad/360DVO/`: 100% clean

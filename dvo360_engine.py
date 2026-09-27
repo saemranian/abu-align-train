@@ -510,6 +510,96 @@ def tum_trajectory_to_transforms_json(
     return True, f"Generated transforms.json (EQUIRECTANGULAR, {num_to_write} frames) at {output_transforms_file}"
 
 
+def tum_trajectory_to_cameras_csv(
+    trajectory_file: str,
+    image_names: List[str],
+    output_csv_file: str,
+    width: int = 1024,
+    height: int = 512
+) -> Tuple[bool, str]:
+    """
+    Converts TUM trajectory format (timestamp tx ty tz qx qy qz qw)
+    into standard RealityCapture / RealityScan cameras.csv (#name,x,y,alt,yaw,pitch,roll,f_35mm,...).
+    """
+    if not os.path.isfile(trajectory_file):
+        return False, f"Trajectory file not found: {trajectory_file}"
+
+    poses = []
+    with open(trajectory_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 8:
+                t = float(parts[0])
+                tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
+                qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
+                poses.append((t, np.array([tx, ty, tz]), np.array([qx, qy, qz, qw])))
+
+    if not poses:
+        return False, "No valid pose records found in trajectory file."
+
+    # RealityCapture world convention: X-east, Y-north, Z-up
+    M_world = np.array([
+        [1.0,  0.0,  0.0],
+        [0.0,  0.0,  1.0],
+        [0.0, -1.0,  0.0]
+    ], dtype=np.float64)
+
+    rows = ["#name,x,y,alt,yaw,pitch,roll,f_35mm,px_norm,py_norm,k1,k2,k3,k4,t1,t2\n"]
+    num_to_write = min(len(poses), len(image_names))
+
+    for idx in range(num_to_write):
+        t, t_c2w, q_c2w = poses[idx]
+        img_name = os.path.basename(image_names[idx])
+        R_c2w = quaternion_to_rotation_matrix(q_c2w)
+
+        C_rc = M_world @ t_c2w
+        x, y, alt = C_rc[0], C_rc[1], C_rc[2]
+
+        fwd_rc = M_world @ (R_c2w @ np.array([0.0,  0.0, 1.0]))
+        up_rc  = M_world @ (R_c2w @ np.array([0.0, -1.0, 0.0]))
+
+        fwd_norm = np.linalg.norm(fwd_rc)
+        if fwd_norm > 1e-12:
+            fwd_rc /= fwd_norm
+        else:
+            fwd_rc = np.array([0.0, 1.0, 0.0])
+
+        up_norm = np.linalg.norm(up_rc)
+        if up_norm > 1e-12:
+            up_rc /= up_norm
+        else:
+            up_rc = np.array([0.0, 0.0, 1.0])
+
+        yaw = float(np.degrees(np.arctan2(fwd_rc[0], fwd_rc[1])) % 360.0)
+        pitch = float(np.degrees(np.arccos(np.clip(-fwd_rc[2], -1.0, 1.0))))
+        yaw_rad = math.radians(yaw)
+        w0 = np.array([math.cos(yaw_rad), -math.sin(yaw_rad), 0.0])
+        w0_norm = np.linalg.norm(w0)
+        if w0_norm > 1e-6:
+            w0 /= w0_norm
+            u0 = np.cross(w0, fwd_rc)
+            u0_norm = np.linalg.norm(u0)
+            if u0_norm > 1e-6:
+                u0 /= u0_norm
+                roll = float(np.degrees(np.arctan2(np.dot(up_rc, w0), np.dot(up_rc, u0))))
+            else:
+                roll = 0.0
+        else:
+            roll = 0.0
+
+        f_35mm = float(width) * (36.0 / max(width, height))
+        rows.append(f"{img_name},{x:.6f},{y:.6f},{alt:.6f},{yaw:.4f},{pitch:.4f},{roll:.4f},{f_35mm:.4f},0,0,0,0,0,0,0,0\n")
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_csv_file)), exist_ok=True)
+    with open(output_csv_file, "w", encoding="utf-8") as f:
+        f.writelines(rows)
+
+    return True, f"Generated RealityCapture cameras.csv ({num_to_write} frames) at {output_csv_file}"
+
+
 class ThreeSixtyDVOEngine:
     """
     Manages execution of 360DVO deep visual odometry network,
@@ -795,6 +885,16 @@ def run_360dvo_reconstruction(
             tum_trajectory_to_colmap(trajectory_txt, img_basenames, sparse_0, width=w, height=h, points_xyz=dense_3d, points_rgb=dense_rgb)
             tf_out = os.path.join(output_dir, "transforms.json")
             tum_trajectory_to_transforms_json(trajectory_txt, img_basenames, tf_out, width=w, height=h, ply_source=ply_out, output_ply_dest=os.path.join(output_dir, "points3D.ply"))
+
+            # RealityCapture / RealityScan cameras.csv export
+            rc_csv_out = os.path.join(output_dir, "cameras.csv")
+            rc_postshot_dir = os.path.join(output_dir, "Postshot_RealityCapture")
+            os.makedirs(rc_postshot_dir, exist_ok=True)
+            tum_trajectory_to_cameras_csv(trajectory_txt, img_basenames, rc_csv_out, width=w, height=h)
+            try:
+                shutil.copy2(rc_csv_out, os.path.join(rc_postshot_dir, "cameras.csv"))
+            except Exception:
+                pass
 
             # OpenSfM Bridge: reconstruction.json and metadata.json for direct PFGS360 training
             opensfm_dir = os.path.join(output_dir, "opensfm")
@@ -1094,6 +1194,16 @@ def run_360dvo_reconstruction(
         output_ply_dest=points3d_dest
     )
     log(f"[*] {msg_tf}")
+
+    # RealityCapture / RealityScan cameras.csv export
+    rc_csv_out = os.path.join(output_dir, "cameras.csv")
+    rc_postshot_dir = os.path.join(output_dir, "Postshot_RealityCapture")
+    os.makedirs(rc_postshot_dir, exist_ok=True)
+    tum_trajectory_to_cameras_csv(trajectory_txt, image_names, rc_csv_out, width=w, height=h)
+    try:
+        shutil.copy2(rc_csv_out, os.path.join(rc_postshot_dir, "cameras.csv"))
+    except Exception:
+        pass
 
     # OpenSfM Bridge: reconstruction.json and metadata.json for direct PFGS360 training
     opensfm_dir = os.path.join(output_dir, "opensfm")

@@ -70,16 +70,17 @@ def enhance_rig_designer(app, ctx):
     notebook.select(1 if ctx["in_var"].get() else 0)
     notebook.enable_traversal()
     # Reserve browse actions before allowing long source paths to fill the row.
-    for row_name in ("r1", "r2"):
-        row = ctx[row_name]
-        row.columnconfigure(1, weight=1)
-        children = row.winfo_children()
-        for widget in children:
-            widget.pack_forget()
-        for column, widget in enumerate(children):
-            if isinstance(widget, tk.Entry):
-                widget.configure(width=1)
-            widget.grid(row=0, column=column, sticky="ew", padx=(0, 6), pady=3)
+    for row_name in ("r1", "r2", "r3"):
+        if row_name in ctx:
+            row = ctx[row_name]
+            row.columnconfigure(1, weight=1)
+            children = row.winfo_children()
+            for widget in children:
+                widget.pack_forget()
+            for column, widget in enumerate(children):
+                if isinstance(widget, tk.Entry):
+                    widget.configure(width=1)
+                widget.grid(row=0, column=column, sticky="ew", padx=(0, 6), pady=3)
     friendly_choices(ctx["mode_cb"], ctx["mode_var"],
                      {"ring": "Ring", "cubemap": "Cubemap", "dome": "Dome", "fibonacci": "Fibonacci sphere"})
     friendly_choices(ctx["solver_cb"], ctx["solver_mode_var"],
@@ -93,8 +94,8 @@ def enhance_rig_designer(app, ctx):
         widget.pack_forget()
     for i, widget in enumerate(ctx["m_row"].winfo_children()):
         widget.grid(row=i//2, column=i%2, sticky="w", pady=7, padx=(0, 10))
-    for name in ("o1", "o3", "dome_row1", "video_card_frame"):
-        if name != "video_card_frame":  # This row's entry changes between FPS/stride via pack.
+    for name in ("o1", "o3", "o4", "dome_row1", "video_card_frame"):
+        if name in ctx and name != "video_card_frame":  # This row's entry changes between FPS/stride via pack.
             wrap_row(ctx[name])
     for widget in ctx["video_card_frame"].winfo_children():
         if isinstance(widget, tk.Label):
@@ -296,6 +297,10 @@ def enhance_rig_designer(app, ctx):
     if not ctx["in_var"].get():
         ctx["media_badge_lbl"].configure(text="No source selected yet.", fg=MUTED)
     ctx["tf_chk"].configure(text="Export camera transforms", fg=MUTED)
+    if "rc_csv_chk" in ctx:
+        ctx["rc_csv_chk"].configure(text="Export RealityScan cameras.csv", fg=MUTED)
+    if "subfolder_chk" in ctx:
+        ctx["subfolder_chk"].configure(text="Folder per perspective (with cameras.csv)", fg=MUTED)
     ctx["auto_res_btn"].configure(text="Match source")
 
     def theme(widget):
