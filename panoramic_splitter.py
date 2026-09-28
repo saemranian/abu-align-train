@@ -634,16 +634,21 @@ def generate_realityscan_xmp(
     rig_id: Optional[str] = None,
     rig_instance_id: Optional[str] = None,
     pose: Dict[str, Any] = None,
-    pose_prior: str = "approximate",
+    pose_prior: str = "exact",
     pos_accuracy: Tuple[float, float, float] = (0.3, 0.3, 0.3),
     rot_accuracy: Tuple[float, float, float] = (0.001, 0.001, 0.001),
     locked_pose_group: Optional[int] = None,
+    cam_name: Optional[str] = None,
+    camera_index: Optional[int] = None,
 ) -> str:
     """
     Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
-    Follows canonical schema: http://www.capturingreality.com/ns/xcr/1.1/
-    with pure element-based tags and LockedPoseGroup for multi-camera rigid grouping (Guide 03).
+    Follows official RealityScan schema: http://www.capturingreality.com/ns/xcr/1.1#
+    Implements true hardware rig linking (xcr:Rig, xcr:RigInstance, xcr:RigPoseIndex)
+    and attributes-based LockedPoseGroup (Guide 04).
     """
+    import uuid
+
     if pose is None:
         pose = {}
     pos_x = float(pose.get("x", 0.0))
@@ -672,40 +677,62 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
+    # Determine pose prior enum
+    if pose_prior in ("approximate", "exact"):
+        effective_pose_prior = "exact"
+    elif pose_prior in ("draft", "initial"):
+        effective_pose_prior = "initial"
+    elif pose_prior == "locked":
+        effective_pose_prior = "locked"
+    else:
+        effective_pose_prior = pose_prior
+
+    # Hardware rig identifiers
+    rig_seed = rig_id or "abu_pinhole_rig"
+    rig_guid = "{" + str(uuid.uuid5(uuid.NAMESPACE_DNS, rig_seed)).upper() + "}"
+
+    inst_seed = f"frame_{locked_pose_group}" if locked_pose_group is not None else str(rig_instance_id or "0")
+    instance_guid = "{" + str(uuid.uuid5(uuid.NAMESPACE_DNS, inst_seed)).upper() + "}"
+
+    if camera_index is None:
+        cam_map = {
+            "front": 0, "back": 1, "left": 2, "right": 3,
+            "up": 4, "top": 4, "down": 5, "bottom": 5,
+        }
+        camera_index = cam_map.get(str(cam_name).lower(), 0)
+
     open_desc = [
-        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/"',
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
         '      xcr:Version="3"',
+        f'      xcr:PosePrior="{effective_pose_prior}"',
+        '      xcr:Coordinates="absolute"',
+        f'      xcr:Rotation="{r_str}"',
+        f'      xcr:FocalLength35mm="{f_35mm:.6f}"',
+        '      xcr:DistortionModel="brown3"',
+        f'      xcr:DistortionCoeficients="{dist_str}"',
+        '      xcr:Skew="0.000000"',
+        '      xcr:AspectRatio="1.000000"',
+        f'      xcr:PrincipalPointU="{px:.6f}"',
+        f'      xcr:PrincipalPointV="{py:.6f}"',
+        '      xcr:CalibrationPrior="locked"',
+        '      xcr:CalibrationGroup="1"',
+        '      xcr:DistortionGroup="1"',
+        f'      xcr:Rig="{rig_guid}"',
+        f'      xcr:RigInstance="{instance_guid}"',
+        f'      xcr:RigPoseIndex="{camera_index}"',
     ]
     if locked_pose_group is not None:
-        open_desc.append(f'      xcr:LockedPoseGroup="{locked_pose_group}">')
-    else:
-        open_desc[-1] += '>'
+        open_desc.append(f'      xcr:LockedPoseGroup="{locked_pose_group}"')
+    open_desc.extend([
+        '      xcr:InTexturing="1"',
+        '      xcr:InMeshing="1">',
+    ])
 
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
     ] + open_desc + [
-        '      <xcr:CalibrationGroup>1</xcr:CalibrationGroup>',
-        '      <xcr:DistortionGroup>1</xcr:DistortionGroup>',
-        '      <xcr:InTexturing>1</xcr:InTexturing>',
-        '      <xcr:InMeshing>1</xcr:InMeshing>',
-        '      ',
-        '      <!-- Calibration Priors -->',
-        f'      <xcr:FocalLength35mm>{f_35mm:.6f}</xcr:FocalLength35mm>',
-        f'      <xcr:PrincipalPointU>{px:.6f}</xcr:PrincipalPointU>',
-        f'      <xcr:PrincipalPointV>{py:.6f}</xcr:PrincipalPointV>',
-        '      <xcr:DistortionModel>brown3</xcr:DistortionModel>',
-        f'      <xcr:DistortionCoeficients>{dist_str}</xcr:DistortionCoeficients>',
-        '      <xcr:CalibrationPrior>locked</xcr:CalibrationPrior>',
-        '      <xcr:LensDistortionPrior>locked</xcr:LensDistortionPrior>',
-        '',
-        '      <!-- Trajectory & Pose Priors -->',
-        '      <xcr:Coordinates>absolute</xcr:Coordinates>',
         f'      <xcr:Position>{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}</xcr:Position>',
-        f'      <xcr:Rotation>{r_str}</xcr:Rotation>',
-        f'      <xcr:PosePrior>{pose_prior}</xcr:PosePrior>',
-        f'      <xcr:PoseAccuracyPosition>{pos_accuracy[0]:.6f} {pos_accuracy[1]:.6f} {pos_accuracy[2]:.6f}</xcr:PoseAccuracyPosition>',
-        f'      <xcr:PoseAccuracyRotation>{rot_accuracy[0]:.6f} {rot_accuracy[1]:.6f} {rot_accuracy[2]:.6f}</xcr:PoseAccuracyRotation>',
         '    </rdf:Description>',
         '  </rdf:RDF>',
         '</x:xmpmeta>',
@@ -1312,6 +1339,7 @@ def split_panorama_dataset(
                                 pos_accuracy=xmp_pos_accuracy,
                                 rot_accuracy=xmp_rot_accuracy,
                                 locked_pose_group=frame_int_idx,
+                                cam_name=cam_name,
                             )
                             xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
                             with open(xmp_file, "w", encoding="utf-8") as xf:
@@ -1485,6 +1513,7 @@ def split_panorama_dataset(
                             pos_accuracy=xmp_pos_accuracy,
                             rot_accuracy=xmp_rot_accuracy,
                             locked_pose_group=frame_int_idx,
+                            cam_name=cam_name,
                         )
                         xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
                         with open(xmp_file, "w", encoding="utf-8") as xf:
