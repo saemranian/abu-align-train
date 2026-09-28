@@ -179,17 +179,22 @@ class TestTrajectoryIngestionAndCompounding(unittest.TestCase):
 
     def test_compound_pose_rotated_panorama(self):
         """Panorama facing East (yaw=90°), horizontal."""
-        pano_pose = {"x": 0.0, "y": 0.0, "alt": 0.0, "yaw": 90.0, "pitch": 90.0, "roll": 0.0}
-
-        # Front camera looks East (yaw=90°)
+        pano_pose = {"x": 10.0, "y": 20.0, "alt": 30.0, "yaw": 90.0, "pitch": 90.0, "roll": 0.0}
         front_cam = ("front", 0.0, 0.0, 0.0, 90.0)
-        p_front = ps.compound_realitycapture_pose(pano_pose, front_cam, 1024, 1024)
-        self.assertAlmostEqual(p_front["yaw"], 90.0, places=3)
-
-        # Right camera looks South (yaw=180°)
         right_cam = ("right", 90.0, 0.0, 0.0, 90.0)
-        p_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024)
-        self.assertAlmostEqual(p_right["yaw"], 180.0, places=3)
+
+        # 1. Default: Override imported orientation with clean rig values
+        p_front = ps.compound_realitycapture_pose(pano_pose, front_cam, 1024, 1024, override_orientations_from_rig=True)
+        self.assertAlmostEqual(p_front["x"], 10.0)
+        self.assertAlmostEqual(p_front["yaw"], 0.0, places=3)
+        p_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024, override_orientations_from_rig=True)
+        self.assertAlmostEqual(p_right["yaw"], 90.0, places=3)
+
+        # 2. Compounded mode: Multiplies panorama rotation in SO(3)
+        p_c_front = ps.compound_realitycapture_pose(pano_pose, front_cam, 1024, 1024, override_orientations_from_rig=False)
+        self.assertAlmostEqual(p_c_front["yaw"], 90.0, places=3)
+        p_c_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024, override_orientations_from_rig=False)
+        self.assertAlmostEqual(p_c_right["yaw"], 180.0, places=3)
 
 
 class TestDatasetSplittingExport(unittest.TestCase):
@@ -261,7 +266,7 @@ class TestDatasetSplittingExport(unittest.TestCase):
         self.assertAlmostEqual(float(parts[2]), 2.0)
         self.assertAlmostEqual(float(parts[3]), 3.0)
 
-        # 2. Verify perspective subfolders exist with local cameras.csv
+        # 2. Verify perspective subfolders exist with local cameras.csv and image suffix
         persp_dir = os.path.join(self.out_dir, "perspectives")
         self.assertTrue(os.path.isdir(persp_dir))
         cam_dirs = os.listdir(persp_dir)
@@ -275,9 +280,12 @@ class TestDatasetSplittingExport(unittest.TestCase):
                 c_lines = f.readlines()
             # Header + 2 images = 3 lines
             self.assertEqual(len(c_lines), 3)
-            # The name should be local (e.g. pano_001.jpg, not perspectives/cam/pano_001.jpg)
+            # The name should have camera suffix (e.g. pano_001_ring_00_yaw000.jpg)
             first_name = c_lines[1].split(",")[0]
-            self.assertEqual(first_name, "pano_001.jpg")
+            expected_img_name = f"pano_001_{cam}.jpg"
+            self.assertEqual(first_name, expected_img_name)
+            # Verify file exists on disk with that exact name
+            self.assertTrue(os.path.isfile(os.path.join(local_cam_dir, expected_img_name)))
 
         # 3. Verify cameras_csv/ folder contains separate CSV per camera
         csv_dir = os.path.join(self.out_dir, "cameras_csv")

@@ -517,10 +517,18 @@ def compound_realitycapture_pose(
     crop_h: int,
     k1: float = 0.0,
     k2: float = 0.0,
+    override_orientations_from_rig: bool = True,
 ) -> Dict[str, Any]:
     """
     Compounds a 360 panorama 6-DoF pose with a virtual rig camera offset into
     RealityScan / RealityCapture standard Euler orientation and coordinates.
+
+    If override_orientations_from_rig is True (default):
+        - Metric position (x, y, alt) is taken from the imported panorama trajectory prior.
+        - Imported yaw, pitch, roll from the trajectory are discarded and overridden with
+          the clean, canonical Euler orientation derived directly from the splitting rig.
+    If override_orientations_from_rig is False:
+        - Panorama 3D rotation and rig orientation are multiplied in SO(3).
     """
     cam_name, rig_yaw, rig_pitch, rig_roll, fov_deg = rig_cam
 
@@ -537,15 +545,22 @@ def compound_realitycapture_pose(
         p_pitch = 90.0
         p_roll = 0.0
 
-    r_p, u_p, f_p = get_rc_axes(p_yaw, p_pitch, p_roll)
-    R_rig_to_rc = np.column_stack([r_p, u_p, f_p])
-
     rig_r, rig_u, rig_f = basis(rig_yaw, rig_pitch, rig_roll)
 
-    fwd_rc = R_rig_to_rc @ rig_f
-    up_rc = R_rig_to_rc @ rig_u
-
-    yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
+    if override_orientations_from_rig or pano_pose is None:
+        # Map local rig basis (X-right, Y-up, Z-fwd) to canonical RC world frame (X-east, Y-north, Z-up)
+        # using the identity RC orientation (yaw=0°, pitch=90° horizontal, roll=0°)
+        r_rc, u_rc, f_rc = get_rc_axes(0.0, 90.0, 0.0)
+        M_rig_to_rc = np.column_stack([r_rc, u_rc, f_rc])
+        fwd_rc = M_rig_to_rc @ rig_f
+        up_rc = M_rig_to_rc @ rig_u
+        yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
+    else:
+        r_p, u_p, f_p = get_rc_axes(p_yaw, p_pitch, p_roll)
+        R_rig_to_rc = np.column_stack([r_p, u_p, f_p])
+        fwd_rc = R_rig_to_rc @ rig_f
+        up_rc = R_rig_to_rc @ rig_u
+        yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
 
     fov_rad = math.radians(fov_deg)
     fx = (float(crop_w) / 2.0) / math.tan(fov_rad / 2.0)
@@ -791,6 +806,7 @@ def split_panorama_dataset(
     export_realityscan_csv: bool = True,
     subfolder_per_perspective: bool = True,
     dvo_trajectory_csv: Optional[str] = None,
+    override_orientations_from_rig: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -931,7 +947,7 @@ def split_panorama_dataset(
                     if subfolder_per_perspective:
                         cam_dir = os.path.join(perspectives_base, cam_name)
                         os.makedirs(cam_dir, exist_ok=True)
-                        file_in_cam = f"{base_name}{ext}"
+                        file_in_cam = f"{base_name}_{cam_name}{ext}"
                         out_filepath = os.path.join(cam_dir, file_in_cam)
                         rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
                         local_name = file_in_cam
@@ -953,6 +969,7 @@ def split_panorama_dataset(
                             crop_h=out_h,
                             k1=k1,
                             k2=k2,
+                            override_orientations_from_rig=override_orientations_from_rig,
                         )
                         master_line = format_rc_csv_line(rel_path_root, comp_pose)
                         rc_master_rows.append(master_line)
@@ -1049,7 +1066,7 @@ def split_panorama_dataset(
                 if subfolder_per_perspective:
                     cam_dir = os.path.join(perspectives_base, cam_name)
                     os.makedirs(cam_dir, exist_ok=True)
-                    file_in_cam = f"{base_name}{ext}"
+                    file_in_cam = f"{base_name}_{cam_name}{ext}"
                     out_filepath = os.path.join(cam_dir, file_in_cam)
                     rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
                     local_name = file_in_cam
@@ -1071,6 +1088,7 @@ def split_panorama_dataset(
                         crop_h=out_h,
                         k1=k1,
                         k2=k2,
+                        override_orientations_from_rig=override_orientations_from_rig,
                     )
                     master_line = format_rc_csv_line(rel_path_root, comp_pose)
                     rc_master_rows.append(master_line)
@@ -1230,6 +1248,7 @@ def main():
     parser.add_argument("--no-rc-csv", action="store_true", help="Skip exporting RealityScan / RealityCapture cameras.csv")
     parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
     parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
+    parser.add_argument("--compound-rotations", action="store_true", help="Compound full 3D rotation instead of overriding orientations with clean modified rig angles")
 
     args = parser.parse_args()
 
@@ -1274,6 +1293,7 @@ def main():
         export_realityscan_csv=not args.no_rc_csv,
         subfolder_per_perspective=not args.flat_images,
         dvo_trajectory_csv=args.dvo_trajectory,
+        override_orientations_from_rig=not args.compound_rotations,
         progress_callback=lambda cur, tot, name: print(f"    Processing {cur}/{tot}: {name}", end="\r"),
     )
     print()

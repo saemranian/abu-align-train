@@ -1,81 +1,47 @@
-# v0.1.0.3 — Infinite Loop Path Fix & Safe 3DGS Image Staging
+# v0.1.0.4 — 360 Splitter: Perspective Suffix Naming & Clean Rig Orientation Override
 
 ## Overview & Outcome
-Abu Align & Train **v0.1.0.3** resolves a critical Windows filesystem recursion bug where processing datasets with images located directly in the root directory caused an infinite directory loop (`results/.../images/results/.../images`), freezing and crashing Windows File Explorer when deleting or browsing run folders.
+Abu Align & Train **v0.1.0.4** enhances the **360° Panoramic Splitter & Rig Projector** with proper perspective image naming and decoupled orientation overriding:
+
+1. **Perspective-Specific Image Suffix Naming**:
+   * **Problem**: When exporting panoramas into perspective subfolders (`perspectives/<cam_name>/`), files previously retained the panorama base name without the camera identifier (e.g. `Container1_Mask000.jpg` in all 6 folders), causing ambiguity when mixing or referencing files externally.
+   * **Solution**: Every exported image in perspective subfolders is now uniquely named with its camera angle suffix:
+     * `perspectives/back/Container1_Mask000_back.jpg`
+     * `perspectives/front/Container1_Mask000_front.jpg`
+     * `perspectives/right/Container1_Mask000_right.jpg`
+     * `perspectives/left/Container1_Mask000_left.jpg`
+     * `perspectives/up/Container1_Mask000_up.jpg`
+     * `perspectives/down/Container1_Mask000_down.jpg`
+   * **Manifest Synchronization**: Both the local `perspectives/<cam>/cameras.csv` and master `cameras.csv` index these exact filenames, guaranteeing 100% path parity when dragging individual folders into RealityCapture or RealityScan.
+
+2. **Clean Rig Orientation Override in `cameras.csv`**:
+   * **Problem**: In previous versions, when importing 360DVO trajectory priors, visual odometry drift and heading adjustments slightly shifted the exported `yaw`, `pitch`, and `roll` values across frames (e.g., `yaw=180.1318°` in frame 003).
+   * **Solution**: `compound_realitycapture_pose()` now takes metric camera positions $(x, y, \text{alt})$ from the 360DVO trajectory prior, discards/deletes the imported visual odometry rotation angles, and overrides them with the clean, canonical RealityCapture Euler angles defined by the splitting rig:
+     * **Back**: `yaw = 180.0000°, pitch = 90.0000°, roll = 0.0000°`
+     * **Front**: `yaw = 0.0000°, pitch = 90.0000°, roll = 0.0000°`
+     * **Right**: `yaw = 90.0000°, pitch = 90.0000°, roll = 0.0000°`
+     * **Left**: `yaw = 270.0000°, pitch = 90.0000°, roll = 0.0000°`
+     * **Up**: `yaw = 0.0000°, pitch = 180.0000°, roll = 0.0000°`
+     * **Down**: `yaw = 0.0000°, pitch = 0.0000°, roll = 0.0000°`
+     * **Custom Rigs**: Any custom rig camera angles configured in the UI are cleanly converted into constant RealityCapture Euler angles across all trajectory frames.
+   * **Optional Compounding**: Added `--compound-rotations` CLI flag if full $SO(3)$ rotation compounding is desired.
+
+3. **In-Place Migration of Existing Dataset**:
+   * Migrated all 4,092 image files across the 6 perspective folders in:
+     `C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Insta360\Insta Exports\VID_20260902_094505_00_003_frames\CC\Masked\pinhole_rig\perspectives`
+   * Updated all local `cameras.csv`, master `cameras.csv`, and `transforms.json` with the new naming scheme and clean rig orientations.
 
 ---
 
-## 1. Problem & Root Cause Analysis
+## Verification & Automated Test Results
 
-* **Symptom**: When attempting to delete or inspect `results/sparse_02_360dvo/` (or previous runs), Windows File Explorer froze, hung, and crashed with deep path errors. In the user's path:
-  `.../CC/Masked/results/sparse_02_360dvo/3dgs_dataset/images/Del Copy Sel1/results/sparse_05_360dvo/3dgs_dataset/images/results/...`
-* **Root Cause**:
-  * In `360dvo_engine.py` (and `dvo360_engine.py`), `3dgs_dataset/images` was staged using:
-    ```python
-    d3_imgs = os.path.join(dataset_3dgs, "images")
-    if not os.path.exists(d3_imgs):
-        try:
-            os.symlink(first_img_dir, d3_imgs)
-        except Exception:
-            shutil.copytree(first_img_dir, d3_imgs)
-    ```
-  * When input images were located directly in `CC/Masked`, `first_img_dir` was `CC/Masked` (the dataset root).
-  * The output directory `results/sparse_XX_360dvo` is located *inside* `CC/Masked`.
-  * If `os.symlink` succeeded or created an NTFS junction, `images` pointed back to its own ancestor `CC/Masked`, creating a circular reparse point loop in the filesystem.
-  * If `os.symlink` failed (typical on Windows without Developer Mode / Admin rights), `shutil.copytree(first_img_dir, d3_imgs)` recursively copied all directories in `CC/Masked` (including `results/`, `Del Copy Sel1/`, and previous run outputs) into `images/`. Because `d3_imgs` is inside `results/`, `copytree` copied `results/` into `images/results/`, which contained another run's `results/`, causing infinite directory recursion until the Windows `MAX_PATH` (260 characters) limit was exceeded.
-
----
-
-## 2. Core Fixes Implemented
-
-1. **Safe File-Based Image Staging (Zero Directory Copy / Zero Symlink Loops)**:
-   * Replaced directory symlinks and `copytree` across all engines:
-     * [`360dvo_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/360dvo_engine.py)
-     * [`dvo360_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/dvo360_engine.py)
-     * [`align_cli.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/align_cli.py)
-     * [`realityscan_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/realityscan_engine.py)
-     * [`opensfm_engine.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/opensfm_engine.py)
-   * The new implementation stages images using strict individual file hard-links (`os.link(src, dst)`) with per-file fallback to `shutil.copy2(src, dst)`:
-     ```python
-     d3_imgs = os.path.join(dataset_3dgs, "images")
-     os.makedirs(d3_imgs, exist_ok=True)
-     for src in image_paths:
-         dst = os.path.join(d3_imgs, os.path.basename(src))
-         if not os.path.exists(dst):
-             try:
-                 os.link(src, dst)
-             except Exception:
-                 try:
-                     shutil.copy2(src, dst)
-                 except Exception:
-                     pass
-     ```
-   * **Advantages**:
-     * Zero-byte storage overhead on NTFS via native hard-links.
-     * Guaranteed flat image folder in `3dgs_dataset/images/` without any subdirectories.
-     * Absolutely zero possibility of circular directory loops or ancestor copying.
-
-2. **Proof-of-Concept Permanent Deletion of Corrupted Folders**:
-   * Permanently purged the deeply nested recursive folder `sparse_02_360dvo` at:
-     `C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Insta360\Insta Exports\VID_20260902_094505_00_003_frames\CC\Masked\results\sparse_02_360dvo`
-     using Windows NT wide-API `robocopy /MIR` mirror purge.
-   * Confirmed `Test-Path` returns `False`.
-   * Also purged nested recursive directories inside `sparse_01_360dvo` and `Del Copy Sel1\results\sparse_05_360dvo`.
-
-3. **Loop-Safe & Deep-Path Directory Deletion Utility (`safe_remove_tree`)**:
-   * Added `safe_remove_tree(target_dir)` in [`cache_manager.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/cache_manager.py) to reliably delete directory structures with deep paths (>260 characters) or reparse points without Explorer lockup.
-
-4. **100% Upstream Cleanliness**:
-   * Tracked files in upstream submodules (`vgg-ttt/`, `vggt-omega/`) and WSL repository `/home/ahmad/360DVO/` remain 100% clean and pristine.
-
----
-
-## 3. Automated Verification & Test Results
-
-* **New Dedicated Test Suite**: [`tests/test_safe_image_staging.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/tests/test_safe_image_staging.py)
-  * `test_safe_remove_tree_normal`: PASSED
-  * `test_safe_image_staging_no_recursion`: PASSED (verified `images/` contains only flat image files and 0 subdirectories when output is inside dataset).
+* **Dedicated Rig Test Suite**: [`tests/test_rig_cameras_csv.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/tests/test_rig_cameras_csv.py) (10 tests, 0.103s)
+  * Verified perspective subfolder image naming suffix generation (`pano_001_<cam>.jpg`).
+  * Verified default orientation override with clean rig angles while preserving metric $(x, y, \text{alt})$.
+  * Verified optional $SO(3)$ rotation compounding mode.
 * **Full Regression Test Suite**:
-  * **135 tests passed in 58.324s** (100% pass rate, 0 failures).
+  * **135 tests passed in 42.869s** (100% pass rate, 0 failures).
+* **Upstream Cleanliness**:
+  * `vgg-ttt/`, `vggt-omega/`, and WSL `/home/ahmad/360DVO/` remain 100% clean and untouched.
 * **SHA256 Parity**:
-  * Byte-for-byte identity verified between `360dvo_engine.py` and `dvo360_engine.py` (`60CF1F1A0E51DC0D25C20702623C658A25F463A4F46B7771B25E3BF760B8ECAC`).
+  * `360dvo_engine.py` and `dvo360_engine.py` match SHA256 exactly (`60CF1F1A0E51DC0D25C20702623C658A25F463A4F46B7771B25E3BF760B8ECAC`).
