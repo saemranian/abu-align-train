@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.0.4
+Abu Align & Train Version 0.1.0.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.0.4 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.0.5 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2102,6 +2102,7 @@ class AbuAlignApp:
         qual_var = tk.IntVar(value=95)
         export_tf_var = tk.BooleanVar(value=True)
         export_rc_csv_var = tk.BooleanVar(value=True)
+        export_xmp_var = tk.BooleanVar(value=True)
         subfolder_per_cam_var = tk.BooleanVar(value=True)
 
         # 360DVO Trajectory Prior
@@ -2542,7 +2543,7 @@ class AbuAlignApp:
 
         subfolder_chk = tk.Checkbutton(
             o4,
-            text="Folder per perspective (with cameras.csv)",
+            text="Folder per perspective (cameras_<cam>.csv + all_cameras.csv)",
             variable=subfolder_per_cam_var,
             font=("Segoe UI", 8),
             fg=self.text_primary,
@@ -2551,7 +2552,24 @@ class AbuAlignApp:
             activebackground=self.panel_bg
         )
         subfolder_chk.pack(side=tk.LEFT)
-        ToolTip(subfolder_chk, "Organizes views into perspectives/<camera_name>/ folders, writing a local cameras.csv inside each folder for direct drag-and-drop into RealityCapture.")
+        ToolTip(subfolder_chk, "Organizes views into perspectives/<camera_name>/ folders, writing local cameras_<cam>.csv and perspectives/all_cameras.csv for direct drag-and-drop into RealityCapture.")
+
+        # RealityScan Rig XMP Metadata Row
+        o5 = tk.Frame(optics_card, bg=self.panel_bg)
+        o5.pack(fill=tk.X, pady=(2, 1))
+
+        xmp_chk = tk.Checkbutton(
+            o5,
+            text="Export .xmp Rig sidecars (RealityScan Rig Parser)",
+            variable=export_xmp_var,
+            font=("Segoe UI", 8, "bold"),
+            fg="#38bdf8",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg
+        )
+        xmp_chk.pack(side=tk.LEFT)
+        ToolTip(xmp_chk, "Generates an .xmp XML sidecar for every image (e.g. image.jpg.xmp and image.xmp) with RigId, RigInstanceId, 35mm focal equivalent, locked intrinsics, and metric trajectory position for RealityScan's Rig Parser.")
 
         # -----------------------------------------------------------------
         # RIGHT COLUMN: Interactive Visualizer Canvas & Telemetry Dashboard
@@ -3490,6 +3508,7 @@ class AbuAlignApp:
                         video_max_frames=v_max_f,
                         export_transforms_json=tf,
                         export_realityscan_csv=export_rc_csv_var.get(),
+                        export_xmp=export_xmp_var.get(),
                         subfolder_per_perspective=subfolder_per_cam_var.get(),
                         dvo_trajectory_csv=dvo_csv_var.get().strip() or None,
                         progress_callback=on_progress,
@@ -4221,7 +4240,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.0.4 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.0.5 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4780,7 +4799,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.0.4 - {title}")
+        doc_win.title(f"Abu Align v0.1.0.5 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5407,7 +5426,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.0.4\n"
+            "Abu Align & Train - Version 0.1.0.5\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

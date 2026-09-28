@@ -266,16 +266,25 @@ class TestDatasetSplittingExport(unittest.TestCase):
         self.assertAlmostEqual(float(parts[2]), 2.0)
         self.assertAlmostEqual(float(parts[3]), 3.0)
 
-        # 2. Verify perspective subfolders exist with local cameras.csv and image suffix
+        # 2. Verify perspective subfolders and all_cameras.csv
         persp_dir = os.path.join(self.out_dir, "perspectives")
         self.assertTrue(os.path.isdir(persp_dir))
-        cam_dirs = os.listdir(persp_dir)
+
+        # Verify all_cameras.csv exists in perspectives/ directory
+        all_cam_csv = os.path.join(persp_dir, "all_cameras.csv")
+        self.assertTrue(os.path.isfile(all_cam_csv), "Missing perspectives/all_cameras.csv")
+        with open(all_cam_csv, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+        self.assertEqual(len(all_lines), 9)  # Header + 8 images
+
+        cam_dirs = [d for d in os.listdir(persp_dir) if os.path.isdir(os.path.join(persp_dir, d))]
         self.assertEqual(len(cam_dirs), 4)
 
         for cam in cam_dirs:
             local_cam_dir = os.path.join(persp_dir, cam)
-            local_csv = os.path.join(local_cam_dir, "cameras.csv")
-            self.assertTrue(os.path.isfile(local_csv), f"Missing local cameras.csv in {cam}")
+            # Verify cameras_<cam>.csv is written inside each perspective folder
+            local_csv = os.path.join(local_cam_dir, f"cameras_{cam}.csv")
+            self.assertTrue(os.path.isfile(local_csv), f"Missing local cameras_{cam}.csv in {cam}")
             with open(local_csv, "r", encoding="utf-8") as f:
                 c_lines = f.readlines()
             # Header + 2 images = 3 lines
@@ -286,6 +295,22 @@ class TestDatasetSplittingExport(unittest.TestCase):
             self.assertEqual(first_name, expected_img_name)
             # Verify file exists on disk with that exact name
             self.assertTrue(os.path.isfile(os.path.join(local_cam_dir, expected_img_name)))
+
+            # Verify XMP sidecar files exist for RealityScan Rig Parser
+            xmp_ext = os.path.join(local_cam_dir, f"{expected_img_name}.xmp")
+            xmp_stem = os.path.join(local_cam_dir, f"pano_001_{cam}.xmp")
+            self.assertTrue(os.path.isfile(xmp_ext), f"Missing {xmp_ext}")
+            self.assertTrue(os.path.isfile(xmp_stem), f"Missing {xmp_stem}")
+
+            # Verify XMP XML contents contain RigId, RigInstanceId, Position, Rotation
+            with open(xmp_ext, "r", encoding="utf-8") as xf:
+                xmp_content = xf.read()
+            self.assertIn("<xcr:RigId>cubemap_rig</xcr:RigId>", xmp_content)
+            self.assertIn("<xcr:RigInstanceId>pano_001</xcr:RigInstanceId>", xmp_content)
+            self.assertIn("<xcr:PosePrior>approximate</xcr:PosePrior>", xmp_content)
+            self.assertIn("<xcr:Position>1.000000 2.000000 3.000000</xcr:Position>", xmp_content)
+            self.assertIn("<xcr:Rotation>", xmp_content)
+            self.assertIn("<xcr:FocalLength35mm>", xmp_content)
 
         # 3. Verify cameras_csv/ folder contains separate CSV per camera
         csv_dir = os.path.join(self.out_dir, "cameras_csv")
