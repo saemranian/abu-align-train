@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.0.9
+Abu Align & Train Version 0.1.1.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.0.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.1.0 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -1462,7 +1462,7 @@ class AbuAlignApp:
         pfgs_res_cb = ttk.Combobox(pfgs_res_row, textvariable=self.pfgs_downscale_var, values=["1 (Full 100% Quality)", "2 (Half Res - 2x Speed)", "4 (Quarter Res - Fast)", "Auto (<= 1600px Max)"], state="readonly", width=19, font=("Segoe UI", 8))
         pfgs_res_cb.pack(side=tk.LEFT, padx=4)
         ToolTip(lbl_res, "Training dataset image resolution / downscale factor passed to Nerfstudio dataparser.")
-        ToolTip(pfgs_res_cb, "Training Image Resolution:\n• 1 (Full 100% Quality): Loads training equirectangular images at full native resolution.\n• 2 (Half Res): Downscales 2x for faster iterations and lower VRAM.\n• 4 (Quarter Res): Downscales 4x for ultra-fast previews.\n• Auto: Nerfstudio default (automatically downscales if max dimension > 1600px).\n\nNOTE: The 'Resolution: 402x512px' seen in Viser (localhost:7007) is the browser viewport preview resolution (Aspect Ratio × 'Max res: 512' slider), NOT this training dataset resolution.")
+        ToolTip(pfgs_res_cb, "Training Image Resolution:\n• 1 (Full 100% Quality): Loads training equirectangular images at full native resolution (Warning: 8K datasets >100 frames may require >60GB RAM and trigger WSL2 OOM).\n• 2 (Half Res - Recommended): Downscales 2x (3840x1920) for optimal quality, 4x faster training, and fits safely in RAM.\n• 4 (Quarter Res): Downscales 4x for ultra-fast previews.\n• Auto: Nerfstudio default (automatically downscales if max dimension > 1600px).\n\nNOTE: The 'Resolution: 402x512px' seen in Viser (localhost:7007) is the browser viewport preview resolution (Aspect Ratio × 'Max res: 512' slider), NOT this training dataset resolution.")
         tk.Label(pfgs_col3, text="💡 Viser 7007: adjust 'Max res' slider in browser", font=("Segoe UI", 8), fg="#94a3b8", bg=self.panel_bg).pack(anchor="w", pady=(1, 0))
 
     def _update_train_panel(self):
@@ -4423,7 +4423,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.0.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.1.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4982,7 +4982,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.0.9 - {title}")
+        doc_win.title(f"Abu Align v0.1.1.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5609,7 +5609,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.0.9\n"
+            "Abu Align & Train - Version 0.1.1.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

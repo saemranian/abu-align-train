@@ -672,17 +672,19 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
+    open_desc = [
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/"',
+        '      xcr:Version="3"',
+    ]
+    if locked_pose_group is not None:
+        open_desc.append(f'      xcr:LockedPoseGroup="{locked_pose_group}">')
+    else:
+        open_desc[-1] += '>'
+
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
-        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/">',
-        '      <xcr:Version>3</xcr:Version>',
-    ]
-
-    if locked_pose_group is not None:
-        xml_lines.append(f'      <xcr:LockedPoseGroup>{locked_pose_group}</xcr:LockedPoseGroup>')
-
-    xml_lines.extend([
+    ] + open_desc + [
         '      <xcr:CalibrationGroup>1</xcr:CalibrationGroup>',
         '      <xcr:DistortionGroup>1</xcr:DistortionGroup>',
         '      <xcr:InTexturing>1</xcr:InTexturing>',
@@ -708,7 +710,7 @@ def generate_realityscan_xmp(
         '  </rdf:RDF>',
         '</x:xmpmeta>',
         ''
-    ])
+    ]
     return "\n".join(xml_lines)
 
 

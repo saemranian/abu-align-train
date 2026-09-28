@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.1.0.9 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.1.1.0 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -1296,6 +1296,31 @@ def train_pfgs360(
     else:
         use_prior = bool(use_prior_poses)
 
+    # Estimate image caching memory consumption
+    img_candidates = []
+    for cand_pattern in ["images/*", "*.jpg", "*.png", "*.JPG", "*.PNG"]:
+        found = glob.glob(os.path.join(dataset_abs, cand_pattern))
+        if found:
+            img_candidates = found
+            break
+    if not img_candidates and os.path.isdir(os.path.join(dataset_abs, "images")):
+        img_candidates = glob.glob(os.path.join(dataset_abs, "images", "*.*"))
+
+    if img_candidates:
+        num_imgs = len(img_candidates)
+        try:
+            from PIL import Image
+            with Image.open(img_candidates[0]) as im:
+                im_w, im_h = im.size
+            est_gb_f32 = (num_imgs * im_w * im_h * 3 * 4) / (1024 ** 3)
+            est_gb_u8 = (num_imgs * im_w * im_h * 3 * 1) / (1024 ** 3)
+            log(f"      * [Dataset Profile] {num_imgs} images @ {im_w}x{im_h} (Est. uncompressed RAM: {est_gb_f32:.1f} GB float32 | {est_gb_u8:.1f} GB uint8)")
+            if est_gb_u8 > 35.0 and ds_str in ["1", "original", "native", "100%", "full"]:
+                log(f"      * [MEMORY WARNING] Massive {im_w}x{im_h} dataset detected! Full 100% native caching may exceed WSL2/system memory.")
+                log(f"      * [MEMORY ADVICE] If training encounters OOM (exit code 9), set Train Res to '2 (Half Res - 2x Speed)' or 'Auto'.")
+        except Exception:
+            pass
+
     log(f"      * Initializing PFGS360 Engine (CVPR 2026)...")
     log(f"      * ns-train:      {ns_train_exe}")
     log(f"      * Dataparser:    {dp_mode_label}")
@@ -1309,6 +1334,7 @@ def train_pfgs360(
     log(f"      * Align-Depth:   {'Enabled' if align_depth else 'Disabled'}")
     log(f"      * Filter Sky:    {f'Enabled (>{sky_depth:.0f}m)' if filter_sky else 'Disabled'}")
     log(f"      * Resolution:    {ds_disp}")
+    log(f"      * Memory Mode:   Optimized uint8 Caching (75% RAM Reduction)")
     log(f"      * Viewer Mode:   {'Headless (100% Dedicated GPU)' if mode == 'headless' else 'Interactive Viser (http://localhost:7007)'}")
     log(f"      * Dataset:       {dataset_abs}")
     log(f"      * Output Dir:    {output_dir}")
@@ -1327,6 +1353,7 @@ def train_pfgs360(
             "--pipeline.model.sh-degree", str(sh_degree),
             "--pipeline.model.depth-type", depth_type,
             "--pipeline.model.use-prior-poses", "True" if use_prior else "False",
+            "--pipeline.datamanager.cache-images-type", "uint8",
         ] + vis_flag + [
             "--viewer.quit-on-train-completion", "True",
         ]
@@ -1383,6 +1410,17 @@ def train_pfgs360(
             config_candidates = glob.glob(os.path.join(output_dir, "**", "config.yml"), recursive=True)
             if is_early_finish and config_candidates:
                 log(f"      * [PFGS360] Early 'Save & finish' detected (exit code {ret}). Proceeding to export 3DGS .ply...")
+            elif ret in [9, 137]:
+                oom_msg = (
+                    f"WSL2 Linux Out-Of-Memory (OOM) Killer terminated PFGS360 (exit code {ret} - SIGKILL).\n"
+                    f"Root Cause: The dataset contains too many high-resolution equirectangular frames to fit uncompressed into WSL2 RAM.\n"
+                    f"Recommended Solutions:\n"
+                    f"  1. In GUI: Change 'Train Res' to '2 (Half Res - 2x Speed)' or 'Auto (<= 1600px Max)'.\n"
+                    f"  2. In CLI: Pass '--pfgs_downscale 2' or '--pfgs_downscale auto'.\n"
+                    f"  3. Increase WSL2 memory ceiling in '%USERPROFILE%\\.wslconfig' if native 8K caching is strictly required."
+                )
+                log(f"      * [CRITICAL OOM] {oom_msg}")
+                raise RuntimeError(oom_msg)
             else:
                 raise RuntimeError(f"WSL2 PFGS360 training failed (exit code {ret})")
         elif is_early_finish:
@@ -1439,6 +1477,7 @@ def train_pfgs360(
         "--pipeline.model.sh-degree", str(sh_degree),
         "--pipeline.model.depth-type", depth_type,
         "--pipeline.model.use-prior-poses", "True" if use_prior else "False",
+        "--pipeline.datamanager.cache-images-type", "uint8",
     ] + vis_flag + [
         "--viewer.quit-on-train-completion", "True",
     ]
@@ -1550,6 +1589,16 @@ def train_pfgs360(
         ckpt_files = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)
         if is_early_finish and ckpt_files:
             log(f"      * [PFGS360] Early 'Save & finish' detected (exit code {proc.returncode}). Proceeding to export 3DGS .ply...")
+        elif proc.returncode in [9, 137]:
+            oom_msg = (
+                f"Process terminated by Out-Of-Memory (OOM) Killer (exit code {proc.returncode} - SIGKILL).\n"
+                f"Root Cause: The dataset contains too many high-resolution equirectangular frames to fit uncompressed into memory.\n"
+                f"Recommended Solutions:\n"
+                f"  1. In GUI: Change 'Train Res' to '2 (Half Res - 2x Speed)' or 'Auto (<= 1600px Max)'.\n"
+                f"  2. In CLI: Pass '--pfgs_downscale 2' or '--pfgs_downscale auto'."
+            )
+            log(f"      * [CRITICAL OOM] {oom_msg}")
+            raise RuntimeError(oom_msg)
         else:
             err_block = "\n".join(captured_lines[-15:]) if captured_lines else f"Exited with code {proc.returncode}"
             if "spherical_distortion" in err_block or "No module named" in err_block or "invalid choice: 'pfgs360'" in err_block:
