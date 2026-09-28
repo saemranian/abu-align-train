@@ -867,6 +867,154 @@ def probe_video_metadata(video_path: str) -> Dict[str, Any]:
 
 
 # ======================================================================
+# Equirectangular Mask Auto-Detection & Lookup Helpers
+# ======================================================================
+
+def find_auto_mask_dir(input_dir: str) -> Optional[str]:
+    """
+    Auto-detects an equirectangular mask directory inside or next to the dataset.
+    Searches common conventions:
+    'mask', 'masks', 'Mask', 'Masks', 'Mask Pass', 'mask_pass', 'Mask_Pass', 'mask pass',
+    'Masks Pass', 'masks_pass', 'Mask 1', 'Mask 2', or any subdirectory whose name
+    contains 'mask' (case-insensitive), excluding output directories.
+    Validates that the candidate directory contains at least one valid image file.
+    """
+    if not input_dir or not os.path.exists(input_dir):
+        return None
+    scan_dir = input_dir if os.path.isdir(input_dir) else os.path.dirname(input_dir)
+    valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+
+    # Priority 1: standard naming conventions
+    priority_names = [
+        "mask", "masks", "Mask", "Masks", "Mask Pass", "mask_pass", "Mask_Pass",
+        "mask pass", "Masks Pass", "masks_pass", "Mask 1", "Mask 2", "masks_2"
+    ]
+    for name in priority_names:
+        cand = os.path.join(scan_dir, name)
+        if os.path.isdir(cand):
+            try:
+                imgs = [f for f in os.listdir(cand) if os.path.splitext(f.lower())[1] in valid_exts]
+                if imgs:
+                    return str(Path(cand).resolve())
+            except Exception:
+                pass
+
+    # Priority 2: any subdirectory in scan_dir containing 'mask' (case-insensitive)
+    ignored = {"pinhole_rig", "perspectives", "results", "images", "cameras_csv", ".git", "cache", "tmp"}
+    try:
+        for entry in os.listdir(scan_dir):
+            if entry.lower() in ignored or entry in ignored:
+                continue
+            cand = os.path.join(scan_dir, entry)
+            if os.path.isdir(cand) and "mask" in entry.lower():
+                imgs = [f for f in os.listdir(cand) if os.path.splitext(f.lower())[1] in valid_exts]
+                if imgs:
+                    return str(Path(cand).resolve())
+    except Exception:
+        pass
+
+    # Priority 3: check parent directory if scan_dir is e.g. an "images" or "raw" folder
+    parent_dir = os.path.dirname(scan_dir)
+    if parent_dir and os.path.isdir(parent_dir) and parent_dir != scan_dir:
+        for name in priority_names:
+            cand = os.path.join(parent_dir, name)
+            if os.path.isdir(cand):
+                try:
+                    imgs = [f for f in os.listdir(cand) if os.path.splitext(f.lower())[1] in valid_exts]
+                    if imgs:
+                        return str(Path(cand).resolve())
+                except Exception:
+                    pass
+
+    return None
+
+
+def build_mask_lookup(mask_dir: str) -> Optional[Dict[str, Any]]:
+    """
+    Indexes all mask images in a directory for fast lookup by filename, stem, or index.
+    """
+    if not mask_dir or not os.path.isdir(mask_dir):
+        return None
+
+    valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+    try:
+        files = sorted([f for f in os.listdir(mask_dir) if os.path.splitext(f.lower())[1] in valid_exts])
+    except Exception:
+        return None
+
+    if not files:
+        return None
+
+    by_name = {}
+    by_name_lower = {}
+    by_stem = {}
+    by_stem_lower = {}
+    by_idx = {}
+
+    for idx, f in enumerate(files):
+        p = os.path.join(mask_dir, f)
+        by_name[f] = p
+        by_name_lower[f.lower()] = p
+        stem = Path(f).stem
+        by_stem[stem] = p
+        by_stem_lower[stem.lower()] = p
+        by_idx[idx] = p
+
+    return {
+        "dir": str(Path(mask_dir).resolve()),
+        "count": len(files),
+        "files": files,
+        "by_name": by_name,
+        "by_name_lower": by_name_lower,
+        "by_stem": by_stem,
+        "by_stem_lower": by_stem_lower,
+        "by_idx": by_idx,
+    }
+
+
+def find_mask_for_frame(mask_lookup: Optional[Dict[str, Any]], fname_or_stem: str, frame_idx: int = -1) -> Optional[str]:
+    """
+    Finds the corresponding mask file path for a given main frame filename or stem.
+    """
+    if not mask_lookup or mask_lookup.get("count", 0) == 0:
+        return None
+
+    base = os.path.basename(fname_or_stem)
+    stem = Path(fname_or_stem).stem
+    stem_l = stem.lower()
+
+    # 1. Exact filename or lower
+    if base in mask_lookup["by_name"]:
+        return mask_lookup["by_name"][base]
+    if base.lower() in mask_lookup["by_name_lower"]:
+        return mask_lookup["by_name_lower"][base.lower()]
+
+    # 2. Exact stem or lower
+    if stem in mask_lookup["by_stem"]:
+        return mask_lookup["by_stem"][stem]
+    if stem_l in mask_lookup["by_stem_lower"]:
+        return mask_lookup["by_stem_lower"][stem_l]
+
+    # 3. Stripping or adding _mask / .mask variations
+    cand_stems = [
+        f"{stem}_mask", f"{stem}.mask",
+        stem.replace("_mask", "").replace(".mask", ""),
+        stem.replace("_Mask", "").replace(".Mask", ""),
+    ]
+    for cs in cand_stems:
+        if cs in mask_lookup["by_stem"]:
+            return mask_lookup["by_stem"][cs]
+        if cs.lower() in mask_lookup["by_stem_lower"]:
+            return mask_lookup["by_stem_lower"][cs.lower()]
+
+    # 4. Fallback by index
+    if 0 <= frame_idx < mask_lookup["count"]:
+        return mask_lookup["by_idx"][frame_idx]
+
+    return None
+
+
+# ======================================================================
 # Batch Dataset Processing & Transforms Exporter
 # ======================================================================
 
@@ -901,6 +1049,9 @@ def split_panorama_dataset(
     subfolder_per_perspective: bool = True,
     dvo_trajectory_csv: Optional[str] = None,
     override_orientations_from_rig: bool = True,
+    mask_dir: Optional[str] = None,
+    auto_detect_mask: bool = True,
+    masks_only: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -908,6 +1059,7 @@ def split_panorama_dataset(
     and exports a transforms.json manifest ready for COLMAP, Nerfstudio, PFGS360, or LichtFeld,
     along with RealityScan / RealityCapture standard cameras.csv tables for every perspective,
     all_cameras.csv manifest, and .xmp XML metadata sidecars for RealityScan Rig Parser.
+    Also projects equirectangular mask layers into matching <image>.mask.<ext> files alongside views.
     """
     if not HAS_CV2:
         raise RuntimeError("OpenCV (cv2) is required for panoramic rig projection.")
@@ -976,8 +1128,29 @@ def split_panorama_dataset(
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality] if fmt == "jpg" else [cv2.IMWRITE_PNG_COMPRESSION, 3]
 
     total_views_saved = 0
+    total_masks_saved = 0
     transforms_frames = []
     total_source_items = 0
+
+    # Locate equirectangular masks if requested or auto-detected
+    effective_mask_dir = None
+    mask_lookup = None
+    mask_video_path = None
+
+    if mask_dir:
+        cand_m = str(Path(mask_dir).resolve())
+        if os.path.isdir(cand_m):
+            effective_mask_dir = cand_m
+        elif os.path.isfile(cand_m):
+            if os.path.splitext(cand_m.lower())[1] in video_exts:
+                mask_video_path = cand_m
+            else:
+                effective_mask_dir = os.path.dirname(cand_m)
+    elif auto_detect_mask:
+        effective_mask_dir = find_auto_mask_dir(in_abs)
+
+    if effective_mask_dir and os.path.isdir(effective_mask_dir):
+        mask_lookup = build_mask_lookup(effective_mask_dir)
 
     if is_video_input:
         # -------------------------------------------------------------
@@ -986,6 +1159,10 @@ def split_panorama_dataset(
         cap = cv2.VideoCapture(in_abs)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open video file: {in_abs}")
+
+        mask_cap = None
+        if mask_video_path and os.path.isfile(mask_video_path):
+            mask_cap = cv2.VideoCapture(mask_video_path)
 
         pano_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         pano_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -1029,7 +1206,7 @@ def split_panorama_dataset(
 
                 # Locate 360DVO pose prior for this frame
                 pano_pose = None
-                if traj_data and traj_data["count"] > 0:
+                if not masks_only and traj_data and traj_data["count"] > 0:
                     v_stem = f"frame_{saved_frame_idx:05d}"
                     v_idx = saved_frame_idx - 1
                     if v_stem in traj_data["by_stem"]:
@@ -1037,9 +1214,22 @@ def split_panorama_dataset(
                     elif v_idx in traj_data["by_idx"]:
                         pano_pose = traj_data["by_idx"][v_idx]
 
-                crops = splitter.split_panorama(frame)
-                for cam_name, crop_img in crops.items():
-                    rig_cam_tuple = next((c for c in rig if c[0] == cam_name), (cam_name, 0.0, 0.0, 0.0, fov_deg))
+                mask_crops = {}
+                if mask_cap and mask_cap.isOpened():
+                    ret_m, m_frame = mask_cap.read()
+                    if ret_m and m_frame is not None:
+                        mask_crops = splitter.split_panorama(m_frame)
+                elif mask_lookup:
+                    m_path = find_mask_for_frame(mask_lookup, base_name, saved_frame_idx - 1)
+                    if m_path and os.path.isfile(m_path):
+                        m_img = cv2.imread(m_path, cv2.IMREAD_UNCHANGED)
+                        if m_img is not None:
+                            mask_crops = splitter.split_panorama(m_img)
+
+                crops = splitter.split_panorama(frame) if not masks_only else {}
+
+                for rig_cam_tuple in rig:
+                    cam_name = rig_cam_tuple[0]
 
                     if subfolder_per_perspective:
                         cam_dir = os.path.join(perspectives_base, cam_name)
@@ -1048,13 +1238,193 @@ def split_panorama_dataset(
                         out_filepath = os.path.join(cam_dir, file_in_cam)
                         rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
                         local_name = file_in_cam
+                        mask_filename = f"{base_name}_{cam_name}.mask{ext}"
+                        mask_filepath = os.path.join(cam_dir, mask_filename)
                     else:
                         out_filename = f"{base_name}_{cam_name}{ext}"
                         out_filepath = os.path.join(images_out, out_filename)
                         rel_path_root = f"images/{out_filename}"
                         local_name = out_filename
+                        mask_filename = f"{base_name}_{cam_name}.mask{ext}"
+                        mask_filepath = os.path.join(images_out, mask_filename)
 
-                    cv2.imwrite(out_filepath, crop_img, encode_params)
+                    if not masks_only and cam_name in crops:
+                        cv2.imwrite(out_filepath, crops[cam_name], encode_params)
+                        total_views_saved += 1
+
+                        # RealityScan / RealityCapture standard pose & XMP
+                        comp_pose = None
+                        if export_realityscan_csv or export_xmp:
+                            comp_pose = compound_realitycapture_pose(
+                                pano_pose=pano_pose,
+                                rig_cam=rig_cam_tuple,
+                                crop_w=out_w,
+                                crop_h=out_h,
+                                k1=k1,
+                                k2=k2,
+                                override_orientations_from_rig=override_orientations_from_rig,
+                            )
+
+                        if export_realityscan_csv and comp_pose is not None:
+                            master_line = format_rc_csv_line(rel_path_root, comp_pose)
+                            rc_master_rows.append(master_line)
+
+                            if subfolder_per_perspective:
+                                all_persp_line = format_rc_csv_line(f"{cam_name}/{file_in_cam}", comp_pose)
+                                rc_all_persp_rows.append(all_persp_line)
+
+                            local_line = format_rc_csv_line(local_name, comp_pose)
+                            if cam_name in rc_camera_rows:
+                                rc_camera_rows[cam_name].append(local_line)
+
+                        if export_xmp and comp_pose is not None:
+                            xmp_xml = generate_realityscan_xmp(
+                                rig_id=rig_id,
+                                rig_instance_id=base_name,
+                                pose=comp_pose,
+                                pose_prior=xmp_pose_prior,
+                                pos_accuracy=xmp_pos_accuracy,
+                                rot_accuracy=xmp_rot_accuracy,
+                            )
+                            xmp_file1 = f"{out_filepath}.xmp"
+                            with open(xmp_file1, "w", encoding="utf-8") as xf:
+                                xf.write(xmp_xml)
+                            xmp_file2 = f"{os.path.splitext(out_filepath)[0]}.xmp"
+                            if xmp_file2 != xmp_file1:
+                                with open(xmp_file2, "w", encoding="utf-8") as xf:
+                                    xf.write(xmp_xml)
+
+                        if export_transforms_json:
+                            c2w = splitter.get_c2w_matrix(cam_name)
+                            transforms_frames.append({
+                                "file_path": rel_path_root,
+                                "transform_matrix": c2w.tolist(),
+                                "camera_angle_name": cam_name,
+                                "source_frame": saved_frame_idx,
+                                "timestamp_sec": round(timestamp_sec, 3),
+                                "yaw_deg": splitter.intrinsics[cam_name]["yaw_deg"],
+                                "pitch_deg": splitter.intrinsics[cam_name]["pitch_deg"],
+                            })
+
+                    # Mask Export (NO XMP, NO CSV)
+                    if cam_name in mask_crops:
+                        cv2.imwrite(mask_filepath, mask_crops[cam_name], encode_params)
+                        total_masks_saved += 1
+
+                if progress_callback:
+                    progress_callback(saved_frame_idx, expected_frames, f"{base_name} (t={timestamp_sec:.2f}s)")
+
+                if video_max_frames > 0 and saved_frame_idx >= video_max_frames:
+                    break
+
+            frame_idx += 1
+
+        cap.release()
+        if mask_cap:
+            mask_cap.release()
+        total_source_items = saved_frame_idx
+
+    else:
+        # -------------------------------------------------------------
+        # Image Directory Projection Loop
+        # -------------------------------------------------------------
+        valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+        if os.path.isdir(in_abs):
+            files = sorted([
+                f for f in os.listdir(in_abs)
+                if os.path.splitext(f.lower())[1] in valid_exts and os.path.isfile(os.path.join(in_abs, f))
+            ])
+            scan_dir = in_abs
+        else:
+            files = [os.path.basename(in_abs)]
+            scan_dir = os.path.dirname(in_abs)
+
+        if not files:
+            if mask_lookup and mask_lookup.get("files"):
+                files = mask_lookup["files"]
+                scan_dir = mask_lookup["dir"]
+                masks_only = True
+            else:
+                raise FileNotFoundError(f"No valid panorama images found in {input_dir}")
+
+        total_source_items = len(files)
+
+        # Read first sample to initialize splitter
+        sample_path = os.path.join(scan_dir, files[0])
+        sample_img = cv2.imread(sample_path)
+        if sample_img is None:
+            if mask_lookup and mask_lookup.get("files"):
+                sample_path = os.path.join(mask_lookup["dir"], mask_lookup["files"][0])
+                sample_img = cv2.imread(sample_path)
+            if sample_img is None:
+                raise RuntimeError(f"Failed to read sample panorama: {sample_path}")
+        pano_h, pano_w = sample_img.shape[:2]
+
+        splitter = PanoramicRigSplitter(
+            pano_width=pano_w,
+            pano_height=pano_h,
+            rig_cameras=rig,
+            crop_width=out_w,
+            crop_height=out_h,
+            k1=k1,
+            k2=k2
+        )
+
+        for idx, fname in enumerate(files):
+            img_path = os.path.join(scan_dir, fname)
+            base_name = Path(fname).stem
+
+            # Locate and split equirectangular mask if available
+            mask_crops = {}
+            if mask_lookup:
+                m_path = find_mask_for_frame(mask_lookup, fname, idx)
+                if m_path and os.path.isfile(m_path):
+                    m_img = cv2.imread(m_path, cv2.IMREAD_UNCHANGED)
+                    if m_img is not None:
+                        mask_crops = splitter.split_panorama(m_img)
+
+            if not masks_only:
+                img = cv2.imread(img_path)
+                if img is None:
+                    continue
+                crops = splitter.split_panorama(img)
+            else:
+                crops = {}
+
+            # Locate 360DVO pose prior for this image
+            pano_pose = None
+            if not masks_only and traj_data and traj_data["count"] > 0:
+                if fname in traj_data["by_name"]:
+                    pano_pose = traj_data["by_name"][fname]
+                elif os.path.basename(fname) in traj_data["by_name"]:
+                    pano_pose = traj_data["by_name"][os.path.basename(fname)]
+                elif base_name in traj_data["by_stem"]:
+                    pano_pose = traj_data["by_stem"][base_name]
+                elif idx in traj_data["by_idx"]:
+                    pano_pose = traj_data["by_idx"][idx]
+
+            for rig_cam_tuple in rig:
+                cam_name = rig_cam_tuple[0]
+
+                if subfolder_per_perspective:
+                    cam_dir = os.path.join(perspectives_base, cam_name)
+                    os.makedirs(cam_dir, exist_ok=True)
+                    file_in_cam = f"{base_name}_{cam_name}{ext}"
+                    out_filepath = os.path.join(cam_dir, file_in_cam)
+                    rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
+                    local_name = file_in_cam
+                    mask_filename = f"{base_name}_{cam_name}.mask{ext}"
+                    mask_filepath = os.path.join(cam_dir, mask_filename)
+                else:
+                    out_filename = f"{base_name}_{cam_name}{ext}"
+                    out_filepath = os.path.join(images_out, out_filename)
+                    rel_path_root = f"images/{out_filename}"
+                    local_name = out_filename
+                    mask_filename = f"{base_name}_{cam_name}.mask{ext}"
+                    mask_filepath = os.path.join(images_out, mask_filename)
+
+                if not masks_only and cam_name in crops:
+                    cv2.imwrite(out_filepath, crops[cam_name], encode_params)
                     total_views_saved += 1
 
                     # RealityScan / RealityCapture standard pose & XMP
@@ -1105,153 +1475,16 @@ def split_panorama_dataset(
                             "file_path": rel_path_root,
                             "transform_matrix": c2w.tolist(),
                             "camera_angle_name": cam_name,
-                            "source_frame": saved_frame_idx,
-                            "timestamp_sec": round(timestamp_sec, 3),
+                            "source_file": fname,
                             "yaw_deg": splitter.intrinsics[cam_name]["yaw_deg"],
                             "pitch_deg": splitter.intrinsics[cam_name]["pitch_deg"],
                         })
 
-                if progress_callback:
-                    progress_callback(saved_frame_idx, expected_frames, f"{base_name} (t={timestamp_sec:.2f}s)")
-
-                if video_max_frames > 0 and saved_frame_idx >= video_max_frames:
-                    break
-
-            frame_idx += 1
-
-        cap.release()
-        total_source_items = saved_frame_idx
-
-    else:
-        # -------------------------------------------------------------
-        # Image Directory Projection Loop
-        # -------------------------------------------------------------
-        valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
-        if os.path.isdir(in_abs):
-            files = sorted([
-                f for f in os.listdir(in_abs)
-                if os.path.splitext(f.lower())[1] in valid_exts and os.path.isfile(os.path.join(in_abs, f))
-            ])
-            scan_dir = in_abs
-        else:
-            files = [os.path.basename(in_abs)]
-            scan_dir = os.path.dirname(in_abs)
-
-        if not files:
-            raise FileNotFoundError(f"No valid panorama images found in {input_dir}")
-
-        total_source_items = len(files)
-
-        # Read first sample to initialize splitter
-        sample_path = os.path.join(scan_dir, files[0])
-        sample_img = cv2.imread(sample_path)
-        if sample_img is None:
-            raise RuntimeError(f"Failed to read sample panorama: {sample_path}")
-        pano_h, pano_w = sample_img.shape[:2]
-
-        splitter = PanoramicRigSplitter(
-            pano_width=pano_w,
-            pano_height=pano_h,
-            rig_cameras=rig,
-            crop_width=out_w,
-            crop_height=out_h,
-            k1=k1,
-            k2=k2
-        )
-
-        for idx, fname in enumerate(files):
-            img_path = os.path.join(scan_dir, fname)
-            img = cv2.imread(img_path)
-            if img is None:
-                continue
-
-            base_name = Path(fname).stem
-
-            # Locate 360DVO pose prior for this image
-            pano_pose = None
-            if traj_data and traj_data["count"] > 0:
-                if fname in traj_data["by_name"]:
-                    pano_pose = traj_data["by_name"][fname]
-                elif os.path.basename(fname) in traj_data["by_name"]:
-                    pano_pose = traj_data["by_name"][os.path.basename(fname)]
-                elif base_name in traj_data["by_stem"]:
-                    pano_pose = traj_data["by_stem"][base_name]
-                elif idx in traj_data["by_idx"]:
-                    pano_pose = traj_data["by_idx"][idx]
-
-            crops = splitter.split_panorama(img)
-
-            for cam_name, crop_img in crops.items():
-                rig_cam_tuple = next((c for c in rig if c[0] == cam_name), (cam_name, 0.0, 0.0, 0.0, fov_deg))
-
-                if subfolder_per_perspective:
-                    cam_dir = os.path.join(perspectives_base, cam_name)
-                    os.makedirs(cam_dir, exist_ok=True)
-                    file_in_cam = f"{base_name}_{cam_name}{ext}"
-                    out_filepath = os.path.join(cam_dir, file_in_cam)
-                    rel_path_root = f"perspectives/{cam_name}/{file_in_cam}"
-                    local_name = file_in_cam
-                else:
-                    out_filename = f"{base_name}_{cam_name}{ext}"
-                    out_filepath = os.path.join(images_out, out_filename)
-                    rel_path_root = f"images/{out_filename}"
-                    local_name = out_filename
-
-                cv2.imwrite(out_filepath, crop_img, encode_params)
-                total_views_saved += 1
-
-                # RealityScan / RealityCapture standard pose & XMP
-                comp_pose = None
-                if export_realityscan_csv or export_xmp:
-                    comp_pose = compound_realitycapture_pose(
-                        pano_pose=pano_pose,
-                        rig_cam=rig_cam_tuple,
-                        crop_w=out_w,
-                        crop_h=out_h,
-                        k1=k1,
-                        k2=k2,
-                        override_orientations_from_rig=override_orientations_from_rig,
-                    )
-
-                if export_realityscan_csv and comp_pose is not None:
-                    master_line = format_rc_csv_line(rel_path_root, comp_pose)
-                    rc_master_rows.append(master_line)
-
-                    if subfolder_per_perspective:
-                        all_persp_line = format_rc_csv_line(f"{cam_name}/{file_in_cam}", comp_pose)
-                        rc_all_persp_rows.append(all_persp_line)
-
-                    local_line = format_rc_csv_line(local_name, comp_pose)
-                    if cam_name in rc_camera_rows:
-                        rc_camera_rows[cam_name].append(local_line)
-
-                if export_xmp and comp_pose is not None:
-                    xmp_xml = generate_realityscan_xmp(
-                        rig_id=rig_id,
-                        rig_instance_id=base_name,
-                        pose=comp_pose,
-                        pose_prior=xmp_pose_prior,
-                        pos_accuracy=xmp_pos_accuracy,
-                        rot_accuracy=xmp_rot_accuracy,
-                    )
-                    xmp_file1 = f"{out_filepath}.xmp"
-                    with open(xmp_file1, "w", encoding="utf-8") as xf:
-                        xf.write(xmp_xml)
-                    xmp_file2 = f"{os.path.splitext(out_filepath)[0]}.xmp"
-                    if xmp_file2 != xmp_file1:
-                        with open(xmp_file2, "w", encoding="utf-8") as xf:
-                            xf.write(xmp_xml)
-
-                if export_transforms_json:
-                    c2w = splitter.get_c2w_matrix(cam_name)
-                    transforms_frames.append({
-                        "file_path": rel_path_root,
-                        "transform_matrix": c2w.tolist(),
-                        "camera_angle_name": cam_name,
-                        "source_file": fname,
-                        "yaw_deg": splitter.intrinsics[cam_name]["yaw_deg"],
-                        "pitch_deg": splitter.intrinsics[cam_name]["pitch_deg"],
-                    })
+                # Mask Output: RealityCapture mask layer (<base>_<cam>.mask.<ext>)
+                # CRITICAL: NO .xmp file, NO entry in cameras.csv
+                if cam_name in mask_crops:
+                    cv2.imwrite(mask_filepath, mask_crops[cam_name], encode_params)
+                    total_masks_saved += 1
 
             if progress_callback:
                 progress_callback(idx + 1, len(files), fname)
@@ -1349,6 +1582,8 @@ def split_panorama_dataset(
         "total_views_exported": total_views_saved,
         "subfolder_per_perspective": subfolder_per_perspective,
         "dvo_trajectory_used": dvo_trajectory_csv if (traj_data and traj_data["count"] > 0) else None,
+        "mask_dir_used": effective_mask_dir,
+        "total_masks_exported": total_masks_saved,
         "cameras_csv_path": cameras_csv_path,
         "elapsed_seconds": round(elapsed, 2),
         "transforms_path": transforms_path if export_transforms_json else None,
@@ -1372,6 +1607,8 @@ def split_panorama_dataset(
         "rig_mode": mode,
         "total_panoramas": total_source_items,
         "total_views": total_views_saved,
+        "total_masks": total_masks_saved,
+        "mask_dir": effective_mask_dir,
         "output_dir": out_abs,
         "images_dir": images_out,
         "subfolder_per_perspective": subfolder_per_perspective,
@@ -1380,6 +1617,79 @@ def split_panorama_dataset(
         "transforms_path": transforms_path if export_transforms_json else None,
         "elapsed_seconds": round(elapsed, 2),
     }
+
+
+def split_masks_for_dataset(
+    input_dir: str,
+    output_dir: str,
+    mask_dir: Optional[str] = None,
+    mode: Optional[str] = None,
+    fov_deg: Optional[float] = None,
+    crop_width: Optional[int] = None,
+    crop_height: Optional[int] = None,
+    k1: float = 0.0,
+    k2: float = 0.0,
+    subfolder_per_perspective: bool = True,
+    image_format: str = "jpg",
+    quality: int = 95,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, Any]:
+    """
+    Dedicated equirectangular mask projection helper.
+    Automatically matches existing rig settings from rig_manifest.json if present in output_dir,
+    and exports <base>_<cam>.mask.<ext> perspective masks without generating XMP sidecars or altering cameras.csv.
+    """
+    out_abs = str(Path(output_dir).resolve())
+    manifest_path = os.path.join(out_abs, "rig_manifest.json")
+    custom_rig = None
+
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            if mode is None:
+                mode = meta.get("mode", "cubemap")
+            if fov_deg is None and "fov_h_deg" in meta:
+                fov_deg = float(meta["fov_h_deg"])
+            if crop_width is None and "crop_width" in meta:
+                crop_width = int(meta["crop_width"])
+            if crop_height is None and "crop_height" in meta:
+                crop_height = int(meta["crop_height"])
+            if abs(k1) < 1e-9 and "k1" in meta:
+                k1 = float(meta["k1"])
+            if abs(k2) < 1e-9 and "k2" in meta:
+                k2 = float(meta["k2"])
+            if "subfolder_per_perspective" in meta:
+                subfolder_per_perspective = bool(meta.get("subfolder_per_perspective", True))
+            if "cameras" in meta and isinstance(meta["cameras"], list) and meta["cameras"]:
+                custom_rig = [
+                    (c["name"], float(c["yaw_deg"]), float(c["pitch_deg"]), float(c["roll_deg"]), float(c["fov_deg"]))
+                    for c in meta["cameras"]
+                ]
+        except Exception:
+            pass
+
+    return split_panorama_dataset(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        mode=mode or "cubemap",
+        fov_deg=fov_deg if fov_deg is not None else 90.0,
+        crop_width=crop_width or 1024,
+        crop_height=crop_height or 1024,
+        k1=k1,
+        k2=k2,
+        custom_rig=custom_rig,
+        subfolder_per_perspective=subfolder_per_perspective,
+        image_format=image_format,
+        quality=quality,
+        mask_dir=mask_dir,
+        auto_detect_mask=True,
+        masks_only=True,
+        export_transforms_json=False,
+        export_realityscan_csv=False,
+        export_xmp=False,
+        progress_callback=progress_callback,
+    )
 
 
 # ======================================================================
@@ -1412,6 +1722,9 @@ def main():
     parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
     parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
     parser.add_argument("--compound-rotations", action="store_true", help="Compound full 3D rotation instead of overriding orientations with clean modified rig angles")
+    parser.add_argument("--mask-dir", type=str, default=None, help="Directory of equirectangular mask images or mask video")
+    parser.add_argument("--no-auto-mask", action="store_true", help="Disable auto-detection of mask folder in dataset")
+    parser.add_argument("--masks-only", action="store_true", help="Only project and export .mask images for an existing dataset")
 
     args = parser.parse_args()
 
@@ -1439,6 +1752,10 @@ def main():
         print(f"[*] 360DVO Trajectory: {args.dvo_trajectory}")
     if not args.no_xmp:
         print(f"[*] RealityScan Rig XMP: RigId='{args.rig_id}', PosePrior='{args.xmp_pose_prior}'")
+    if args.mask_dir:
+        print(f"[*] Mask Directory:    {args.mask_dir}")
+    if args.masks_only:
+        print(f"[*] Mode:              MASKS ONLY (generating .mask perspective layers)")
 
     res = split_panorama_dataset(
         input_dir=input_path,
@@ -1454,14 +1771,17 @@ def main():
         video_frame_stride=args.video_stride,
         image_format=args.format,
         quality=args.quality,
-        export_transforms_json=not args.no_transforms,
-        export_realityscan_csv=not args.no_rc_csv,
-        export_xmp=not args.no_xmp,
+        export_transforms_json=not args.no_transforms and not args.masks_only,
+        export_realityscan_csv=not args.no_rc_csv and not args.masks_only,
+        export_xmp=not args.no_xmp and not args.masks_only,
         rig_id=args.rig_id,
         xmp_pose_prior=args.xmp_pose_prior,
         subfolder_per_perspective=not args.flat_images,
         dvo_trajectory_csv=args.dvo_trajectory,
         override_orientations_from_rig=not args.compound_rotations,
+        mask_dir=args.mask_dir,
+        auto_detect_mask=not args.no_auto_mask,
+        masks_only=args.masks_only,
         progress_callback=lambda cur, tot, name: print(f"    Processing {cur}/{tot}: {name}", end="\r"),
     )
     print()
@@ -1469,6 +1789,8 @@ def main():
     print(f"[*] Rig projection complete!")
     print(f"    Source Panos/Frames: {res['total_panoramas']}")
     print(f"    Pinhole Views:       {res['total_views']}")
+    if res.get("total_masks", 0) > 0:
+        print(f"    Mask Layers (.mask): {res['total_masks']} exported to perspective folders")
     print(f"    Elapsed Time:        {res['elapsed_seconds']}s")
     print(f"    Images Folder:       {res['images_dir']}")
     if res.get("transforms_path"):

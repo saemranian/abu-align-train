@@ -70,7 +70,7 @@ def enhance_rig_designer(app, ctx):
     notebook.select(1 if ctx["in_var"].get() else 0)
     notebook.enable_traversal()
     # Reserve browse actions before allowing long source paths to fill the row.
-    for row_name in ("r1", "r2", "r3"):
+    for row_name in ("r1", "r2", "r3", "r4"):
         if row_name in ctx:
             row = ctx[row_name]
             row.columnconfigure(1, weight=1)

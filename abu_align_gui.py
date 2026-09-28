@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.0.5
+Abu Align & Train Version 0.1.0.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.0.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.0.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2108,6 +2108,9 @@ class AbuAlignApp:
         # 360DVO Trajectory Prior
         dvo_csv_var = tk.StringVar(value="")
 
+        # Equirectangular Mask Directory
+        mask_dir_var = tk.StringVar(value="")
+
         # Visualizer canvas mode
         canvas_view_mode_var = tk.StringVar(value="3d")  # "3d", "polar", "equirect"
 
@@ -2279,6 +2282,77 @@ class AbuAlignApp:
             else:
                 dvo_badge_lbl.config(
                     text="(Optional) Ingest 360DVO trajectory prior for metric georeferenced camera positions.",
+                    fg=self.text_secondary
+                )
+
+        # Row 4: Equirectangular Mask Directory
+        r4 = tk.Frame(paths_card, bg=self.panel_bg)
+        r4.pack(fill=tk.X, pady=2)
+        tk.Label(r4, text="Mask Folder:", font=("Segoe UI", 8, "bold"), fg="#ec4899", bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
+        mask_entry = tk.Entry(r4, textvariable=mask_dir_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
+        mask_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
+
+        def browse_mask_folder():
+            init_dir = in_var.get() if os.path.isdir(in_var.get()) else os.path.dirname(in_var.get())
+            f = filedialog.askdirectory(initialdir=mask_dir_var.get() or init_dir, title="Select Equirectangular Mask Images Folder")
+            if f:
+                mask_dir_var.set(f)
+                update_mask_badge()
+
+        def auto_detect_mask_folder():
+            src = in_var.get().strip()
+            if not src:
+                return
+            m_dir = ps.find_auto_mask_dir(src)
+            if m_dir:
+                mask_dir_var.set(m_dir)
+                update_mask_badge()
+            else:
+                mask_badge_lbl.config(
+                    text="(Optional) No mask folder auto-detected in dataset. Browse to specify manually.",
+                    fg=self.text_secondary
+                )
+
+        tk.Button(r4, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#db2777", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(r4, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_mask_folder).pack(side=tk.LEFT)
+
+        # Mask Telemetry Badge
+        mask_badge_lbl = tk.Label(
+            paths_card,
+            text="(Optional) Select equirectangular mask images folder to project matching <name>.mask.jpg layers for RealityScan.",
+            font=("Segoe UI", 8),
+            fg=self.text_secondary,
+            bg=self.bg_dark,
+            padx=6,
+            pady=3,
+            anchor="w",
+            relief=tk.FLAT
+        )
+        mask_badge_lbl.pack(fill=tk.X, pady=(2, 2))
+
+        def update_mask_badge():
+            path_val = mask_dir_var.get().strip()
+            if path_val and os.path.isdir(path_val):
+                lookup = ps.build_mask_lookup(path_val)
+                cnt = lookup.get("count", 0) if lookup else 0
+                if cnt > 0:
+                    mask_badge_lbl.config(
+                        text=f"🎭 Masks: Detected '{os.path.basename(path_val)}' ({cnt:,} masks) → Will export <name>.mask.jpg alongside views (no XMP)",
+                        fg="#10b981"
+                    )
+                else:
+                    mask_badge_lbl.config(
+                        text=f"⚠ Masks: Folder '{os.path.basename(path_val)}' contains 0 valid image files.",
+                        fg="#f59e0b"
+                    )
+            elif path_val and os.path.isfile(path_val):
+                mask_badge_lbl.config(
+                    text=f"🎭 Masks: Video mask file selected ({os.path.basename(path_val)})",
+                    fg="#10b981"
+                )
+            else:
+                mask_badge_lbl.config(
+                    text="(Optional) Select equirectangular mask images folder to project matching <name>.mask.jpg layers for RealityScan.",
                     fg=self.text_secondary
                 )
 
@@ -2888,6 +2962,20 @@ class AbuAlignApp:
         )
         split_btn.pack(side=tk.LEFT, padx=(0, 8))
 
+        export_masks_btn = tk.Button(
+            btn_row,
+            text="🎭 Export Masks Only",
+            font=("Segoe UI", 9, "bold"),
+            bg="#db2777",
+            fg="#ffffff",
+            activebackground="#be185d",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+        )
+        export_masks_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ToolTip(export_masks_btn, "Splits equirectangular masks into <base>_<cam>.mask.jpg perspective sidecars without re-exporting RGB views or modifying cameras.csv.")
+
         use_ds_btn = tk.Button(
             btn_row,
             text="✓ Set as Active Dataset in Abu Align",
@@ -3389,6 +3477,7 @@ class AbuAlignApp:
                 media_badge_lbl.config(text=f"📄 Single Panorama File ({os.path.basename(p)})", fg="#10b981")
 
             auto_detect_dvo_trajectory()
+            auto_detect_mask_folder()
             sync_math_and_ui()
 
         def on_auto_res():
@@ -3430,6 +3519,7 @@ class AbuAlignApp:
         video_max_frames_var.trace_add("write", sync_math_and_ui)
         canvas_view_mode_var.trace_add("write", sync_math_and_ui)
         dvo_csv_var.trace_add("write", lambda *_: update_dvo_badge())
+        mask_dir_var.trace_add("write", lambda *_: update_mask_badge())
 
         # Actions
         def set_as_dataset():
@@ -3460,6 +3550,7 @@ class AbuAlignApp:
 
             orbit_state["exporting"] = True
             split_btn.config(state=tk.DISABLED, text="Exporting…")
+            export_masks_btn.config(state=tk.DISABLED)
             close_btn.config(state=tk.DISABLED)
             dlg_pbar["value"] = 0
             status_lbl.config(text="Status: Initializing virtual multi-camera rig projection...", fg="#a855f7")
@@ -3511,26 +3602,32 @@ class AbuAlignApp:
                         export_xmp=export_xmp_var.get(),
                         subfolder_per_perspective=subfolder_per_cam_var.get(),
                         dvo_trajectory_csv=dvo_csv_var.get().strip() or None,
+                        mask_dir=mask_dir_var.get().strip() or None,
+                        auto_detect_mask=True,
                         progress_callback=on_progress,
                     )
                     tot = res.get("total_views", 0)
                     panos = res.get("total_panoramas", 0)
                     sec = res.get("elapsed_seconds", 0.0)
+                    masks_cnt = res.get("total_masks", 0)
 
                     def on_done():
                         orbit_state["exporting"] = False
                         dlg_pbar["value"] = 100
+                        mask_msg = f" + {masks_cnt:,} mask layers (.mask)" if masks_cnt > 0 else ""
                         status_lbl.config(
-                            text=f"Status: Complete! Generated {tot:,} pinhole views from {panos} panoramas/frames in {sec}s.",
+                            text=f"Status: Complete! Generated {tot:,} pinhole views{mask_msg} from {panos} panoramas/frames in {sec}s.",
                             fg=self.accent_green
                         )
                         split_btn.config(state=tk.NORMAL, text="Export views")
+                        export_masks_btn.config(state=tk.NORMAL)
                         close_btn.config(state=tk.NORMAL)
                         use_ds_btn.config(state=tk.NORMAL)
                         open_folder_btn.config(state=tk.NORMAL)
                         rc_csv_info = res.get("cameras_csv_path")
                         csv_note = " (cameras.csv exported)" if rc_csv_info else ""
-                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} pinhole views ({ow}x{oh}) in {out_d}{csv_note} ({sec}s).\n")
+                        mask_note = f" ({masks_cnt:,} masks exported)" if masks_cnt > 0 else ""
+                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} pinhole views ({ow}x{oh}) in {out_d}{csv_note}{mask_note} ({sec}s).\n")
 
                     dialog.after(0, on_done)
                 except Exception as ex:
@@ -3538,6 +3635,7 @@ class AbuAlignApp:
                         orbit_state["exporting"] = False
                         status_lbl.config(text=f"Status: Failed - {error}", fg=self.accent_red)
                         split_btn.config(state=tk.NORMAL, text="Export views")
+                        export_masks_btn.config(state=tk.NORMAL)
                         close_btn.config(state=tk.NORMAL)
                         messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{error}")
                     dialog.after(0, on_err)
@@ -3546,6 +3644,91 @@ class AbuAlignApp:
             t.start()
 
         split_btn.config(command=run_split_worker)
+
+        def run_masks_only_worker():
+            in_p = in_var.get().strip()
+            out_d = out_var.get().strip()
+            m_dir = mask_dir_var.get().strip() or None
+            if not in_p or not os.path.exists(in_p):
+                messagebox.showerror("Error", "Please select a valid input directory or dataset.", parent=dialog)
+                return
+            if not out_d:
+                out_d = os.path.join(in_p, "pinhole_rig") if os.path.isdir(in_p) else f"{os.path.splitext(in_p)[0]}_pinhole_rig"
+                out_var.set(out_d)
+
+            orbit_state["exporting"] = True
+            split_btn.config(state=tk.DISABLED)
+            export_masks_btn.config(state=tk.DISABLED, text="Exporting masks…")
+            close_btn.config(state=tk.DISABLED)
+            dlg_pbar["value"] = 0
+            status_lbl.config(text="Status: Initializing equirectangular mask projection...", fg="#db2777")
+
+            def on_progress(cur, tot, name):
+                pct = (cur / max(tot, 1)) * 100.0
+                status_txt = f"Status: Projecting mask {cur}/{tot} ({pct:.1f}%): {name}"
+                dialog.after(0, lambda: [
+                    dlg_pbar.configure(value=pct),
+                    status_lbl.configure(text=status_txt, fg="#db2777")
+                ])
+
+            def worker():
+                try:
+                    m = mode_var.get()
+                    nc = num_cams_var.get()
+                    fov_v = fov_var.get()
+                    ow = out_w_var.get()
+                    oh = out_h_var.get()
+                    k1 = distortion_k1_var.get()
+                    fmt = fmt_var.get()
+                    q = qual_var.get()
+
+                    res = ps.split_masks_for_dataset(
+                        input_dir=in_p,
+                        output_dir=out_d,
+                        mask_dir=m_dir,
+                        mode=m,
+                        fov_deg=fov_v,
+                        crop_width=ow,
+                        crop_height=oh,
+                        k1=k1,
+                        subfolder_per_perspective=subfolder_per_cam_var.get(),
+                        image_format=fmt,
+                        quality=q,
+                        progress_callback=on_progress,
+                    )
+                    tot = res.get("total_masks", 0)
+                    panos = res.get("total_panoramas", 0)
+                    sec = res.get("elapsed_seconds", 0.0)
+
+                    def on_done():
+                        orbit_state["exporting"] = False
+                        dlg_pbar["value"] = 100
+                        status_lbl.config(
+                            text=f"Status: Complete! Generated {tot:,} mask layers (.mask) from {panos} masks in {sec}s.",
+                            fg=self.accent_green
+                        )
+                        split_btn.config(state=tk.NORMAL, text="Export views")
+                        export_masks_btn.config(state=tk.NORMAL, text="🎭 Export Masks Only")
+                        close_btn.config(state=tk.NORMAL)
+                        use_ds_btn.config(state=tk.NORMAL)
+                        open_folder_btn.config(state=tk.NORMAL)
+                        self._log(f"\n[360 RIG PROJECTOR] Successfully generated {tot:,} mask layers (.mask) in {out_d} ({sec}s).\n")
+
+                    dialog.after(0, on_done)
+                except Exception as ex:
+                    def on_err(error=str(ex)):
+                        orbit_state["exporting"] = False
+                        status_lbl.config(text=f"Status: Failed - {error}", fg=self.accent_red)
+                        split_btn.config(state=tk.NORMAL, text="Export views")
+                        export_masks_btn.config(state=tk.NORMAL, text="🎭 Export Masks Only")
+                        close_btn.config(state=tk.NORMAL)
+                        messagebox.showerror("Mask Error", f"Failed to project masks:\n{error}", parent=dialog)
+                    dialog.after(0, on_err)
+
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+
+        export_masks_btn.config(command=run_masks_only_worker)
 
         # Initial inspection and math sync
         inspect_input_source()
@@ -4240,7 +4423,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.0.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.0.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4799,7 +4982,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.0.5 - {title}")
+        doc_win.title(f"Abu Align v0.1.0.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5426,7 +5609,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.0.5\n"
+            "Abu Align & Train - Version 0.1.0.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
