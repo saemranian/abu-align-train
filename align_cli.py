@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.0.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.0.3 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -2422,35 +2422,20 @@ def main():
                 except Exception:
                     pass
 
-    # Link/stage images folder
+    # Link/stage images folder in 3dgs_dataset/ (File-based hard-link/copy, never directory junctions to prevent recursive loops)
     images_dst = os.path.join(dataset_3dgs_dir, "images")
     if not os.path.exists(images_dst):
-        # Prefer linking clean engine images if available (e.g. opensfm_workspace/images)
-        osfm_imgs = os.path.join(output_dir, "opensfm_workspace", "images")
-        if os.path.isdir(osfm_imgs):
-            try:
-                subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(osfm_imgs)], check=True, capture_output=True)
-            except Exception:
-                pass
-
-        if not os.path.exists(images_dst):
-            has_results_subfolder = os.path.isdir(os.path.join(scan_dir, "results"))
-            if not has_results_subfolder:
+        os.makedirs(images_dst, exist_ok=True)
+        for src_p in image_paths:
+            dst_p = os.path.join(images_dst, os.path.basename(src_p))
+            if not os.path.exists(dst_p):
                 try:
-                    # Windows directory junction
-                    subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(scan_dir)], check=True, capture_output=True)
+                    os.link(src_p, dst_p)
                 except Exception:
-                    pass
-
-            if not os.path.exists(images_dst):
-                os.makedirs(images_dst, exist_ok=True)
-                for src_p in image_paths:
-                    dst_p = os.path.join(images_dst, os.path.basename(src_p))
-                    if not os.path.exists(dst_p):
-                        try:
-                            os.link(src_p, dst_p)
-                        except Exception:
-                            shutil.copy2(src_p, dst_p)
+                    try:
+                        shutil.copy2(src_p, dst_p)
+                    except Exception:
+                        pass
 
     if reconstruction is not None and reconstruction.num_reg_images() > 0:
         try:

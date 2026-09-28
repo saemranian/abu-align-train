@@ -744,17 +744,21 @@ class OpenSfMEngine:
                     except Exception:
                         pass
 
-        # Copy or link images
+        # Copy or link images into 3dgs_dataset/images (File-based hard-link/copy, never directory junctions or copytree to prevent recursive loops)
         img_src = os.path.join(self.output_dir, "images")
         img_dst = os.path.join(target_3dgs_dir, "images")
         if os.path.isdir(img_src) and not os.path.exists(img_dst):
-            try:
-                subprocess.run(["cmd", "/c", "mklink", "/J", img_dst, os.path.abspath(img_src)], check=True, capture_output=True)
-            except Exception:
-                try:
-                    os.symlink(img_src, img_dst)
-                except Exception:
-                    shutil.copytree(img_src, img_dst)
+            os.makedirs(img_dst, exist_ok=True)
+            for f in os.listdir(img_src):
+                sp = os.path.join(img_src, f)
+                if os.path.isfile(sp) and any(f.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+                    try:
+                        os.link(sp, os.path.join(img_dst, f))
+                    except Exception:
+                        try:
+                            shutil.copy2(sp, os.path.join(img_dst, f))
+                        except Exception:
+                            pass
 
         # Copy reconstruction point cloud ply if available
         ply_candidates = [

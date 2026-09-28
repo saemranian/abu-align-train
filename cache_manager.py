@@ -439,10 +439,44 @@ def clear_cache(cache_dir: str) -> Tuple[int, int]:
         for f in files:
             total_bytes += os.path.getsize(os.path.join(root, f))
 
-    try:
-        shutil.rmtree(cache_dir)
-        count = 1
-    except Exception as e:
-        print(f"[Abu Cache Error] Failed to delete cache dir {cache_dir}: {e}")
-
+    count = 1 if safe_remove_tree(cache_dir) else 0
     return count, total_bytes
+
+
+def safe_remove_tree(target_dir: str) -> bool:
+    """
+    Safely and permanently deletes a directory tree, even if it contains
+    deeply nested recursive loops, NTFS reparse points, or paths exceeding MAX_PATH (260 chars).
+    Uses Windows native robocopy mirror purge technique to avoid Explorer/subsystem lockups.
+    """
+    if not os.path.exists(target_dir):
+        return True
+
+    # Attempt 1: Standard shutil.rmtree
+    try:
+        shutil.rmtree(target_dir)
+        if not os.path.exists(target_dir):
+            return True
+    except Exception:
+        pass
+
+    # Attempt 2: Windows NT Robocopy Mirror Purge
+    if sys.platform == "win32":
+        import tempfile
+        empty_tmp = tempfile.mkdtemp(prefix="abu_empty_")
+        try:
+            cmd = ["robocopy", empty_tmp, target_dir, "/MIR", "/R:0", "/W:0", "/NFL", "/NDL", "/NP", "/NJH", "/NJS"]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", target_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.rmdir(empty_tmp)
+            except Exception:
+                pass
+
+        if not os.path.exists(target_dir):
+            return True
+
+    return not os.path.exists(target_dir)

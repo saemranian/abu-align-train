@@ -436,20 +436,20 @@ def run_realityscan_alignment(
         except Exception:
             pass
 
-    # Link/stage images folder in 3dgs_dataset/
+    # Link/stage images folder in 3dgs_dataset/ (File-based hard-link/copy, never directory junctions to prevent recursive loops)
     images_dst = os.path.join(dataset_3dgs_dir, "images")
     if not os.path.exists(images_dst):
-        try:
-            subprocess.run(["cmd", "/c", "mklink", "/J", images_dst, os.path.abspath(images_dir)], check=True, capture_output=True)
-        except Exception:
-            os.makedirs(images_dst, exist_ok=True)
-            for f in os.listdir(images_dir):
-                sp = os.path.join(images_dir, f)
-                if os.path.isfile(sp) and any(f.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+        os.makedirs(images_dst, exist_ok=True)
+        for f in os.listdir(images_dir):
+            sp = os.path.join(images_dir, f)
+            if os.path.isfile(sp) and any(f.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+                try:
+                    os.link(sp, os.path.join(images_dst, f))
+                except Exception:
                     try:
-                        os.link(sp, os.path.join(images_dst, f))
-                    except Exception:
                         shutil.copy2(sp, os.path.join(images_dst, f))
+                    except Exception:
+                        pass
 
     # Convert cameras.csv or sparse/0/ to transforms.json if not present
     tf_out = os.path.join(dataset_3dgs_dir, "transforms.json")

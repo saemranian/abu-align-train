@@ -930,16 +930,19 @@ def run_360dvo_reconstruction(
                 shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points.ply"))
                 shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points3D.ply"))
 
-            # Link or copy images
+            # Link or copy images into 3dgs_dataset/images (File-based hard-link/copy, never directory symlink/copytree to prevent recursive loops)
             d3_imgs = os.path.join(dataset_3dgs, "images")
-            if not os.path.exists(d3_imgs):
-                try:
-                    os.symlink(first_img_dir, d3_imgs)
-                except Exception:
+            os.makedirs(d3_imgs, exist_ok=True)
+            for src in image_paths:
+                dst = os.path.join(d3_imgs, os.path.basename(src))
+                if not os.path.exists(dst):
                     try:
-                        shutil.copytree(first_img_dir, d3_imgs)
+                        os.link(src, dst)
                     except Exception:
-                        pass
+                        try:
+                            shutil.copy2(src, dst)
+                        except Exception:
+                            pass
 
             try:
                 import pycolmap
@@ -1238,6 +1241,20 @@ def run_360dvo_reconstruction(
     if os.path.isfile(ply_out):
         shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points.ply"))
         shutil.copy2(ply_out, os.path.join(dataset_3dgs, "points3D.ply"))
+
+    # Link or copy images into 3dgs_dataset/images (File-based hard-link/copy, never directory symlink/copytree to prevent recursive loops)
+    d3_imgs = os.path.join(dataset_3dgs, "images")
+    os.makedirs(d3_imgs, exist_ok=True)
+    for src in image_paths:
+        dst = os.path.join(d3_imgs, os.path.basename(src))
+        if not os.path.exists(dst):
+            try:
+                os.link(src, dst)
+            except Exception:
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
 
     # Load into pycolmap.Reconstruction
     try:
