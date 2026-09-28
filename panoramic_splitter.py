@@ -644,11 +644,13 @@ def generate_realityscan_xmp(
     """
     Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
     Follows official RealityScan schema: http://www.capturingreality.com/ns/xcr/1.1#
-    Implements true hardware rig linking (xcr:Rig, xcr:RigInstance, xcr:RigPoseIndex)
-    and attributes-based LockedPoseGroup (Guide 04).
+    Uses verified, crash-free camera priors:
+    - xcr:PosePrior="exact" (natively recognized by RealityScan 2.2 enum parser)
+    - xcr:Coordinates="absolute"
+    - xcr:CalibrationPrior="locked"
+    - Unified CalibrationGroup="1" and DistortionGroup="1"
+    - Omit uncalibrated hardware rig tags (xcr:Rig, xcr:RigInstance) to avoid singular Hessian matrix crashes
     """
-    import uuid
-
     if pose is None:
         pose = {}
     pos_x = float(pose.get("x", 0.0))
@@ -666,7 +668,7 @@ def generate_realityscan_xmp(
 
     r_str = " ".join(f"{v:.8f}" for v in R_vals)
 
-    f_35mm = float(pose.get("f_35mm", 10.392305))
+    f_35mm = float(pose.get("f_35mm", 11.689337))
     px = float(pose.get("px_norm", 0.0))
     py = float(pose.get("py_norm", 0.0))
     k1 = float(pose.get("k1", 0.0))
@@ -677,31 +679,19 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
-    # Determine pose prior enum
-    if pose_prior in ("approximate", "exact"):
+    # Determine pose prior enum: RealityScan accepts "initial", "exact", "locked"
+    if str(pose_prior).lower() in ("approximate", "exact"):
         effective_pose_prior = "exact"
-    elif pose_prior in ("draft", "initial"):
+    elif str(pose_prior).lower() in ("draft", "initial"):
         effective_pose_prior = "initial"
-    elif pose_prior == "locked":
+    elif str(pose_prior).lower() == "locked":
         effective_pose_prior = "locked"
     else:
-        effective_pose_prior = pose_prior
+        effective_pose_prior = "exact"
 
-    # Hardware rig identifiers
-    rig_seed = rig_id or "abu_pinhole_rig"
-    rig_guid = "{" + str(uuid.uuid5(uuid.NAMESPACE_DNS, rig_seed)).upper() + "}"
-
-    inst_seed = f"frame_{locked_pose_group}" if locked_pose_group is not None else str(rig_instance_id or "0")
-    instance_guid = "{" + str(uuid.uuid5(uuid.NAMESPACE_DNS, inst_seed)).upper() + "}"
-
-    if camera_index is None:
-        cam_map = {
-            "front": 0, "back": 1, "left": 2, "right": 3,
-            "up": 4, "top": 4, "down": 5, "bottom": 5,
-        }
-        camera_index = cam_map.get(str(cam_name).lower(), 0)
-
-    open_desc = [
+    xml_lines = [
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
         '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
         '      xcr:Version="3"',
         f'      xcr:PosePrior="{effective_pose_prior}"',
@@ -717,21 +707,8 @@ def generate_realityscan_xmp(
         '      xcr:CalibrationPrior="locked"',
         '      xcr:CalibrationGroup="1"',
         '      xcr:DistortionGroup="1"',
-        f'      xcr:Rig="{rig_guid}"',
-        f'      xcr:RigInstance="{instance_guid}"',
-        f'      xcr:RigPoseIndex="{camera_index}"',
-    ]
-    if locked_pose_group is not None:
-        open_desc.append(f'      xcr:LockedPoseGroup="{locked_pose_group}"')
-    open_desc.extend([
         '      xcr:InTexturing="1"',
         '      xcr:InMeshing="1">',
-    ])
-
-    xml_lines = [
-        '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
-        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
-    ] + open_desc + [
         f'      <xcr:Position>{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}</xcr:Position>',
         '    </rdf:Description>',
         '  </rdf:RDF>',
