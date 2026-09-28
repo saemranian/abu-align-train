@@ -631,8 +631,8 @@ def extract_frame_index(name: str, fallback_idx: int = 0) -> int:
 
 
 def generate_realityscan_xmp(
-    rig_id: Optional[str] = "cubemap_rig",
-    rig_instance_id: Optional[str] = "",
+    rig_id: Optional[str] = None,
+    rig_instance_id: Optional[str] = None,
     pose: Dict[str, Any] = None,
     pose_prior: str = "approximate",
     pos_accuracy: Tuple[float, float, float] = (0.3, 0.3, 0.3),
@@ -640,8 +640,9 @@ def generate_realityscan_xmp(
     locked_pose_group: Optional[int] = None,
 ) -> str:
     """
-    Generates standard RealityCapture / RealityScan XMP metadata XML string
-    following the mxmp 1.0 schema with Rig constraints and LockedPoseGroup for RealityScan.
+    Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
+    Follows canonical schema: http://www.capturingreality.com/ns/xcr/1.1#
+    with LockedPoseGroup attribute and child tag for multi-camera rigid grouping.
     """
     if pose is None:
         pose = {}
@@ -660,7 +661,7 @@ def generate_realityscan_xmp(
 
     r_str = " ".join(f"{v:.8f}" for v in R_vals)
 
-    f_35mm = float(pose.get("f_35mm", 18.0))
+    f_35mm = float(pose.get("f_35mm", 10.392305))
     px = float(pose.get("px_norm", 0.0))
     py = float(pose.get("py_norm", 0.0))
     k1 = float(pose.get("k1", 0.0))
@@ -671,22 +672,36 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
-    rig_tags = []
-    if locked_pose_group is not None:
-        rig_tags.append(f'      <xcr:LockedPoseGroup>{locked_pose_group}</xcr:LockedPoseGroup>')
-    if rig_id:
-        rig_tags.append(f'      <xcr:RigId>{rig_id}</xcr:RigId>')
-    if rig_instance_id:
-        rig_tags.append(f'      <xcr:RigInstanceId>{rig_instance_id}</xcr:RigInstanceId>')
+    group_attr = f' xcr:LockedPoseGroup="{locked_pose_group}"' if locked_pose_group is not None else ''
 
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
-        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/mxmp/1.0/">',
-        '      <!-- Rig & Locked Pose Group Definition -->',
-        *rig_tags,
-        '      ',
-        '      <!-- Calibration Priors (Ideal 90-degree rectilinear pinhole) -->',
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
+        f'        xcr:Version="3"',
+        f'        xcr:PosePrior="{pose_prior}"',
+        '        xcr:Coordinates="absolute"',
+        '        xcr:DistortionModel="brown3"',
+        f'        xcr:FocalLength35mm="{f_35mm:.6f}"',
+        '        xcr:Skew="0"',
+        '        xcr:AspectRatio="1"',
+        f'        xcr:PrincipalPointU="{px:.6f}"',
+        f'        xcr:PrincipalPointV="{py:.6f}"',
+        '        xcr:CalibrationPrior="locked"',
+        '        xcr:CalibrationGroup="1"',
+        '        xcr:DistortionGroup="1"',
+        '        xcr:InTexturing="1"',
+        f'        xcr:InMeshing="1"{group_attr}>',
+    ]
+
+    if locked_pose_group is not None:
+        xml_lines.append(f'      <xcr:LockedPoseGroup>{locked_pose_group}</xcr:LockedPoseGroup>')
+    if rig_id:
+        xml_lines.append(f'      <xcr:RigId>{rig_id}</xcr:RigId>')
+    if rig_instance_id:
+        xml_lines.append(f'      <xcr:RigInstanceId>{rig_instance_id}</xcr:RigInstanceId>')
+
+    xml_lines.extend([
         f'      <xcr:FocalLength35mm>{f_35mm:.6f}</xcr:FocalLength35mm>',
         f'      <xcr:PrincipalPointU>{px:.6f}</xcr:PrincipalPointU>',
         f'      <xcr:PrincipalPointV>{py:.6f}</xcr:PrincipalPointV>',
@@ -698,8 +713,6 @@ def generate_realityscan_xmp(
         '      <!-- Trajectory & Pose Priors -->',
         f'      <xcr:Position>{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}</xcr:Position>',
         f'      <xcr:Rotation>{r_str}</xcr:Rotation>',
-        '      ',
-        f'      <!-- Crucial: Set PosePrior to \'{pose_prior}\' so the error can be solved as a rigid body -->',
         f'      <xcr:PosePrior>{pose_prior}</xcr:PosePrior>',
         f'      <xcr:PoseAccuracyPosition>{pos_accuracy[0]:.6f} {pos_accuracy[1]:.6f} {pos_accuracy[2]:.6f}</xcr:PoseAccuracyPosition>',
         f'      <xcr:PoseAccuracyRotation>{rot_accuracy[0]:.6f} {rot_accuracy[1]:.6f} {rot_accuracy[2]:.6f}</xcr:PoseAccuracyRotation>',
@@ -707,7 +720,7 @@ def generate_realityscan_xmp(
         '  </rdf:RDF>',
         '</x:xmpmeta>',
         ''
-    ]
+    ])
     return "\n".join(xml_lines)
 
 
