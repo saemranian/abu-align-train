@@ -305,9 +305,9 @@ class TestDatasetSplittingExport(unittest.TestCase):
             # Verify XMP XML contents contain RigId, RigInstanceId, Position, Rotation
             with open(xmp_stem, "r", encoding="utf-8") as xf:
                 xmp_content = xf.read()
-            self.assertIn('xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"', xmp_content)
+            self.assertIn('xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/"', xmp_content)
             self.assertIn("<xcr:LockedPoseGroup>1</xcr:LockedPoseGroup>", xmp_content)
-            self.assertIn('xcr:LockedPoseGroup="1"', xmp_content)
+            self.assertNotIn('xcr:LockedPoseGroup="1"', xmp_content)
             self.assertIn("<xcr:PosePrior>approximate</xcr:PosePrior>", xmp_content)
             self.assertIn("<xcr:Position>1.000000 2.000000 3.000000</xcr:Position>", xmp_content)
             self.assertIn("<xcr:Rotation>", xmp_content)

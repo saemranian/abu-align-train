@@ -641,8 +641,8 @@ def generate_realityscan_xmp(
 ) -> str:
     """
     Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
-    Follows canonical schema: http://www.capturingreality.com/ns/xcr/1.1#
-    with LockedPoseGroup attribute and child tag for multi-camera rigid grouping.
+    Follows canonical schema: http://www.capturingreality.com/ns/xcr/1.1/
+    with pure element-based tags and LockedPoseGroup for multi-camera rigid grouping (Guide 03).
     """
     if pose is None:
         pose = {}
@@ -672,36 +672,23 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
-    group_attr = f' xcr:LockedPoseGroup="{locked_pose_group}"' if locked_pose_group is not None else ''
-
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
-        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
-        f'        xcr:Version="3"',
-        f'        xcr:PosePrior="{pose_prior}"',
-        '        xcr:Coordinates="absolute"',
-        '        xcr:DistortionModel="brown3"',
-        f'        xcr:FocalLength35mm="{f_35mm:.6f}"',
-        '        xcr:Skew="0"',
-        '        xcr:AspectRatio="1"',
-        f'        xcr:PrincipalPointU="{px:.6f}"',
-        f'        xcr:PrincipalPointV="{py:.6f}"',
-        '        xcr:CalibrationPrior="locked"',
-        '        xcr:CalibrationGroup="1"',
-        '        xcr:DistortionGroup="1"',
-        '        xcr:InTexturing="1"',
-        f'        xcr:InMeshing="1"{group_attr}>',
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/">',
+        '      <xcr:Version>3</xcr:Version>',
     ]
 
     if locked_pose_group is not None:
         xml_lines.append(f'      <xcr:LockedPoseGroup>{locked_pose_group}</xcr:LockedPoseGroup>')
-    if rig_id:
-        xml_lines.append(f'      <xcr:RigId>{rig_id}</xcr:RigId>')
-    if rig_instance_id:
-        xml_lines.append(f'      <xcr:RigInstanceId>{rig_instance_id}</xcr:RigInstanceId>')
 
     xml_lines.extend([
+        '      <xcr:CalibrationGroup>1</xcr:CalibrationGroup>',
+        '      <xcr:DistortionGroup>1</xcr:DistortionGroup>',
+        '      <xcr:InTexturing>1</xcr:InTexturing>',
+        '      <xcr:InMeshing>1</xcr:InMeshing>',
+        '      ',
+        '      <!-- Calibration Priors -->',
         f'      <xcr:FocalLength35mm>{f_35mm:.6f}</xcr:FocalLength35mm>',
         f'      <xcr:PrincipalPointU>{px:.6f}</xcr:PrincipalPointU>',
         f'      <xcr:PrincipalPointV>{py:.6f}</xcr:PrincipalPointV>',
@@ -711,6 +698,7 @@ def generate_realityscan_xmp(
         '      <xcr:LensDistortionPrior>locked</xcr:LensDistortionPrior>',
         '',
         '      <!-- Trajectory & Pose Priors -->',
+        '      <xcr:Coordinates>absolute</xcr:Coordinates>',
         f'      <xcr:Position>{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}</xcr:Position>',
         f'      <xcr:Rotation>{r_str}</xcr:Rotation>',
         f'      <xcr:PosePrior>{pose_prior}</xcr:PosePrior>',
