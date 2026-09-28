@@ -140,9 +140,9 @@ class TestMaskRigProjection(unittest.TestCase):
             mask_shape = cv2.imread(mask_img_path).shape
             self.assertEqual(main_shape, mask_shape)
 
-            # Main image XMP sidecars exist
-            self.assertTrue(os.path.isfile(f"{main_img_path}.xmp"))
+            # Main image canonical XMP sidecar exists (redundant .jpg.xmp does not exist)
             self.assertTrue(os.path.isfile(os.path.join(face_dir, f"frame_001_{face}.xmp")))
+            self.assertFalse(os.path.isfile(f"{main_img_path}.xmp"))
 
             # CRITICAL CONSTRAINT: NO XMP sidecar should exist for the mask image
             self.assertFalse(os.path.isfile(f"{mask_img_path}.xmp"))

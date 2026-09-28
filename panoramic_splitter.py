@@ -618,18 +618,33 @@ def format_rc_csv_line(img_name: str, pose: Dict[str, Any]) -> str:
     )
 
 
+def extract_frame_index(name: str, fallback_idx: int = 0) -> int:
+    """Extracts integer index from frame/panorama filename (e.g. 'Container1_Mask036' -> 36)."""
+    import re
+    m = re.findall(r'\d+', name)
+    if m:
+        try:
+            return int(m[-1])
+        except Exception:
+            pass
+    return fallback_idx
+
+
 def generate_realityscan_xmp(
-    rig_id: str,
-    rig_instance_id: str,
-    pose: Dict[str, Any],
+    rig_id: Optional[str] = "cubemap_rig",
+    rig_instance_id: Optional[str] = "",
+    pose: Dict[str, Any] = None,
     pose_prior: str = "approximate",
     pos_accuracy: Tuple[float, float, float] = (0.3, 0.3, 0.3),
     rot_accuracy: Tuple[float, float, float] = (0.001, 0.001, 0.001),
+    locked_pose_group: Optional[int] = None,
 ) -> str:
     """
     Generates standard RealityCapture / RealityScan XMP metadata XML string
-    following the mxmp 1.0 schema with Rig constraints for RealityScan Rig Parser.
+    following the mxmp 1.0 schema with Rig constraints and LockedPoseGroup for RealityScan.
     """
+    if pose is None:
+        pose = {}
     pos_x = float(pose.get("x", 0.0))
     pos_y = float(pose.get("y", 0.0))
     pos_z = float(pose.get("alt", 0.0))
@@ -656,13 +671,20 @@ def generate_realityscan_xmp(
     t2 = float(pose.get("t2", 0.0))
     dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
 
+    rig_tags = []
+    if locked_pose_group is not None:
+        rig_tags.append(f'      <xcr:LockedPoseGroup>{locked_pose_group}</xcr:LockedPoseGroup>')
+    if rig_id:
+        rig_tags.append(f'      <xcr:RigId>{rig_id}</xcr:RigId>')
+    if rig_instance_id:
+        rig_tags.append(f'      <xcr:RigInstanceId>{rig_instance_id}</xcr:RigInstanceId>')
+
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
         '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/mxmp/1.0/">',
-        '      <!-- Rig Definition -->',
-        f'      <xcr:RigId>{rig_id}</xcr:RigId>',
-        f'      <xcr:RigInstanceId>{rig_instance_id}</xcr:RigInstanceId>',
+        '      <!-- Rig & Locked Pose Group Definition -->',
+        *rig_tags,
         '      ',
         '      <!-- Calibration Priors (Ideal 90-degree rectilinear pinhole) -->',
         f'      <xcr:FocalLength35mm>{f_35mm:.6f}</xcr:FocalLength35mm>',
@@ -1278,6 +1300,7 @@ def split_panorama_dataset(
                                 rc_camera_rows[cam_name].append(local_line)
 
                         if export_xmp and comp_pose is not None:
+                            frame_int_idx = extract_frame_index(base_name, frame_idx)
                             xmp_xml = generate_realityscan_xmp(
                                 rig_id=rig_id,
                                 rig_instance_id=base_name,
@@ -1285,14 +1308,11 @@ def split_panorama_dataset(
                                 pose_prior=xmp_pose_prior,
                                 pos_accuracy=xmp_pos_accuracy,
                                 rot_accuracy=xmp_rot_accuracy,
+                                locked_pose_group=frame_int_idx,
                             )
-                            xmp_file1 = f"{out_filepath}.xmp"
-                            with open(xmp_file1, "w", encoding="utf-8") as xf:
+                            xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
+                            with open(xmp_file, "w", encoding="utf-8") as xf:
                                 xf.write(xmp_xml)
-                            xmp_file2 = f"{os.path.splitext(out_filepath)[0]}.xmp"
-                            if xmp_file2 != xmp_file1:
-                                with open(xmp_file2, "w", encoding="utf-8") as xf:
-                                    xf.write(xmp_xml)
 
                         if export_transforms_json:
                             c2w = splitter.get_c2w_matrix(cam_name)
@@ -1453,6 +1473,7 @@ def split_panorama_dataset(
                             rc_camera_rows[cam_name].append(local_line)
 
                     if export_xmp and comp_pose is not None:
+                        frame_int_idx = extract_frame_index(base_name, idx)
                         xmp_xml = generate_realityscan_xmp(
                             rig_id=rig_id,
                             rig_instance_id=base_name,
@@ -1460,14 +1481,11 @@ def split_panorama_dataset(
                             pose_prior=xmp_pose_prior,
                             pos_accuracy=xmp_pos_accuracy,
                             rot_accuracy=xmp_rot_accuracy,
+                            locked_pose_group=frame_int_idx,
                         )
-                        xmp_file1 = f"{out_filepath}.xmp"
-                        with open(xmp_file1, "w", encoding="utf-8") as xf:
+                        xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
+                        with open(xmp_file, "w", encoding="utf-8") as xf:
                             xf.write(xmp_xml)
-                        xmp_file2 = f"{os.path.splitext(out_filepath)[0]}.xmp"
-                        if xmp_file2 != xmp_file1:
-                            with open(xmp_file2, "w", encoding="utf-8") as xf:
-                                xf.write(xmp_xml)
 
                     if export_transforms_json:
                         c2w = splitter.get_c2w_matrix(cam_name)

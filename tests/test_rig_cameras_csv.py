@@ -296,15 +296,16 @@ class TestDatasetSplittingExport(unittest.TestCase):
             # Verify file exists on disk with that exact name
             self.assertTrue(os.path.isfile(os.path.join(local_cam_dir, expected_img_name)))
 
-            # Verify XMP sidecar files exist for RealityScan Rig Parser
-            xmp_ext = os.path.join(local_cam_dir, f"{expected_img_name}.xmp")
+            # Verify canonical XMP sidecar file exists for RealityScan Rig Parser (no redundant .jpg.xmp)
             xmp_stem = os.path.join(local_cam_dir, f"pano_001_{cam}.xmp")
-            self.assertTrue(os.path.isfile(xmp_ext), f"Missing {xmp_ext}")
-            self.assertTrue(os.path.isfile(xmp_stem), f"Missing {xmp_stem}")
+            xmp_ext = os.path.join(local_cam_dir, f"{expected_img_name}.xmp")
+            self.assertTrue(os.path.isfile(xmp_stem), f"Missing canonical XMP: {xmp_stem}")
+            self.assertFalse(os.path.isfile(xmp_ext), f"Redundant .jpg.xmp should not exist: {xmp_ext}")
 
             # Verify XMP XML contents contain RigId, RigInstanceId, Position, Rotation
-            with open(xmp_ext, "r", encoding="utf-8") as xf:
+            with open(xmp_stem, "r", encoding="utf-8") as xf:
                 xmp_content = xf.read()
+            self.assertIn("<xcr:LockedPoseGroup>1</xcr:LockedPoseGroup>", xmp_content)
             self.assertIn("<xcr:RigId>cubemap_rig</xcr:RigId>", xmp_content)
             self.assertIn("<xcr:RigInstanceId>pano_001</xcr:RigInstanceId>", xmp_content)
             self.assertIn("<xcr:PosePrior>approximate</xcr:PosePrior>", xmp_content)
