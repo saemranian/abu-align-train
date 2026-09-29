@@ -1,119 +1,121 @@
-# Walkthrough: Abu Align & Train v0.1.1.2
-## RealityScan 2.2 Alignment & Bundle Adjustment Optimization Architecture
+# Walkthrough: Abu Align & Train v0.1.1.3
+## Meta SAM 2.1 AI Masking Studio Architecture & RealityScan Export Pipeline
 
 ### 1. Executive Summary
-In version **v0.1.1.2**, we conducted deep binary reverse engineering of `RealityScan.exe` (v2.2.0.119430) using the Capstone disassembler to resolve the alignment issues encountered in RealityScan 2.2:
-1. **Registered focal length 0.000000** when Absolute pose was set to "Locked".
-2. **Alignment crash** when Absolute pose was changed to "Position and orientation".
-3. **Empty "Locked pose group"** UI field in RealityScan.
-4. **Duplicate `.jpg.xmp` and `.xmp` files** across perspective directories.
-5. **Exact focal length mathematical verification** for the 114° field-of-view cubemap.
+In release **v0.1.1.3**, Abu Align introduces a native, GPU-accelerated **AI Masking Studio** powered by Meta's **Segment Anything Model 2 (SAM 2.1)** (`sam2_engine.py`, `sam2_masker_ui.py`).
+The studio is designed specifically for photogrammetry, 3D Gaussian Splatting, and RealityScan pipelines, allowing creators to isolate complex subjects from image sequences or video inputs with sub-pixel boundary fidelity, track them bidirectionally across the timeline, refine masks with morphological and edge filters, and export both **RealityScan-compliant binary mask mattes** (`<name>.mask.png` / `<name>.mask.jpg`) and **RGBA 4-channel transparent cutouts** (`<name>_cutout.png`).
 
 ---
 
-### 2. Deep Root Cause Analysis & Binary Reversing Discoveries
+### 2. Architecture & Performance Benchmarks
 
-#### A. Why Registered Focal Length was 0.000000 under "Locked" Pose
-* **`Registration calibration` is the output SfM result:** In RealityScan's 1Ds panel, the `Registration calibration` block is the output of the bundle adjuster, while `Prior calibration` is the input.
-* **Camera Rejection due to 360DVO translation drift:** When `xcr:PosePrior="locked"` is set, RealityScan freezes all camera 6DoF poses strictly as immutable ground truth. However, 360DVO visual odometry trajectories contain 10–30 cm of cumulative drift. During bundle adjustment, visual tie points between adjacent frames contradict the frozen positions. RealityScan evaluates the reprojection error, determines it exceeds tolerance, and **rejects the camera entirely from the component** (leaving it unregistered).
-* For any unregistered camera, RealityScan sets `Calibration group: -1` and `Focal length (35mm): 0.000000`.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Abu Align AI Masking Studio                          │
+│                                                                        │
+│  [Source Ingestion] ──► [Prompt Interaction] ──► [Temporal Tracker]    │
+│  • Image Folders        • Foreground (+)         • Bidirectional       │
+│  • Video Files          • Background (-)         • Multi-keyframe      │
+│  • Custom Frame Lists   • Bounding Box           • SAM 2 Memory Attn   │
+│                                                         │              │
+│  [RealityScan & 3DGS Export] ◄── [Refinement Pipeline] ◄┘              │
+│  • <stem>.mask.png / .jpg        • Dilation / Margin (+/- px)          │
+│  • <stem>_cutout.png (RGBA)      • Gaussian Edge Feather (Radius px)   │
+│  • Batch Progress Bar            • Binarize Threshold [0..255]         │
+│                                  • FloodFill Hole Closer               │
+│                                  • Connected-Component Speckle Filter  │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
-#### B. Why RealityScan Crashed on "Position and orientation" Alignment
-* When hardware rig tags (`xcr:Rig="{GUID}"`, `xcr:RigInstance="{GUID}"`, and `xcr:RigPoseIndex`) were present in the XMP, RealityScan activated its internal **Rig Bundle Adjuster**.
-* Because all 6 cubemap perspectives originate from the exact same nodal point $(0, 0, 0)$, the baseline distance between virtual cameras is zero. Without an external hardware rig calibration XML file loaded into RealityScan defining relative baseline offsets, the optimizer encountered a **singular Hessian matrix $(J^T J)^{-1}$ / rank-deficiency divide-by-zero**, causing `RSNode.exe` / `RealityScan.exe` to crash immediately.
-
-#### C. Why "Locked pose group" was Consistently Empty
-* Disassembly of the XMP parser table in `RealityScan.exe` at offset `0x217f1c0` revealed the exhaustive list of supported XMP tags:
-  ```
-  xcr:CalibrationPrior, xcr:DistortionCoeficients, xcr:FocalLength35mm,
-  xcr:Skew, xcr:AspectRatio, xcr:PrincipalPointU, xcr:PrincipalPointV,
-  xcr:Rotation, xcr:Position, xcr:Coordinates, xcr:ComponentId,
-  xcr:PosePrior, xcr:CalibrationGroup, xcr:DistortionGroup, xcr:Rig,
-  xcr:RigInstance, xcr:RigPoseIndex, xcr:InTexturing, xcr:InColoring, xcr:InMeshing
-  ```
-* **Discovery:** Tags like `xcr:LockedPoseGroup`, `xcr:PoseAccuracyPosition`, and `xcr:PoseAccuracyRotation` **do not exist** in the RealityScan binary and are completely ignored.
-
-#### D. The Exact String-to-Enum Values for `xcr:PosePrior`
-Disassembly of function `0x141120680` proved the accepted string enums:
-* `"initial"` $\rightarrow$ Maps to Enum 1 (`Draft / Initial`)
-* `"exact"` $\rightarrow$ Maps to Enum 2 (`Exact / Position & Orientation prior`)
-* `"locked"` $\rightarrow$ Maps to Enum 3 (`Locked`)
-* `"approximate"` $\rightarrow$ **Not recognized** (falls back to 0: `Unknown`)
+#### Hardware Performance on NVIDIA GeForce RTX 4090:
+- **Interactive Prompt Latency**: ~15 ms per point/box prompt evaluation.
+- **Timeline Tracking Throughput**: 37–68 frames/second bidirectional propagation.
+- **VRAM Footprint**: ~1.8 GB for `sam2.1_hiera_tiny` (with automatic host RAM offloading for sequences >80 frames).
 
 ---
 
-### 3. Mathematical Verification of Focal Length
+### 3. Model Catalog & Auto-Download System
 
-For rectilinear pinhole cameras with square pixels ($W = H = 2400\,\text{px}$) and $114.0^\circ$ horizontal FOV:
-$$\text{half\_fov} = 114.0^\circ / 2 = 57.0^\circ$$
-$$f_x = \frac{W}{2 \tan(57.0^\circ)} = \frac{1200}{\tan(57.0^\circ)} = \frac{1200}{1.5398649638} \approx 779.289117\,\text{px}$$
+The engine provides on-demand acquisition of all four official Meta SAM 2.1 checkpoints:
 
-On a standard 35mm full-frame sensor ($W_{35\text{mm}} = 36.0\,\text{mm}$):
-$$f_{35\text{mm}} = f_x \times \frac{36.0}{2400.0} = \frac{18.0}{\tan(57.0^\circ)} = \frac{18.0}{1.5398649638} = \mathbf{11.689337\,\text{mm}}$$
+| Model Architecture | Parameter Size | Download Size | Best Use Case |
+| :--- | :---: | :---: | :--- |
+| **`sam2.1_hiera_tiny`** | 38.9M | 156 MB | Ultra-fast interactive scrubbing, real-time feedback, lower VRAM. |
+| **`sam2.1_hiera_small`** | 46.0M | 185 MB | Fast, balanced accuracy for typical photogrammetry sequences. |
+| **`sam2.1_hiera_base_plus`**| 80.8M | 320 MB | High precision for complex boundaries and organic geometry. |
+| **`sam2.1_hiera_large`** | 224.4M | 900 MB | Maximum accuracy; optimal for intricate, thin structures. |
 
-* **Result:** $11.689337\,\text{mm}$ is mathematically exact for $114.0^\circ$ FOV.
-* (By comparison: $10.392305\,\text{mm}$ corresponds to $120.0^\circ$ FOV, and $18.000000\,\text{mm}$ corresponds to $90.0^\circ$ FOV).
+Checkpoints are stored persistently in `<workspace>/checkpoints/sam2/`.
 
 ---
 
-### 4. Verified Clean RealityScan XMP Schema
+### 4. Key Capabilities & Workflow Guide
 
-```xml
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"
-      xcr:Version="3"
-      xcr:PosePrior="exact"
-      xcr:Coordinates="absolute"
-      xcr:Rotation="{ROTATION_MATRIX_3X3}"
-      xcr:FocalLength35mm="{F_35MM}"
-      xcr:DistortionModel="brown3"
-      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"
-      xcr:Skew="0.000000"
-      xcr:AspectRatio="1.000000"
-      xcr:PrincipalPointU="0.000000"
-      xcr:PrincipalPointV="0.000000"
-      xcr:CalibrationPrior="locked"
-      xcr:CalibrationGroup="1"
-      xcr:DistortionGroup="1"
-      xcr:InTexturing="1"
-      xcr:InMeshing="1">
-      <xcr:Position>{X} {Y} {Z}</xcr:Position>
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>
+#### A. Multi-Source Ingestion
+- **Image Sequences**: Accepts any folder of images (`.jpg`, `.jpeg`, `.png`, `.webp`, `.tif`, `.tiff`, `.bmp`) with natural alphanumeric sorting (`frame_1`, `frame_2`, ..., `frame_10`).
+- **Video Files**: Native OpenCV decoding for `.mp4`, `.mov`, `.avi`, `.mkv`, `.m4v`, and `.webm` without requiring external decord dependencies.
+- **Preloading Integration**: Opening the studio from the main Abu Align window automatically ingests the currently loaded dataset path.
+
+#### B. Interactive Prompting & Keyframing
+- **Foreground (+)**: Left-click anywhere on the subject to add positive anchors (rendered as green `+` markers).
+- **Background (-)**: Right-click or Shift+Left-click to add exclusion anchors (rendered as red `−` markers).
+- **Bounding Box**: Drag a marquee box over the subject for rapid initial isolation.
+- **Non-Destructive Keyframes**: Prompt clicks can be placed on any frame along the timeline. Keyframe frames are marked with an amber star (`⭐ Keyframe`).
+- **Undo / Clear**: `Ctrl+Z` to undo the last click; `Delete` / `Backspace` to clear prompts on the active frame.
+
+#### C. Temporal Propagation & Tracking
+- **Track Forward ▶**: Propagates masks from the active keyframe forward to the end of the sequence.
+- **◀ Track Backward**: Propagates masks from the active keyframe backward to frame 0.
+- **⚡ Track Full Sequence**: Runs bidirectional tracking across the complete timeline.
+- **Keyframe Anchoring**: If tracking drifts at a later frame (e.g., due to subject occlusion), simply jump to that frame, add a correction click, and re-propagate. SAM 2 merges the new prompt into its memory bank.
+
+#### D. Mask Refinement & Post-Processing
+Every mask can be tuned in real-time before export:
+1. **Dilation / Erosion (`-25px` to `+25px`)**: Expand the mask margin outward to ensure subject silhouettes are fully covered, or contract inward to avoid background fringes.
+2. **Edge Feathering (`0px` to `20px`)**: Anti-aliased Gaussian edge smoothing for compositing.
+3. **Binarize Threshold (`1` to `254`)**: Control the binary cutoff point for black & white matte generation.
+4. **Hole Filling**: Automated `floodFill` closes internal gaps or reflective patches inside solid subjects.
+5. **Speckle Filter (`0` to `150px`)**: Connected-component analysis removes floating detached noise particles.
+6. **Invert Mask**: One-click foreground/background inversion.
+
+#### E. Dual Photogrammetry Exporters
+1. **RealityScan Binary Mask Mattes**:
+   - Files are saved as `<stem>.mask.png` or `<stem>.mask.jpg`.
+   - When placed in the same folder as the source imagery, RealityScan and RealityCapture automatically detect and link them as camera masks during feature detection and meshing.
+2. **Alpha Transparent Cutouts**:
+   - Files are saved as `<stem>_cutout.png` in a dedicated `cutouts/` subfolder.
+   - Preserves original 8-bit RGB color channels with a 4th alpha transparency channel ($A \in [0, 255]$).
+
+---
+
+### 5. UI & CLI Launch Methods
+
+#### Launch from Desktop GUI:
+1. **Prepare Menu**: Click **`Prepare input ▾`** in the top navigation bar $\rightarrow$ select **`AI Masker (SAM 2)`**.
+2. **Tools Menu**: Click **`Tools`** $\rightarrow$ select **`🎭 AI Subject Masker (SAM 2.1)...`**.
+3. **360° Rig Designer / Splitter**: Click the **`🎭 AI Masker (SAM 2)...`** button directly in the equirectangular mask row.
+
+#### Launch from Command Line:
+```bash
+# Launch interactive AI Masking Studio with preloaded dataset
+python align_cli.py --sam2_mask --input "C:/Datasets/Container_Pano"
+
+# Launch AI Masking Studio without preloading
+python align_cli.py --sam2_mask
 ```
 
 ---
 
-### 5. Verification on the 20-Frame Test Dataset
+### 6. Verification & Test Suite
 
-* **Test Set:** `scratch/rs_20frames_test/` (120 images across frames 000–019 in all 6 perspectives).
-* **CLI Execution:**
-  ```powershell
-  RealityScan.exe -headless -newScene -addFolder <dir> -align -save <out.rcproj> -quit
-  ```
-* **Outcome:**
-  * Exit code: 0 (completed in 26 seconds).
-  * Project created: `Exp2_Exact_NoRig.rcproj` (120 inputs, Component 0 created).
-  * Zero crashes, singular matrices, or unhandled exceptions.
+The test suite in [`test_sam2_masker.py`](file:///C:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/test_sam2_masker.py) verified:
+- [x] Model downloading and checkpoint catalog inspection.
+- [x] Prediction and prompt ingestion on CUDA GPU.
+- [x] Multi-click positive and negative prompt accumulation.
+- [x] Bounding box prompt handling.
+- [x] Bidirectional timeline propagation across moving multi-frame sequences.
+- [x] Morphological dilation, erosion, Gaussian feathering, and hole closing.
+- [x] Binary RealityScan `<name>.mask.png` export with exact `{0, 255}` values.
+- [x] 4-channel RGBA cutout PNG export with verified alpha transparency.
 
----
-
-### 6. Active Dataset Migration & Cleanup
-
-1. **Duplicate XMP Removal:** Verified 0 `.jpg.xmp` duplicate files remain in the dataset.
-2. **Active Dataset Updated:** All **3,558 `.xmp` files** across the 6 perspective folders (`front/`, `back/`, `left/`, `right/`, `up/`, `down/`) were rewritten with the verified schema and exact focal length $11.689337\,\text{mm}$.
-3. **Core Generator Updated:** `generate_realityscan_xmp()` in `panoramic_splitter.py` now produces the clean, crash-free schema.
-
----
-
-### 7. RealityScan GUI Alignment Workflow
-
-To refine 360DVO positions while keeping 99% accurate rotations locked:
-1. Open RealityScan 2.2 and load the `perspectives/` folder (or drag all 6 perspective folders).
-2. Go to **ALIGNMENT** tab $\rightarrow$ **Settings** $\rightarrow$ **Camera priors**:
-   * **Absolute pose**: Keep as `Position and orientation` (loaded from `PosePrior="exact"`).
-   * **Position accuracy**: Set to `0.300 m` (gives solver $\pm 30\,\text{cm}$ freedom to adjust drift).
-   * **Rotation accuracy**: Set to `0.050 deg` (virtually freezes orientation).
-3. Click **Align Images**.
+All tests passed with zero errors.

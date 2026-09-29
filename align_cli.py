@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.1.2 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.1.3 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1732,6 +1732,13 @@ def main():
     parser.add_argument("--split_format", choices=["jpg", "png"], default="jpg", help="Split image output format (default: jpg)")
     parser.add_argument("--split_quality", type=int, default=95, help="JPEG quality for split images (default: 95)")
     parser.add_argument("--split_only", action="store_true", help="Perform panoramic splitting into virtual camera rig and exit without aligning")
+    # Phase 4: SAM 2 AI Subject Masking & Temporal Tracking
+    parser.add_argument("--sam2_mask", action="store_true", help="Launch interactive SAM 2 AI Masking Studio or run sequence masking")
+    parser.add_argument("--sam2_model", choices=["tiny", "small", "base_plus", "large"], default="tiny", help="SAM 2 model architecture (default: tiny)")
+    parser.add_argument("--sam2_export_binary", action="store_true", default=True, help="Export RealityScan binary mask mattes (<stem>.mask.png)")
+    parser.add_argument("--sam2_export_cutout", action="store_true", default=True, help="Export transparent RGBA cutouts (<stem>_cutout.png)")
+    parser.add_argument("--sam2_dilation", type=int, default=0, help="Mask boundary dilation/erosion in pixels")
+    parser.add_argument("--sam2_feather", type=int, default=2, help="Mask edge softening radius in pixels")
     parser.add_argument("--ace_iterations", "--ace_iter", type=int, default=30, help="Maximum mapping iterations for ACE0 engine (default: 30)")
     parser.add_argument("--ace_refinement", "--ace_refine", type=str, choices=["mlp", "naive", "none"], default="mlp", help="Pose refinement mode for ACE0 (default: mlp)")
     parser.add_argument("--ace_focal", type=float, default=-1.0, help="Initial focal length guess for ACE0 (-1 to auto-estimate from image diagonal)")
@@ -1823,6 +1830,18 @@ def main():
         print("\nChecking upstream GitHub repositories for Abu Align engines...\n")
         data = check_all_engines()
         print(generate_report_text(data))
+        sys.exit(0)
+
+    if getattr(args, "sam2_mask", False):
+        import tkinter as tk
+        from sam2_masker_ui import open_sam2_masker_dialog
+        init_p = os.path.abspath(args.input) if args.input else None
+        print("[*] Launching SAM 2 AI Masking Studio...")
+        root = tk.Tk()
+        root.withdraw()
+        dlg = open_sam2_masker_dialog(root, initial_path=init_p)
+        root.mainloop()
+        print("[*] Exiting (--sam2_mask).")
         sys.exit(0)
 
     if not args.input:

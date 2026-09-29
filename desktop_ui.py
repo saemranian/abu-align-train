@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.1.2", 9, muted=True)
+    app.version_label = label(header, "v0.1.1.3", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -530,6 +530,7 @@ def build_workspace(app, tooltip):
                            activebackground=FIELD, activeforeground=ACCENT, relief="flat", bd=0)
     prepare_menu.add_command(label="360° rig designer", command=app._open_panoramic_splitter_dialog)
     prepare_menu.add_command(label="Video frames", command=app._open_video_extractor_dialog)
+    prepare_menu.add_command(label="AI Masker (SAM 2)", command=app._open_sam2_masker_dialog)
     prepare.configure(menu=prepare_menu)
     prepare.pack(side="right", padx=8)
 

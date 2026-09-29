@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.1.2
+Abu Align & Train Version 0.1.1.3
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.1.2 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.1.3 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -586,6 +586,7 @@ class AbuAlignApp:
         menubar.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
         tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
+        tools_menu.add_command(label="🎭 AI Subject Masker (SAM 2.1)...", command=self._open_sam2_masker_dialog)
         tools_menu.add_command(label="📐 Open Native 3D Workspace", accelerator="Alt+4", command=self._show_3d_workspace)
         tools_menu.add_command(label="📋 View Reconstruction Report...", command=self._view_training_run_report)
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
@@ -2008,6 +2009,19 @@ class AbuAlignApp:
         from desktop_ui import enhance_video_dialog
         enhance_video_dialog(self, locals())
 
+    def _open_sam2_masker_dialog(self, initial_path=None):
+        """
+        Launches the dedicated Meta SAM 2.1 AI Masking Studio dialog.
+        Provides interactive prompt-guided subject segmentation, keyframe tracking,
+        temporal propagation across timelines, mask refinement, and RealityScan export.
+        """
+        try:
+            from sam2_masker_ui import open_sam2_masker_dialog
+            init_p = initial_path or self.dataset_path_var.get().strip() or None
+            open_sam2_masker_dialog(self.root, initial_path=init_p)
+        except Exception as e:
+            messagebox.showerror("SAM 2 Masker Error", f"Failed to open SAM 2 Masking Studio:\n{e}")
+
     def _open_panoramic_splitter_dialog(self):
         """
         Launches the Advanced 360° Multi-Camera Rig Projector & Panoramic Splitter dialog.
@@ -2314,7 +2328,8 @@ class AbuAlignApp:
                 )
 
         tk.Button(r4, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#db2777", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(r4, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_mask_folder).pack(side=tk.LEFT)
+        tk.Button(r4, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(r4, text="🎭 AI Masker (SAM 2)...", font=("Segoe UI", 8, "bold"), bg=self.accent_color, fg=self.bg_dark, relief=tk.FLAT, padx=6, command=lambda: self._open_sam2_masker_dialog(in_var.get())).pack(side=tk.LEFT)
 
         # Mask Telemetry Badge
         mask_badge_lbl = tk.Label(
@@ -4423,7 +4438,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.1.2 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.1.3 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -4982,7 +4997,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.1.2 - {title}")
+        doc_win.title(f"Abu Align v0.1.1.3 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5609,7 +5624,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.1.2\n"
+            "Abu Align & Train - Version 0.1.1.3\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
