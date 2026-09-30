@@ -16,6 +16,7 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import cv2
 from PIL import Image, ImageTk
+import torch
 
 from sam2_engine import SAM2MaskingEngine, SAM2_MODELS
 
@@ -57,6 +58,7 @@ class SAM2MaskerDialog:
         self.dialog.minsize(1120, 720)
         self.dialog.configure(bg=BG)
         self.dialog.transient(parent)
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Session State
         self.current_frame_idx: int = 0
@@ -189,7 +191,7 @@ class SAM2MaskerDialog:
         def _on_canvas_configure(event):
             canvas.itemconfig(window_id, width=event.width)
         canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.configure(yview_scroll=scrollbar.set)
+        canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1050,6 +1052,17 @@ class SAM2MaskerDialog:
         if messagebox.askyesno("Export Complete", msg + "\n\nWould you like to open the export folder?", parent=self.dialog):
             if sys.platform == "win32":
                 os.startfile(out_dir)
+
+    def _on_close(self):
+        """Cleanly releases background threads, model buffers, and window resources."""
+        self.is_playing = False
+        self.cancel_requested = True
+        try:
+            if hasattr(self, "engine") and self.engine is not None:
+                self.engine.clear_all()
+        except Exception:
+            pass
+        self.dialog.destroy()
 
 
 def open_sam2_masker_dialog(parent: tk.Widget, initial_path: Optional[str] = None) -> SAM2MaskerDialog:
