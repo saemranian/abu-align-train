@@ -181,10 +181,125 @@ def test_sam2_all():
     print(f"    [OK] WebP vs PNG size comparison: WebP total {res_webp['total_mb']:.3f} MB vs PNG total {res_png['total_mb']:.3f} MB")
     print("    [OK] All hardware-accelerated exports and logs verified successfully.")
 
+
+def test_mixed_orientations():
     print("\n" + "=" * 70)
-    print("ALL SAM 2 AI MASKING TESTS PASSED PERFECTLY!")
+    print("RUNNING MIXED HORIZONTAL & VERTICAL ORIENTATION TEST SUITE")
+    print("=" * 70)
+
+    engine = SAM2MaskingEngine()
+    engine.load_model("tiny")
+
+    temp_dir = tempfile.mkdtemp(prefix="sam2_mixed_test_")
+    frames_dir = os.path.join(temp_dir, "mixed_images")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    # Frame specs: (Width, Height, Description)
+    frame_specs = [
+        (640, 480, "Horizontal Landscape"),
+        (480, 640, "Vertical Portrait"),
+        (800, 600, "Horizontal Landscape High-Res"),
+        (600, 800, "Vertical Portrait High-Res"),
+    ]
+
+    for i, (w, h, desc) in enumerate(frame_specs):
+        img = np.full((h, w, 3), 35, dtype=np.uint8)
+        # Center subject
+        cx, cy = w // 2, h // 2
+        r = min(w, h) // 4
+        cv2.circle(img, (cx, cy), r, (0, 255, 128), -1)
+        # Offset distractor
+        cv2.rectangle(img, (10, 10), (70, 70), (50, 50, 200), -1)
+        fname = f"frame_{i:04d}.png"
+        cv2.imwrite(os.path.join(frames_dir, fname), img)
+        print(f"    - Created {fname}: {w}x{h} ({desc})")
+
+    n_loaded = engine.load_source(frames_dir)
+    print(f"\n[1] Ingestion Check: Loaded {n_loaded} frames.")
+    assert n_loaded == 4, f"Expected 4 frames, got {n_loaded}"
+
+    for i, (w, h, desc) in enumerate(frame_specs):
+        fw, fh = engine.get_frame_dims(i)
+        print(f"    - Frame {i} dimensions: {fw}x{fh} (Expected: {w}x{h})")
+        assert (fw, fh) == (w, h), f"Frame {i} dimension mismatch: expected {(w, h)}, got {(fw, fh)}"
+
+    # Test Interactive Prompt on Frame 0 (Horizontal)
+    print("\n[2] Prompting Frame 0 (Horizontal)...")
+    m0 = engine.add_point(frame_idx=0, x=320, y=240, label=1)
+    print(f"    - Frame 0 mask shape: {m0.shape} (Expected: (480, 640))")
+    assert m0.shape == (480, 640), f"Frame 0 mask should be horizontal (480, 640), got {m0.shape}"
+
+    # Test Interactive Prompt on Frame 1 (Vertical)
+    print("\n[3] Prompting Frame 1 (Vertical)...")
+    m1 = engine.add_point(frame_idx=1, x=240, y=320, label=1)
+    print(f"    - Frame 1 mask shape: {m1.shape} (Expected: (640, 480))")
+    assert m1.shape == (640, 480), f"Frame 1 mask should be vertical (640, 480), got {m1.shape}"
+
+    # Test Bidirectional Propagation Across Mixed Sequence
+    print("\n[4] Bidirectional Tracking Across Mixed Sequence...")
+    tracked = engine.propagate(direction="both", start_frame=0)
+    for i, (w, h, desc) in enumerate(frame_specs):
+        m = tracked[i]
+        print(f"    - Tracked Frame {i} mask shape: {m.shape} (Expected: ({h}, {w}))")
+        assert m.shape == (h, w), f"Tracked Frame {i} shape mismatch: expected ({h}, {w}), got {m.shape}"
+
+    # Test Export in Original / Native Resolution
+    print("\n[5] Testing Native Resolution Export (Preserving Horizontal & Vertical Ratios)...")
+    native_out = os.path.join(temp_dir, "export_native")
+    res_native = engine.export_masks(
+        output_dir=native_out,
+        export_binary=True,
+        export_cutout=True,
+        scale_mode="original",
+        mask_format="png",
+        cutout_format="webp",
+        quality=90
+    )
+    print(f"    - Native Export Results: {res_native}")
+    assert res_native["binary"] == 4 and res_native["cutout"] == 4
+
+    # Verify native exported dimensions
+    for i, (w, h, desc) in enumerate(frame_specs):
+        mask_path = os.path.join(native_out, f"frame_{i:04d}.mask.png")
+        cutout_path = os.path.join(native_out, "cutouts", f"frame_{i:04d}_cutout.webp")
+        assert os.path.isfile(mask_path), f"Missing mask: {mask_path}"
+        assert os.path.isfile(cutout_path), f"Missing cutout: {cutout_path}"
+
+        m_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        c_img = cv2.imread(cutout_path, cv2.IMREAD_UNCHANGED)
+
+        print(f"    - Frame {i} exported mask: {m_img.shape[1]}x{m_img.shape[0]} | cutout: {c_img.shape[1]}x{c_img.shape[0]} (Expected: {w}x{h})")
+        assert (m_img.shape[1], m_img.shape[0]) == (w, h), f"Exported mask {i} wrong size: expected {w}x{h}, got {m_img.shape[1]}x{m_img.shape[0]}"
+        assert (c_img.shape[1], c_img.shape[0]) == (w, h), f"Exported cutout {i} wrong size: expected {w}x{h}, got {c_img.shape[1]}x{c_img.shape[0]}"
+
+    # Test Export at 50% Scale (Half resolution, each preserving its aspect ratio)
+    print("\n[6] Testing 50% Half-Scale Export (Preserving Horizontal & Vertical Ratios)...")
+    half_out = os.path.join(temp_dir, "export_half")
+    res_half = engine.export_masks(
+        output_dir=half_out,
+        export_binary=True,
+        export_cutout=True,
+        scale_mode="50%",
+        mask_format="png",
+        cutout_format="webp",
+        quality=90
+    )
+    print(f"    - 50% Export Results: {res_half}")
+    for i, (w, h, desc) in enumerate(frame_specs):
+        exp_w, exp_h = w // 2, h // 2
+        mask_path = os.path.join(half_out, f"frame_{i:04d}.mask.png")
+        cutout_path = os.path.join(half_out, "cutouts", f"frame_{i:04d}_cutout.webp")
+        m_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        c_img = cv2.imread(cutout_path, cv2.IMREAD_UNCHANGED)
+        print(f"    - Frame {i} 50% export: {m_img.shape[1]}x{m_img.shape[0]} (Expected: {exp_w}x{exp_h})")
+        assert (m_img.shape[1], m_img.shape[0]) == (exp_w, exp_h)
+        assert (c_img.shape[1], c_img.shape[0]) == (exp_w, exp_h)
+
+    print("\n" + "=" * 70)
+    print("ALL MIXED HORIZONTAL & VERTICAL TESTS PASSED PERFECTLY!")
     print("=" * 70)
 
 
 if __name__ == "__main__":
     test_sam2_all()
+    test_mixed_orientations()

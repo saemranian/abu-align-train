@@ -104,7 +104,7 @@ class SAM2MaskerDialog:
         self.export_rs_naming_var = tk.BooleanVar(value=True)
         self.mask_fmt_var = tk.StringVar(value="png")
         self.cutout_fmt_var = tk.StringVar(value="WebP (RGBA - ~1.5MB)")
-        self.export_scale_var = tk.StringVar(value="2K QHD (2048px - Recommended)")
+        self.export_scale_var = tk.StringVar(value="2K QHD (2048px - Auto Aspect)")
         self.export_quality_var = tk.IntVar(value=92)
         self.export_png_comp_var = tk.IntVar(value=1)
         self.export_hw_accel_var = tk.BooleanVar(value=True)
@@ -448,7 +448,7 @@ class SAM2MaskerDialog:
         r_res.pack(fill=tk.X, pady=(2, 4))
         tk.Label(r_res, text="Export Size:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
         cb_scale = ttk.Combobox(r_res, textvariable=self.export_scale_var,
-                                values=["2K QHD (2048px - Recommended)", "Original (100% Native)", "50% Half Res", "4K UHD (3840px)", "1K HD (1024px)"],
+                                values=["2K QHD (2048px - Auto Aspect)", "Original (100% Native)", "50% Half Res (Auto Aspect)", "4K UHD (3840px - Auto Aspect)", "1K HD (1024px - Auto Aspect)"],
                                 state="readonly", width=18, font=("Segoe UI", 8))
         cb_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -710,9 +710,11 @@ class SAM2MaskerDialog:
         else:
             self.export_dir_var.set(os.path.join(os.path.dirname(path), "masks"))
 
+        has_mixed = len(set(self.engine.frame_dims)) > 1
+        res_summary = "Mixed Aspect (Auto H/V)" if has_mixed else f"{self.engine.orig_width}x{self.engine.orig_height}"
         self.source_info_lbl.configure(
             text=f"Source: {os.path.basename(path)}\n"
-                 f"Frames: {n_frames} | Res: {self.engine.orig_width}x{self.engine.orig_height}"
+                 f"Frames: {n_frames} | Res: {res_summary}"
         )
         self.status_lbl.configure(text=f"Loaded {n_frames} frames", fg=SUCCESS)
 
@@ -731,10 +733,20 @@ class SAM2MaskerDialog:
         self.current_frame_idx = clamped
         self.scrubber_var.set(clamped)
 
-        # Update Frame Readout
+        # Update Frame Readout with per-frame dimensions and orientation
         fname = self.engine.frame_names[clamped] if clamped < len(self.engine.frame_names) else ""
+        cur_w, cur_h = self.engine.get_frame_dims(clamped)
+        ratio_tag = "Portrait" if cur_h > cur_w else ("Landscape" if cur_w > cur_h else "Square")
         kf_star = " ⭐ Keyframe" if self.engine.has_prompts(clamped) else ""
-        self.frame_readout_lbl.configure(text=f"Frame: {clamped + 1} / {self.engine.num_frames}  ({fname}){kf_star}")
+        self.frame_readout_lbl.configure(
+            text=f"Frame: {clamped + 1} / {self.engine.num_frames}  ({fname}) [{cur_w}x{cur_h} {ratio_tag}]{kf_star}"
+        )
+
+        # Check if frame dimensions or orientation changed, auto-fit view cleanly
+        prev_dims = getattr(self, "_last_rendered_dims", None)
+        self._last_rendered_dims = (cur_w, cur_h)
+        if prev_dims is not None and prev_dims != (cur_w, cur_h):
+            self._zoom_to_fit()
 
         # Update Keyframe Info
         kfs = self.engine.get_keyframes()
@@ -791,34 +803,39 @@ class SAM2MaskerDialog:
     # -------------------------------------------------------------------------
 
     def _zoom_to_fit(self):
-        if self.engine.orig_width == 0 or self.engine.orig_height == 0:
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
+        if cur_w == 0 or cur_h == 0:
             return
 
         canvas_w = max(100, self.canvas.winfo_width())
         canvas_h = max(100, self.canvas.winfo_height())
 
-        scale_x = (canvas_w - 40) / self.engine.orig_width
-        scale_y = (canvas_h - 40) / self.engine.orig_height
+        scale_x = (canvas_w - 40) / cur_w
+        scale_y = (canvas_h - 40) / cur_h
         self.zoom = min(scale_x, scale_y)
 
         # Center in canvas
-        self.pan_x = (canvas_w - self.engine.orig_width * self.zoom) / 2.0
-        self.pan_y = (canvas_h - self.engine.orig_height * self.zoom) / 2.0
+        self.pan_x = (canvas_w - cur_w * self.zoom) / 2.0
+        self.pan_y = (canvas_h - cur_h * self.zoom) / 2.0
 
         self.zoom_lbl.configure(text=f"Zoom: {int(self.zoom * 100)}%")
         self._render_current_frame()
 
     def _zoom_to_100(self):
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
+        if cur_w == 0 or cur_h == 0:
+            return
         self.zoom = 1.0
         canvas_w = max(100, self.canvas.winfo_width())
         canvas_h = max(100, self.canvas.winfo_height())
-        self.pan_x = (canvas_w - self.engine.orig_width) / 2.0
-        self.pan_y = (canvas_h - self.engine.orig_height) / 2.0
+        self.pan_x = (canvas_w - cur_w) / 2.0
+        self.pan_y = (canvas_h - cur_h) / 2.0
         self.zoom_lbl.configure(text="Zoom: 100%")
         self._render_current_frame()
 
     def _on_canvas_mousewheel(self, event):
-        if self.engine.orig_width == 0:
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
+        if cur_w == 0:
             return
 
         mouse_x = event.x
@@ -886,9 +903,10 @@ class SAM2MaskerDialog:
         """Dedicated handler for Alt+Left Click directly erasing mask at clicked point."""
         if self.engine.num_frames == 0:
             return
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
         img_x = (event.x - self.pan_x) / self.zoom
         img_y = (event.y - self.pan_y) / self.zoom
-        if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
+        if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
             self._apply_point_prompt(img_x, img_y, label=0)
 
     def _on_canvas_left_down(self, event):
@@ -906,10 +924,11 @@ class SAM2MaskerDialog:
             return
 
         # Screen to Image Space
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
         img_x = (event.x - self.pan_x) / self.zoom
         img_y = (event.y - self.pan_y) / self.zoom
 
-        if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
+        if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
             # Normal left click in Foreground mode is label 1 (Subject / Green +)
             # Erase is triggered ONLY by holding Alt, holding Shift, or selecting Erase mode
             label = 0 if (is_alt or is_shift or mode == "Background") else 1
@@ -950,10 +969,11 @@ class SAM2MaskerDialog:
         if self.engine.num_frames == 0:
             return
 
+        cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
         img_x = (event.x - self.pan_x) / self.zoom
         img_y = (event.y - self.pan_y) / self.zoom
 
-        if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
+        if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
             self._apply_point_prompt(img_x, img_y, label=0)
         else:
             # If outside image, treat as pan start
@@ -1145,8 +1165,7 @@ class SAM2MaskerDialog:
         if canvas_w <= 1 or canvas_h <= 1:
             return
 
-        orig_w = self.engine.orig_width
-        orig_h = self.engine.orig_height
+        orig_w, orig_h = self.engine.get_frame_dims(self.current_frame_idx)
         if orig_w <= 0 or orig_h <= 0:
             return
 
@@ -1205,6 +1224,12 @@ class SAM2MaskerDialog:
             rgb = self.engine.get_frame_rgb(self.current_frame_idx)
         except Exception:
             return
+
+        if rgb is not None and rgb.shape[:2] != (orig_h, orig_w):
+            orig_h, orig_w = rgb.shape[:2]
+
+        if mask is not None and mask.shape[:2] != (orig_h, orig_w):
+            mask = cv2.resize(mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
         crop_rgb = rgb[iy0:iy1, ix0:ix1]
         mode = self.view_mode.get()

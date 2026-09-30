@@ -27,23 +27,29 @@ warnings.filterwarnings("ignore", message=".*cannot import name '_C' from 'sam2'
 
 def compute_scaled_size(orig_w: int, orig_h: int, scale_mode: str) -> Tuple[int, int]:
     """
-    Computes output (width, height) according to target scale mode:
+    Computes output (width, height) preserving each frame's native aspect ratio and orientation:
       - 'original' / 'native': 100% full resolution
-      - '50%': Half resolution (4x pixel reduction)
-      - '4k': Max dimension capped to 3840px
-      - '2k': Max dimension capped to 2048px (standard for 3DGS & Web)
-      - '1k': Max dimension capped to 1024px
+      - '50%': Half resolution (w // 2, h // 2)
+      - '25%': Quarter resolution (w // 4, h // 4)
+      - '4k': Longest edge capped to 3840px
+      - '2k': Longest edge capped to 2048px (standard for 3DGS & Web)
+      - '1080p': Longest edge capped to 1920px
+      - '1k': Longest edge capped to 1024px
     """
-    scale_mode = str(scale_mode).lower().strip()
-    if scale_mode in ("original", "native", "100%", "1.0"):
+    sm = str(scale_mode).lower().strip()
+    if any(k in sm for k in ("original", "native", "100%", "1.0")):
         return orig_w, orig_h
-    elif scale_mode in ("50%", "half", "0.5"):
+    elif "25%" in sm or "quarter" in sm or "0.25" in sm:
+        return max(16, (orig_w + 3) // 4), max(16, (orig_h + 3) // 4)
+    elif "50%" in sm or "half" in sm or "0.5" in sm:
         return max(16, (orig_w + 1) // 2), max(16, (orig_h + 1) // 2)
-    elif scale_mode in ("4k", "3840"):
+    elif "4k" in sm or "3840" in sm:
         max_dim = 3840
-    elif scale_mode in ("2k", "2048"):
+    elif "2k" in sm or "2048" in sm:
         max_dim = 2048
-    elif scale_mode in ("1k", "1024"):
+    elif "1080" in sm or "1920" in sm:
+        max_dim = 1920
+    elif "1k" in sm or "1024" in sm:
         max_dim = 1024
     else:
         return orig_w, orig_h
@@ -129,6 +135,7 @@ class SAM2MaskingEngine:
         self.num_frames: int = 0
         self.orig_width: int = 0
         self.orig_height: int = 0
+        self.frame_dims: List[Tuple[int, int]] = []
 
         # SAM2 Inference State
         self.inference_state: Optional[Dict[str, Any]] = None
@@ -159,6 +166,63 @@ class SAM2MaskingEngine:
             except UnicodeEncodeError:
                 safe_msg = msg.encode("ascii", "replace").decode("ascii")
                 print(f"[SAM 2] {safe_msg}")
+
+    def get_frame_dims(self, frame_idx: int) -> Tuple[int, int]:
+        """Returns (width, height) for the requested frame, respecting native orientation."""
+        if 0 <= frame_idx < len(self.frame_dims):
+            return self.frame_dims[frame_idx]
+        if self.num_frames > 0 and 0 <= frame_idx < self.num_frames:
+            try:
+                rgb = self.get_frame_rgb(frame_idx)
+                h, w = rgb.shape[:2]
+                while len(self.frame_dims) <= frame_idx:
+                    self.frame_dims.append((self.orig_width, self.orig_height))
+                self.frame_dims[frame_idx] = (w, h)
+                return w, h
+            except Exception:
+                pass
+        return max(1, self.orig_width), max(1, self.orig_height)
+
+    def _attach_dynamic_predictor_hooks(self, predictor):
+        """
+        Enables SAM 2 to automatically handle mixed aspect ratios and mixed orientations
+        (e.g., sequences containing both horizontal landscape and vertical portrait images).
+        Dynamically supplies each frame's native (W_i, H_i) resolution when generating
+        output masks, eliminating horizontal stretching or aspect ratio squashing.
+        """
+        import types
+        predictor._engine_ref = self
+
+        def dynamic_get_orig_video_res_output(pred_self, inference_state, any_res_masks):
+            frame_idx = inference_state.get("_active_frame_idx", None)
+            if frame_idx is None:
+                ftpo = inference_state.get("frames_tracked_per_obj", {})
+                if ftpo and 0 in ftpo and len(ftpo[0]) > 0:
+                    frame_idx = list(ftpo[0].keys())[-1]
+
+            engine = getattr(pred_self, "_engine_ref", None)
+            if frame_idx is not None and engine is not None:
+                video_W, video_H = engine.get_frame_dims(frame_idx)
+            else:
+                video_H = inference_state.get("video_height", 1024)
+                video_W = inference_state.get("video_width", 1024)
+
+            device = inference_state["device"]
+            any_res_masks = any_res_masks.to(device, non_blocking=True)
+            if any_res_masks.shape[-2:] == (video_H, video_W):
+                video_res_masks = any_res_masks
+            else:
+                video_res_masks = torch.nn.functional.interpolate(
+                    any_res_masks,
+                    size=(video_H, video_W),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            if pred_self.non_overlap_masks:
+                video_res_masks = pred_self._apply_non_overlapping_constraints(video_res_masks)
+            return any_res_masks, video_res_masks
+
+        predictor._get_orig_video_res_output = types.MethodType(dynamic_get_orig_video_res_output, predictor)
 
     # -------------------------------------------------------------------------
     # Model Management & Downloading
@@ -240,6 +304,7 @@ class SAM2MaskingEngine:
                 torch.cuda.empty_cache()
 
         self.video_predictor = build_sam2_video_predictor(cfg, ckpt_path, device=self.device)
+        self._attach_dynamic_predictor_hooks(self.video_predictor)
         sam_base = build_sam2(cfg, ckpt_path, device=self.device)
         self.image_predictor = SAM2ImagePredictor(sam_base)
         self.current_model_key = model_key
@@ -327,6 +392,7 @@ class SAM2MaskingEngine:
         # Determine dimensions from first frame
         first_frame = self.get_frame_rgb(0)
         self.orig_height, self.orig_width = first_frame.shape[:2]
+        self.frame_dims = []
 
         # Automatic offloading policy: if num_frames > 80, offload to CPU to preserve GPU memory
         if offload_to_cpu is None:
@@ -342,6 +408,8 @@ class SAM2MaskingEngine:
 
         for i in range(self.num_frames):
             rgb = self.get_frame_rgb(i)
+            h_i, w_i = rgb.shape[:2]
+            self.frame_dims.append((w_i, h_i))
             # Resize with aspect ratio preserved or stretched to model_image_size
             resized = cv2.resize(rgb, (model_image_size, model_image_size), interpolation=cv2.INTER_AREA)
             # Normalization: (RGB / 255.0 - mean) / std
@@ -487,6 +555,7 @@ class SAM2MaskingEngine:
             self.video_cap = None
         self.frame_paths = []
         self.frame_names = []
+        self.frame_dims.clear()
         self.num_frames = 0
         self.inference_state = None
         if torch.cuda.is_available():
@@ -516,6 +585,12 @@ class SAM2MaskingEngine:
         labels = np.array(prompt_data["labels"], dtype=np.int32) if prompt_data["labels"] else None
         box = np.array(prompt_data["box"], dtype=np.float32) if prompt_data["box"] is not None else None
 
+        # Dynamically set current frame native dimensions in inference state
+        w_curr, h_curr = self.get_frame_dims(frame_idx)
+        self.inference_state["_active_frame_idx"] = frame_idx
+        self.inference_state["video_width"] = w_curr
+        self.inference_state["video_height"] = h_curr
+
         with torch.inference_mode(), self._autocast_context():
             _, _, mask_logits = self.video_predictor.add_new_points_or_box(
                 inference_state=self.inference_state,
@@ -527,6 +602,7 @@ class SAM2MaskingEngine:
                 clear_old_points=True
             )
 
+        self.inference_state["_active_frame_idx"] = None
         # Convert logits tensor to binary mask uint8
         mask_np = (mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
         self.tracked_masks[frame_idx] = mask_np
@@ -556,6 +632,8 @@ class SAM2MaskingEngine:
         if not self.prompts:
             raise RuntimeError("Please place at least one prompt click before propagating.")
 
+        # Clear any active prompt frame override
+        self.inference_state["_active_frame_idx"] = None
         self._base_mask_cache.clear()
 
         keyframes = self.get_keyframes()
@@ -860,8 +938,12 @@ class SAM2MaskingEngine:
         cutout_ext = ".webp" if c_fmt == "webp" else ".png"
 
         accel_tag = f"CUDA GPU ({gpu_name})" if use_gpu else "CPU Multi-Core"
+        has_mixed_ratios = len(set(self.frame_dims)) > 1
+        first_w, first_h = self.get_frame_dims(0)
+        sample_w, sample_h = compute_scaled_size(first_w, first_h, scale_mode)
+        res_info = f"Adaptive Per-Frame [{scale_mode.upper()}] (Preserves Horizontal & Vertical Ratios)" if has_mixed_ratios else f"{sample_w}x{sample_h}px ({scale_mode.upper()})"
         self.log(f"Starting [{accel_tag}] Batch Export: {total_frames} frames -> "
-                 f"Res: {target_w}x{target_h}px ({scale_mode.upper()}) | "
+                 f"Res: {res_info} | "
                  f"Cutouts: {cutout_ext.upper()} (Q{quality}) | "
                  f"Masks: {mask_ext.upper()} | "
                  f"Disk Workers: {max_workers} threads")
@@ -917,11 +999,14 @@ class SAM2MaskingEngine:
 
                 frame_name = self.frame_names[idx]
                 stem, _ = os.path.splitext(frame_name)
+                cur_w, cur_h = self.get_frame_dims(idx)
+                target_w, target_h = compute_scaled_size(cur_w, cur_h, scale_mode)
+                needs_rescale = (target_w, target_h) != (cur_w, cur_h)
 
                 # 1. Obtain Base Clean Mask (Hole-Filling & Speckle Removal)
                 raw_mask = self.tracked_masks.get(idx, None)
                 if raw_mask is None:
-                    raw_mask = np.zeros((self.orig_height, self.orig_width), dtype=np.uint8)
+                    raw_mask = np.zeros((cur_h, cur_w), dtype=np.uint8)
 
                 cache_key = (idx, fill_holes, min_speckle)
                 base_mask = self._base_mask_cache.get(cache_key, None)
@@ -950,8 +1035,16 @@ class SAM2MaskingEngine:
 
                     self._base_mask_cache[cache_key] = base_mask
 
+                # Guarantee base_mask matches native frame dimensions
+                if base_mask.shape[:2] != (cur_h, cur_w):
+                    base_mask = cv2.resize(base_mask, (cur_w, cur_h), interpolation=cv2.INTER_NEAREST)
+
                 # 2. Frame Image Fetch (Only when Cutout is requested)
                 rgb = self.get_frame_rgb(idx) if export_cutout else None
+                if rgb is not None and rgb.shape[:2] != (cur_h, cur_w):
+                    cur_h, cur_w = rgb.shape[:2]
+                    target_w, target_h = compute_scaled_size(cur_w, cur_h, scale_mode)
+                    needs_rescale = (target_w, target_h) != (cur_w, cur_h)
 
                 # 3. Morphology, Smoothing, Rescaling & Channel Packing
                 if use_gpu:
@@ -978,7 +1071,7 @@ class SAM2MaskingEngine:
                             if threshold > 0:
                                 m_t = (m_t >= float(threshold)).float() * 255.0
 
-                        # GPU Rescaling
+                        # GPU Rescaling preserving individual frame aspect ratio
                         if needs_rescale:
                             m_t = torch.nn.functional.interpolate(m_t, size=(target_h, target_w), mode="nearest")
                             if rgb is not None:
@@ -1020,7 +1113,8 @@ class SAM2MaskingEngine:
                     if needs_rescale:
                         mask_host = cv2.resize(mask_host, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
                         if rgb is not None:
-                            rgb = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_AREA if target_w < self.orig_width else cv2.INTER_LINEAR)
+                            interp = cv2.INTER_AREA if (target_w < cur_w or target_h < cur_h) else cv2.INTER_LINEAR
+                            rgb = cv2.resize(rgb, (target_w, target_h), interpolation=interp)
 
                     rgba_host = np.dstack([rgb, mask_host]) if rgb is not None else None
 
@@ -1106,5 +1200,5 @@ class SAM2MaskingEngine:
             "fps": fps,
             "avg_cutout_mb": avg_cutout_mb,
             "saved_mb": saved_mb,
-            "scale_res": f"{target_w}x{target_h}"
+            "scale_res": "Adaptive (Preserves H/V Ratios)" if has_mixed_ratios else f"{sample_w}x{sample_h}"
         }
