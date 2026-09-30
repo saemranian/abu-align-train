@@ -570,7 +570,11 @@ class SAM2MaskerDialog:
         self.dialog.bind("<Alt_R>", self._on_alt_down)
         self.dialog.bind("<KeyRelease-Alt_L>", self._on_alt_up)
         self.dialog.bind("<KeyRelease-Alt_R>", self._on_alt_up)
+        self.dialog.bind("<FocusOut>", lambda e: self._on_alt_up())
+        self.dialog.bind("<FocusIn>", lambda e: self._on_alt_up())
         self.canvas.bind("<Alt-ButtonPress-1>", self._on_canvas_alt_down)
+        self.canvas.bind("<Enter>", self._sync_alt_state)
+        self.canvas.bind("<Leave>", lambda e: self._on_alt_up())
 
         # Keyboard shortcuts
         self.dialog.bind("<space>", lambda e: self._toggle_playback())
@@ -812,6 +816,12 @@ class SAM2MaskerDialog:
         self.canvas.configure(cursor="crosshair")
         self.status_lbl.configure(text="Ready. Left-Click adds (+) · Hold Alt + Click (or Right-Click) to Erase (−)", fg=MUTED)
 
+    def _sync_alt_state(self, event=None):
+        """Ensures is_alt_pressed is cleared if the physical Alt key is not depressed."""
+        if event and hasattr(event, "state"):
+            if not bool(event.state & 0x20000):
+                self._on_alt_up()
+
     def _on_canvas_alt_down(self, event):
         """Dedicated handler for Alt+Left Click directly erasing mask at clicked point."""
         if self.engine.num_frames == 0:
@@ -826,13 +836,9 @@ class SAM2MaskerDialog:
             return
 
         # Check Alt key or Shift key (Alt / Shift + Left Click = Erase / Negative Prompt)
-        is_alt = (
-            self.is_alt_pressed
-            or bool(event.state & 0x20000)
-            or bool(event.state & 0x0008)
-            or bool(event.state & 0x0080)
-        )
-        is_shift = (event.state & 0x0001) != 0
+        # Note: 0x20000 is Alt on Windows. NEVER test 0x0008 (which is NumLock!) or 0x0080.
+        is_alt = bool(event.state & 0x20000) or self.is_alt_pressed
+        is_shift = bool(event.state & 0x0001)
         mode = self.prompt_mode.get()
 
         if mode == "Box":
@@ -844,6 +850,8 @@ class SAM2MaskerDialog:
         img_y = (event.y - self.pan_y) / self.zoom
 
         if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
+            # Normal left click in Foreground mode is label 1 (Subject / Green +)
+            # Erase is triggered ONLY by holding Alt, holding Shift, or selecting Erase mode
             label = 0 if (is_alt or is_shift or mode == "Background") else 1
             self._apply_point_prompt(img_x, img_y, label)
 

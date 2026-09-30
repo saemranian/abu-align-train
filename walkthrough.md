@@ -1,10 +1,11 @@
-# Walkthrough: Abu Align & Train v0.1.1.5
-## Full-Sequence Bidirectional Propagation, 60+ FPS Viewport Slicing, Alt-Erase & Modular Export Pipeline
+# Walkthrough: Abu Align & Train v0.1.1.6
+## Full-Sequence Bidirectional Propagation, Viewport Slicing, Alt-Erase & Windows Click Modifier Isolation
 
 ### 1. Executive Summary
-In release **v0.1.1.5**, Abu Align delivers core usability and performance breakthroughs in the **AI Masking Studio** (`sam2_engine.py`, `sam2_masker_ui.py`):
-- **Full-Sequence Bidirectional Propagation**: Fixed temporal tracking asymmetry where "Track Full Sequence (Both Directions)" previously stalled at frame 0. Forward passes now propagate from the earliest keyframe to sequence end, while backward passes propagate down to frame 0 with GPU `bfloat16` autocasting.
-- **Lag-Free 60+ FPS Zoom, Pan & Resizing**: Replaced full-frame re-filtering with a **Composite Frame Cache** and **Viewport Canvas Slicing**. Only the visible screen pixels are resized in $< 1\text{ ms}$, eliminating UI lag and 200MB+ memory reallocations during mousewheel zoom.
+In release **v0.1.1.6**, Abu Align fixes a critical click modifier detection bug in the **AI Masking Studio** (`sam2_engine.py`, `sam2_masker_ui.py`):
+- **Fixed Windows NumLock Click Modifier Conflict**: On Windows keyboards, `0x0008` is the hardware `Mod2` bitmask representing the active **NumLock** state. Testing this bit previously caused standard left-clicks to be misinterpreted as Alt-held erase points (`label=0`), drawing only red minus circles and failing to detect subjects. Alt detection has now been strictly isolated to Windows bit 17 (`0x20000`), restoring instantaneous subject segmentation on normal clicks while preserving `Alt+Click` erasing.
+- **Full-Sequence Bidirectional Propagation**: Fixed temporal tracking asymmetry where "Track Full Sequence (Both Directions)" previously stalled at frame 0. Forward passes propagate from the earliest keyframe to sequence end, while backward passes propagate down to frame 0 with GPU `bfloat16` autocasting.
+- **Lag-Free 60+ FPS Zoom, Pan & Resizing**: Replaced full-frame re-filtering with a **Composite Frame Cache** and **Viewport Canvas Slicing**. Only visible screen pixels are resized in $< 1\text{ ms}$, eliminating UI lag and 200MB+ memory reallocations during mousewheel zoom.
 - **Interactive Erase / Subtract Mask via `Alt + Click`**: Creators can hold `Alt` and left-click (or right-click) anywhere on the mask to subtract/erase that spot (`label=0`), immediately refining silhouette boundaries.
 - **Optional Alpha Transparent Cutouts**: Added a dedicated `[ ] Generate Alpha Transparent Cutouts (RGBA) [Optional]` checkmark with dynamic codec UI enabling, defaulting to RealityScan binary-only export for maximum efficiency.
 
