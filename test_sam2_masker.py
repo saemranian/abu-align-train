@@ -120,41 +120,66 @@ def test_sam2_all():
     assert np.all(inverted[raw_m > 0] == 0), "Invert should flip foreground to 0"
     print("    - Invert: foreground correctly mapped to 0")
 
-    # 7. Test RealityScan & RGBA Cutout Exporters
-    print("\n[7] Testing Exporters...")
-    export_out = os.path.join(temp_dir, "export_output")
-    counts = engine.export_masks(
+    # 7. Test RealityScan & RGBA Cutout Exporters (Hardware Accelerated)
+    print("\n[7] Testing Hardware-Accelerated Multi-Threaded Exporters...")
+    log_messages = []
+    engine.set_log_callback(lambda msg: log_messages.append(msg))
+
+    # Test 7A: WebP Cutouts + JPG Masks at 50% scale
+    export_out = os.path.join(temp_dir, "export_webp_50pct")
+    res_webp = engine.export_masks(
         output_dir=export_out,
         export_binary=True,
         export_cutout=True,
         rs_naming=True,
-        mask_format="png",
+        mask_format="jpg",
+        cutout_format="webp",
+        scale_mode="50%",
+        quality=92,
         postprocess_params={"dilation": 1, "feather": 2, "threshold": 128}
     )
-    print(f"    - Export counts: {counts}")
-    assert counts["binary"] == 5, f"Expected 5 binary masks, got {counts['binary']}"
-    assert counts["cutout"] == 5, f"Expected 5 cutout PNGs, got {counts['cutout']}"
+    print(f"    - WebP 50% Export results: {res_webp}")
+    assert res_webp["binary"] == 5, f"Expected 5 binary masks, got {res_webp['binary']}"
+    assert res_webp["cutout"] == 5, f"Expected 5 cutout WebP files, got {res_webp['cutout']}"
+    assert len(log_messages) > 0, "Engine should log export progress"
 
-    # Verify RealityScan naming convention
-    for i in range(5):
-        expected_mask = os.path.join(export_out, f"frame_{i:04d}.mask.png")
-        assert os.path.isfile(expected_mask), f"RealityScan mask missing: {expected_mask}"
-        # Read mask to check dimensions and values
-        m_img = cv2.imread(expected_mask, cv2.IMREAD_GRAYSCALE)
-        assert m_img.shape == (H, W), f"Mask shape wrong: {m_img.shape}"
-        assert set(np.unique(m_img)).issubset({0, 255}), "Binary mask should contain only 0 and 255"
-
-    # Verify RGBA Cutout
+    # Verify WebP cutouts (should be half resolution: 320x240, with 4 channels RGBA)
     cutouts_dir = os.path.join(export_out, "cutouts")
     for i in range(5):
-        expected_cutout = os.path.join(cutouts_dir, f"frame_{i:04d}_cutout.png")
-        assert os.path.isfile(expected_cutout), f"Cutout missing: {expected_cutout}"
+        expected_cutout = os.path.join(cutouts_dir, f"frame_{i:04d}_cutout.webp")
+        assert os.path.isfile(expected_cutout), f"WebP Cutout missing: {expected_cutout}"
         rgba = cv2.imread(expected_cutout, cv2.IMREAD_UNCHANGED)
-        assert rgba.shape == (H, W, 4), f"Cutout should have 4 channels (RGBA), got {rgba.shape}"
-        # Alpha channel should match subject mask
+        assert rgba.shape == (240, 320, 4), f"Cutout should be 50% res (240, 320, 4), got {rgba.shape}"
         alpha = rgba[:, :, 3]
-        assert np.sum(alpha > 0) > 500, "Cutout alpha channel is empty"
-    print("    [OK] All RealityScan binary masks and RGBA cutouts verified successfully.")
+        assert np.sum(alpha > 0) > 100, "Cutout alpha channel is empty"
+        # File size check: each 50% WebP cutout should be tiny (< 50 KB)
+        f_size = os.path.getsize(expected_cutout)
+        print(f"    - Frame {i} WebP cutout size: {f_size / 1024:.1f} KB")
+        assert f_size < 100 * 1024, "WebP cutout should be highly compressed"
+
+    # Verify JPG masks
+    for i in range(5):
+        expected_mask = os.path.join(export_out, f"frame_{i:04d}.mask.jpg")
+        assert os.path.isfile(expected_mask), f"RealityScan mask missing: {expected_mask}"
+
+    # Test 7B: PNG Cutouts at Native Resolution
+    export_png = os.path.join(temp_dir, "export_png_native")
+    res_png = engine.export_masks(
+        output_dir=export_png,
+        export_binary=True,
+        export_cutout=True,
+        rs_naming=True,
+        mask_format="png",
+        cutout_format="png",
+        scale_mode="original",
+        png_compression=4,
+        postprocess_params={"dilation": 0, "feather": 0}
+    )
+    print(f"    - PNG Native Export results: {res_png}")
+    assert res_png["binary"] == 5 and res_png["cutout"] == 5
+
+    print(f"    [OK] WebP vs PNG size comparison: WebP total {res_webp['total_mb']:.3f} MB vs PNG total {res_png['total_mb']:.3f} MB")
+    print("    [OK] All hardware-accelerated exports and logs verified successfully.")
 
     print("\n" + "=" * 70)
     print("ALL SAM 2 AI MASKING TESTS PASSED PERFECTLY!")

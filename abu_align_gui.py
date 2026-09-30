@@ -2020,7 +2020,8 @@ class AbuAlignApp:
             init_p = initial_path
             if not init_p and hasattr(self, "dataset_var"):
                 init_p = self.dataset_var.get().strip() or None
-            open_sam2_masker_dialog(self.root, initial_path=init_p)
+            log_cb = self._log if hasattr(self, "_log") else None
+            open_sam2_masker_dialog(self.root, initial_path=init_p, log_callback=log_cb)
         except Exception as e:
             messagebox.showerror("SAM 2 Masker Error", f"Failed to open SAM 2 Masking Studio:\n{e}")
 

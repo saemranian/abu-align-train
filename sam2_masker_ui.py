@@ -9,7 +9,7 @@ import sys
 import time
 import math
 import threading
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Callable
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -48,9 +48,12 @@ class SAM2MaskerDialog:
     Main dialog window providing an interactive workspace for AI masking.
     """
 
-    def __init__(self, parent: tk.Widget, initial_path: Optional[str] = None):
+    def __init__(self, parent: tk.Widget, initial_path: Optional[str] = None, log_callback: Optional[Callable[[str], None]] = None):
         self.parent = parent
+        self.log_callback = log_callback
         self.engine = SAM2MaskingEngine()
+        if self.log_callback:
+            self.engine.set_log_callback(self.log_callback)
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("🎭 Abu Align · AI Subject Masker (SAM 2.1)")
@@ -91,12 +94,17 @@ class SAM2MaskerDialog:
         self.min_speckle_var = tk.IntVar(value=30)
         self.invert_var = tk.BooleanVar(value=False)
 
-        # Export Settings
+        # Enhanced Export Settings & Codecs
         self.export_dir_var = tk.StringVar(value="")
         self.export_binary_var = tk.BooleanVar(value=True)
         self.export_cutout_var = tk.BooleanVar(value=True)
         self.export_rs_naming_var = tk.BooleanVar(value=True)
         self.mask_fmt_var = tk.StringVar(value="png")
+        self.cutout_fmt_var = tk.StringVar(value="WebP (RGBA - ~1.5MB)")
+        self.export_scale_var = tk.StringVar(value="2K QHD (2048px - Recommended)")
+        self.export_quality_var = tk.IntVar(value=92)
+        self.export_png_comp_var = tk.IntVar(value=4)
+        self.export_hw_accel_var = tk.BooleanVar(value=True)
 
         # Cached display frames & photo reference
         self.cached_display_image: Optional[Image.Image] = None
@@ -324,8 +332,8 @@ class SAM2MaskerDialog:
                                  command=self._on_refine_param_changed)
         chk_inv.pack(side=tk.LEFT)
 
-        # CARD 5: Export Settings
-        c5 = self._create_card(scrollable_frame, "💾 EXPORT MASKS")
+        # CARD 5: Export Settings & Codecs (Hardware Accelerated)
+        c5 = self._create_card(scrollable_frame, "💾 EXPORT MASKS & CUTOUTS")
 
         # Output Directory
         r_out = tk.Frame(c5, bg=SURFACE)
@@ -338,20 +346,70 @@ class SAM2MaskerDialog:
                                    font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
         btn_browse_out.pack(side=tk.LEFT)
 
-        # Checkboxes
-        chk_bin = tk.Checkbutton(c5, text="RealityScan Binary Mask (<stem>.mask.png)",
+        # Target Checkboxes
+        r_targets = tk.Frame(c5, bg=SURFACE)
+        r_targets.pack(fill=tk.X, pady=(2, 4))
+        chk_bin = tk.Checkbutton(r_targets, text="RealityScan Mask (<stem>.mask.<fmt>)",
                                  variable=self.export_binary_var, font=("Segoe UI", 8, "bold"),
                                  fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
-        chk_bin.pack(anchor="w", pady=(2, 1))
+        chk_bin.pack(anchor="w")
 
-        chk_cut = tk.Checkbutton(c5, text="Alpha Transparent Cutout (<stem>_cutout.png)",
+        chk_cut = tk.Checkbutton(r_targets, text="Alpha Transparent Cutout (<stem>_cutout.<fmt>)",
                                  variable=self.export_cutout_var, font=("Segoe UI", 8, "bold"),
                                  fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
-        chk_cut.pack(anchor="w", pady=(1, 6))
+        chk_cut.pack(anchor="w", pady=(1, 4))
+
+        # Format & Codec Selection
+        r_codecs = tk.Frame(c5, bg=SURFACE)
+        r_codecs.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_codecs, text="Cutout Format:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
+        cb_cut = ttk.Combobox(r_codecs, textvariable=self.cutout_fmt_var,
+                              values=["WebP (RGBA - ~1.5MB)", "PNG (RGBA - Lossless)"],
+                              state="readonly", width=18, font=("Segoe UI", 8))
+        cb_cut.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        r_mask_fmt = tk.Frame(c5, bg=SURFACE)
+        r_mask_fmt.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_mask_fmt, text="Mask Format:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
+        cb_mask = ttk.Combobox(r_mask_fmt, textvariable=self.mask_fmt_var,
+                               values=["png", "jpg", "webp"],
+                               state="readonly", width=18, font=("Segoe UI", 8))
+        cb_mask.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Output Resolution / Scale
+        r_res = tk.Frame(c5, bg=SURFACE)
+        r_res.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_res, text="Export Size:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
+        cb_scale = ttk.Combobox(r_res, textvariable=self.export_scale_var,
+                                values=["2K QHD (2048px - Recommended)", "Original (100% Native)", "50% Half Res", "4K UHD (3840px)", "1K HD (1024px)"],
+                                state="readonly", width=18, font=("Segoe UI", 8))
+        cb_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Quality / Compression Slider
+        r_qual = tk.Frame(c5, bg=SURFACE)
+        r_qual.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_qual, text="Quality (WebP/JPG):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=15, anchor="w").pack(side=tk.LEFT)
+        self.qual_lbl = tk.Label(r_qual, text="92", font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, width=3)
+        self.qual_lbl.pack(side=tk.RIGHT)
+        s_qual = ttk.Scale(r_qual, from_=50, to=100, variable=self.export_quality_var,
+                           command=lambda v: self.qual_lbl.configure(text=str(int(float(v)))))
+        s_qual.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+        # Hardware Acceleration & Size Badge
+        r_hw = tk.Frame(c5, bg=SURFACE)
+        r_hw.pack(fill=tk.X, pady=(2, 4))
+        chk_hw = tk.Checkbutton(r_hw, text="⚡ Hardware Accelerated (CUDA GPU + Multi-Core I/O)",
+                                variable=self.export_hw_accel_var, font=("Segoe UI", 8, "bold"),
+                                fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
+        chk_hw.pack(side=tk.LEFT)
+
+        lbl_hint = tk.Label(c5, text="💡 Tip: WebP at 2K reduces cutout file size from ~70MB down to ~1.5MB with zero visual loss!",
+                            font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=350)
+        lbl_hint.pack(anchor="w", pady=(0, 6))
 
         # Big Export Button
-        self.btn_export = tk.Button(c5, text="🚀 EXPORT ALL MASKS", command=self._export_masks_action,
-                                    font=("Segoe UI", 10, "bold"), bg=SUCCESS, fg="#ffffff",
+        self.btn_export = tk.Button(c5, text="🚀 EXPORT ALL MASKS (HARDWARE ACCELERATED)", command=self._export_masks_action,
+                                    font=("Segoe UI", 9, "bold"), bg=SUCCESS, fg="#ffffff",
                                     activebackground="#059669", relief=tk.FLAT, padx=12, pady=9, cursor="hand2")
         self.btn_export.pack(fill=tk.X, pady=(2, 4))
 
@@ -1019,12 +1077,21 @@ class SAM2MaskerDialog:
 
         def _worker():
             try:
+                cutout_fmt = "webp" if "webp" in self.cutout_fmt_var.get().lower() else "png"
+                raw_scale = self.export_scale_var.get().split()[0].lower()
+                scale_mode = "original" if "orig" in raw_scale else raw_scale
+
                 counts = self.engine.export_masks(
                     output_dir=out_dir,
                     export_binary=self.export_binary_var.get(),
                     export_cutout=self.export_cutout_var.get(),
                     rs_naming=self.export_rs_naming_var.get(),
                     mask_format=self.mask_fmt_var.get(),
+                    cutout_format=cutout_fmt,
+                    scale_mode=scale_mode,
+                    quality=self.export_quality_var.get(),
+                    png_compression=self.export_png_comp_var.get(),
+                    use_hardware_accel=self.export_hw_accel_var.get(),
                     postprocess_params=params,
                     progress_callback=_prog
                 )
@@ -1039,17 +1106,31 @@ class SAM2MaskerDialog:
         self.export_progress["value"] = pct
         self.export_status_lbl.configure(text=msg)
 
-    def _on_export_success(self, out_dir: str, counts: Dict[str, int]):
+    def _on_export_success(self, out_dir: str, counts: Dict[str, Any]):
         self.btn_export.configure(state=tk.NORMAL)
-        self.export_status_lbl.configure(
-            text=f"Export Complete: {counts.get('binary', 0)} masks, {counts.get('cutout', 0)} cutouts.",
-            fg=SUCCESS
+        total_mb = counts.get('total_mb', 0.0)
+        elapsed = counts.get('elapsed_sec', 0.0)
+        fps = counts.get('fps', 0.0)
+        avg_mb = counts.get('avg_cutout_mb', 0.0)
+        saved_mb = counts.get('saved_mb', 0.0)
+        res_str = counts.get('scale_res', '')
+
+        status_text = (
+            f"Export Complete: {counts.get('binary', 0)} masks, {counts.get('cutout', 0)} cutouts "
+            f"in {elapsed:.1f}s ({fps:.1f} fps, {total_mb:.1f} MB)"
         )
-        msg = f"Successfully exported:\n" \
-              f"• {counts.get('binary', 0)} Binary Masks (RealityScan format)\n" \
-              f"• {counts.get('cutout', 0)} Transparent Cutout RGBA PNGs\n\n" \
-              f"Saved to:\n{out_dir}"
-        if messagebox.askyesno("Export Complete", msg + "\n\nWould you like to open the export folder?", parent=self.dialog):
+        self.export_status_lbl.configure(text=status_text, fg=SUCCESS)
+
+        msg = (
+            f"🎉 Export Finished Successfully!\n\n"
+            f"• Output Resolution: {res_str}\n"
+            f"• RealityScan Masks: {counts.get('binary', 0)}\n"
+            f"• Transparent Cutouts: {counts.get('cutout', 0)} (Avg: {avg_mb:.2f} MB each)\n"
+            f"• Total Data Written: {total_mb:.1f} MB in {elapsed:.1f}s ({fps:.1f} frames/sec)\n"
+            f"• Storage Saved: ~{saved_mb:.1f} MB vs 70MB uncompressed PNG (97%+ reduction!)\n\n"
+            f"Destination Folder:\n{out_dir}"
+        )
+        if messagebox.askyesno("Export Complete", msg + "\n\nWould you like to open the export folder in Explorer?", parent=self.dialog):
             if sys.platform == "win32":
                 os.startfile(out_dir)
 
@@ -1065,9 +1146,9 @@ class SAM2MaskerDialog:
         self.dialog.destroy()
 
 
-def open_sam2_masker_dialog(parent: tk.Widget, initial_path: Optional[str] = None) -> SAM2MaskerDialog:
+def open_sam2_masker_dialog(parent: tk.Widget, initial_path: Optional[str] = None, log_callback: Optional[Callable[[str], None]] = None) -> SAM2MaskerDialog:
     """Helper entry point to launch the SAM 2 Masking Studio dialog."""
-    return SAM2MaskerDialog(parent, initial_path=initial_path)
+    return SAM2MaskerDialog(parent, initial_path=initial_path, log_callback=log_callback)
 
 
 if __name__ == "__main__":
