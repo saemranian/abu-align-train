@@ -106,7 +106,7 @@ class SAM2MaskerDialog:
         self.cutout_fmt_var = tk.StringVar(value="WebP (RGBA - ~1.5MB)")
         self.export_scale_var = tk.StringVar(value="2K QHD (2048px - Recommended)")
         self.export_quality_var = tk.IntVar(value=92)
-        self.export_png_comp_var = tk.IntVar(value=4)
+        self.export_png_comp_var = tk.IntVar(value=1)
         self.export_hw_accel_var = tk.BooleanVar(value=True)
 
         # Mask & composite frame cache for ultra-smooth 60+ FPS zoom, pan, and scrubbing
