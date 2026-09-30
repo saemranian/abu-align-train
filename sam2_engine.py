@@ -491,6 +491,15 @@ class SAM2MaskingEngine:
         """Returns True if user added clicks or box on this frame."""
         return frame_idx in self.prompts and (len(self.prompts[frame_idx]["points"]) > 0 or self.prompts[frame_idx]["box"] is not None)
 
+    def _autocast_context(self):
+        """Returns PyTorch autocast context for bfloat16/float16 acceleration on CUDA."""
+        if self.device == "cuda":
+            if torch.cuda.is_bf16_supported():
+                return torch.autocast("cuda", dtype=torch.bfloat16)
+            return torch.autocast("cuda", dtype=torch.float16)
+        import contextlib
+        return contextlib.nullcontext()
+
     def _evaluate_frame_prompts(self, frame_idx: int, obj_id: int = 1) -> np.ndarray:
         """Evaluates accumulated prompts on a frame and updates SAM 2 state."""
         prompt_data = self.prompts[frame_idx]
@@ -498,15 +507,16 @@ class SAM2MaskingEngine:
         labels = np.array(prompt_data["labels"], dtype=np.int32) if prompt_data["labels"] else None
         box = np.array(prompt_data["box"], dtype=np.float32) if prompt_data["box"] is not None else None
 
-        _, _, mask_logits = self.video_predictor.add_new_points_or_box(
-            inference_state=self.inference_state,
-            frame_idx=frame_idx,
-            obj_id=obj_id,
-            points=points,
-            labels=labels,
-            box=box,
-            clear_old_points=True
-        )
+        with torch.inference_mode(), self._autocast_context():
+            _, _, mask_logits = self.video_predictor.add_new_points_or_box(
+                inference_state=self.inference_state,
+                frame_idx=frame_idx,
+                obj_id=obj_id,
+                points=points,
+                labels=labels,
+                box=box,
+                clear_old_points=True
+            )
 
         # Convert logits tensor to binary mask uint8
         mask_np = (mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
@@ -537,43 +547,72 @@ class SAM2MaskingEngine:
             raise RuntimeError("Please place at least one prompt click before propagating.")
 
         keyframes = self.get_keyframes()
-        if start_frame is None:
-            start_frame = keyframes[0]
+        if not keyframes:
+            raise RuntimeError("Please place at least one prompt click before propagating.")
+
+        earliest_kf = min(keyframes)
+        latest_kf = max(keyframes)
 
         total_steps = self.num_frames
         current_step = 0
 
-        # Step 1: Forward propagation
-        if direction in ("forward", "both"):
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(
-                self.inference_state,
-                start_frame_idx=start_frame,
-                reverse=False
-            ):
-                if cancel_token and cancel_token():
-                    break
-                mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
-                self.tracked_masks[out_frame_idx] = mask_np
-                current_step += 1
-                if progress_callback:
-                    pct = min(100, int(current_step * 100 / total_steps))
-                    progress_callback(current_step, total_steps, f"Tracking forward: frame {out_frame_idx}/{self.num_frames - 1} ({pct}%)")
+        with torch.inference_mode(), self._autocast_context():
+            # Step 1: Forward propagation
+            if direction in ("forward", "both"):
+                if direction == "both":
+                    start_fwd = earliest_kf
+                else:
+                    start_fwd = start_frame if start_frame is not None else earliest_kf
+                    if start_fwd not in keyframes:
+                        valid_kfs = [k for k in keyframes if k <= start_fwd]
+                        start_fwd = max(valid_kfs) if valid_kfs else earliest_kf
 
-        # Step 2: Backward propagation
-        if direction in ("backward", "both"):
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(
-                self.inference_state,
-                start_frame_idx=start_frame,
-                reverse=True
-            ):
-                if cancel_token and cancel_token():
-                    break
-                mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
-                self.tracked_masks[out_frame_idx] = mask_np
-                current_step += 1
-                if progress_callback:
-                    pct = min(100, int(current_step * 100 / total_steps))
-                    progress_callback(current_step, total_steps, f"Tracking backward: frame {out_frame_idx}/0 ({pct}%)")
+                self.log(f"Starting forward tracking from keyframe {start_fwd} to {self.num_frames - 1}...")
+                for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(
+                    self.inference_state,
+                    start_frame_idx=start_fwd,
+                    reverse=False
+                ):
+                    if cancel_token and cancel_token():
+                        break
+                    mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
+                    self.tracked_masks[out_frame_idx] = mask_np
+                    current_step += 1
+                    if progress_callback:
+                        pct = min(100, int(current_step * 100 / total_steps))
+                        progress_callback(current_step, total_steps, f"Forward tracking: frame {out_frame_idx}/{self.num_frames - 1} ({pct}%)")
+
+            # Step 2: Backward propagation
+            if direction in ("backward", "both"):
+                if direction == "both":
+                    start_bwd = earliest_kf
+                else:
+                    start_bwd = start_frame if start_frame is not None else latest_kf
+                    if start_bwd not in keyframes:
+                        valid_kfs = [k for k in keyframes if k >= start_bwd]
+                        start_bwd = min(valid_kfs) if valid_kfs else latest_kf
+
+                if start_bwd > 0:
+                    self.log(f"Starting backward tracking from keyframe {start_bwd} down to frame 0...")
+                    for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(
+                        self.inference_state,
+                        start_frame_idx=start_bwd,
+                        reverse=True
+                    ):
+                        if cancel_token and cancel_token():
+                            break
+                        mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
+                        self.tracked_masks[out_frame_idx] = mask_np
+                        current_step += 1
+                        if progress_callback:
+                            pct = min(100, int(current_step * 100 / total_steps))
+                            progress_callback(current_step, total_steps, f"Backward tracking: frame {out_frame_idx}/0 ({pct}%)")
+                else:
+                    self.log(f"Backward tracking skipped: sequence start frame {start_bwd} already reached.")
+                    if direction == "both" and current_step < total_steps:
+                        current_step = total_steps
+                        if progress_callback:
+                            progress_callback(current_step, total_steps, f"Tracking complete: all {self.num_frames} frames covered.")
 
         return self.tracked_masks
 

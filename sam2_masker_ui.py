@@ -94,10 +94,13 @@ class SAM2MaskerDialog:
         self.min_speckle_var = tk.IntVar(value=30)
         self.invert_var = tk.BooleanVar(value=False)
 
-        # Enhanced Export Settings & Codecs
+        # Alt key state for Erase / Subtract mode
+        self.is_alt_pressed: bool = False
+
+        # Enhanced Export Settings & Codecs (Cutout is optional with checkmark)
         self.export_dir_var = tk.StringVar(value="")
         self.export_binary_var = tk.BooleanVar(value=True)
-        self.export_cutout_var = tk.BooleanVar(value=True)
+        self.export_cutout_var = tk.BooleanVar(value=False)
         self.export_rs_naming_var = tk.BooleanVar(value=True)
         self.mask_fmt_var = tk.StringVar(value="png")
         self.cutout_fmt_var = tk.StringVar(value="WebP (RGBA - ~1.5MB)")
@@ -105,6 +108,11 @@ class SAM2MaskerDialog:
         self.export_quality_var = tk.IntVar(value=92)
         self.export_png_comp_var = tk.IntVar(value=4)
         self.export_hw_accel_var = tk.BooleanVar(value=True)
+
+        # Composite frame cache for ultra-smooth 60+ FPS zoom, pan, and resize
+        self._composite_cache_key = None
+        self._composite_cache_img = None
+        self._resize_timer = None
 
         # Cached display frames & photo reference
         self.cached_display_image: Optional[Image.Image] = None
@@ -229,12 +237,16 @@ class SAM2MaskerDialog:
         r_prompts.pack(fill=tk.X, pady=(2, 6))
 
         for text, val, col in [("Foreground (+)", "Foreground", SUCCESS),
-                               ("Background (-)", "Background", DANGER),
-                               ("Box", "Box", ACCENT)]:
+                               ("Erase / Background (-) [Alt+Click]", "Background", DANGER),
+                               ("Box Select", "Box", ACCENT)]:
             rb = tk.Radiobutton(r_prompts, text=text, variable=self.prompt_mode, value=val,
                                 font=("Segoe UI", 8, "bold"), fg=col, bg=SURFACE, selectcolor=FIELD,
                                 activebackground=SURFACE, activeforeground=col)
-            rb.pack(side=tk.LEFT, padx=(0, 8))
+            rb.pack(side=tk.LEFT, padx=(0, 6))
+
+        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Left-Click adds (+) · Hold Alt + Click (or Right-Click) to Erase (−)",
+                                   font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE)
+        lbl_prompt_hint.pack(anchor="w", pady=(0, 4))
 
         r_pbtns = tk.Frame(c2, bg=SURFACE)
         r_pbtns.pack(fill=tk.X, pady=(2, 4))
@@ -346,27 +358,30 @@ class SAM2MaskerDialog:
                                    font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
         btn_browse_out.pack(side=tk.LEFT)
 
-        # Target Checkboxes
+        # Target Checkboxes (Cutout is Optional)
         r_targets = tk.Frame(c5, bg=SURFACE)
         r_targets.pack(fill=tk.X, pady=(2, 4))
-        chk_bin = tk.Checkbutton(r_targets, text="RealityScan Mask (<stem>.mask.<fmt>)",
-                                 variable=self.export_binary_var, font=("Segoe UI", 8, "bold"),
-                                 fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
-        chk_bin.pack(anchor="w")
+        self.chk_bin = tk.Checkbutton(r_targets, text="RealityScan Binary Masks (<stem>.mask.<fmt>)",
+                                      variable=self.export_binary_var, font=("Segoe UI", 8, "bold"),
+                                      fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
+                                      command=self._on_export_targets_changed)
+        self.chk_bin.pack(anchor="w")
 
-        chk_cut = tk.Checkbutton(r_targets, text="Alpha Transparent Cutout (<stem>_cutout.<fmt>)",
-                                 variable=self.export_cutout_var, font=("Segoe UI", 8, "bold"),
-                                 fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
-        chk_cut.pack(anchor="w", pady=(1, 4))
+        self.chk_cut = tk.Checkbutton(r_targets, text="Generate Alpha Transparent Cutouts (RGBA) [Optional]",
+                                      variable=self.export_cutout_var, font=("Segoe UI", 8, "bold"),
+                                      fg=TEXT, bg=SURFACE, selectcolor=FIELD,
+                                      command=self._on_export_targets_changed)
+        self.chk_cut.pack(anchor="w", pady=(1, 4))
 
         # Format & Codec Selection
         r_codecs = tk.Frame(c5, bg=SURFACE)
         r_codecs.pack(fill=tk.X, pady=(2, 4))
-        tk.Label(r_codecs, text="Cutout Format:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
-        cb_cut = ttk.Combobox(r_codecs, textvariable=self.cutout_fmt_var,
-                              values=["WebP (RGBA - ~1.5MB)", "PNG (RGBA - Lossless)"],
-                              state="readonly", width=18, font=("Segoe UI", 8))
-        cb_cut.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cutout_fmt_lbl = tk.Label(r_codecs, text="Cutout Format:", font=("Segoe UI", 8), fg=DISABLED, bg=SURFACE, width=12, anchor="w")
+        self.cutout_fmt_lbl.pack(side=tk.LEFT)
+        self.cb_cut = ttk.Combobox(r_codecs, textvariable=self.cutout_fmt_var,
+                                  values=["WebP (RGBA - ~1.5MB)", "PNG (RGBA - Lossless)"],
+                                  state="disabled", width=18, font=("Segoe UI", 8))
+        self.cb_cut.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         r_mask_fmt = tk.Frame(c5, bg=SURFACE)
         r_mask_fmt.pack(fill=tk.X, pady=(2, 4))
@@ -408,7 +423,7 @@ class SAM2MaskerDialog:
         lbl_hint.pack(anchor="w", pady=(0, 6))
 
         # Big Export Button
-        self.btn_export = tk.Button(c5, text="🚀 EXPORT ALL MASKS (HARDWARE ACCELERATED)", command=self._export_masks_action,
+        self.btn_export = tk.Button(c5, text="🚀 EXPORT REALITYSCAN MASKS (BINARY ONLY)", command=self._export_masks_action,
                                     font=("Segoe UI", 9, "bold"), bg=SUCCESS, fg="#ffffff",
                                     activebackground="#059669", relief=tk.FLAT, padx=12, pady=9, cursor="hand2")
         self.btn_export.pack(fill=tk.X, pady=(2, 4))
@@ -546,9 +561,16 @@ class SAM2MaskerDialog:
         self.canvas.bind("<B3-Motion>", self._on_canvas_pan_drag)
         self.canvas.bind("<ButtonRelease-3>", self._on_canvas_pan_end)
 
-        # Zoom via Mouse Wheel
+        # Zoom via Mouse Wheel & Canvas Resizing
         self.canvas.bind("<MouseWheel>", self._on_canvas_mousewheel)
         self.canvas.bind("<Configure>", self._on_canvas_resize)
+
+        # Alt key bindings for Erase / Negative Prompt
+        self.dialog.bind("<Alt_L>", self._on_alt_down)
+        self.dialog.bind("<Alt_R>", self._on_alt_down)
+        self.dialog.bind("<KeyRelease-Alt_L>", self._on_alt_up)
+        self.dialog.bind("<KeyRelease-Alt_R>", self._on_alt_up)
+        self.canvas.bind("<Alt-ButtonPress-1>", self._on_canvas_alt_down)
 
         # Keyboard shortcuts
         self.dialog.bind("<space>", lambda e: self._toggle_playback())
@@ -767,17 +789,49 @@ class SAM2MaskerDialog:
         self.is_panning = False
 
     def _on_canvas_resize(self, event):
-        self._render_current_frame()
+        if self._resize_timer is not None:
+            self.dialog.after_cancel(self._resize_timer)
+        self._resize_timer = self.dialog.after(25, self._debounced_resize)
+
+    def _debounced_resize(self):
+        self._resize_timer = None
+        if self.engine.num_frames > 0:
+            self._render_current_frame()
 
     # -------------------------------------------------------------------------
-    # Interactive Prompts Handling (Left Click / Right Click / Box Drag)
+    # Interactive Prompts Handling (Left Click / Alt+Click / Right Click / Box)
     # -------------------------------------------------------------------------
+
+    def _on_alt_down(self, event=None):
+        self.is_alt_pressed = True
+        self.canvas.configure(cursor="circle")
+        self.status_lbl.configure(text="[ALT HELD] Click anywhere on the mask to ERASE / Subtract (−)", fg=DANGER)
+
+    def _on_alt_up(self, event=None):
+        self.is_alt_pressed = False
+        self.canvas.configure(cursor="crosshair")
+        self.status_lbl.configure(text="Ready. Left-Click adds (+) · Hold Alt + Click (or Right-Click) to Erase (−)", fg=MUTED)
+
+    def _on_canvas_alt_down(self, event):
+        """Dedicated handler for Alt+Left Click directly erasing mask at clicked point."""
+        if self.engine.num_frames == 0:
+            return
+        img_x = (event.x - self.pan_x) / self.zoom
+        img_y = (event.y - self.pan_y) / self.zoom
+        if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
+            self._apply_point_prompt(img_x, img_y, label=0)
 
     def _on_canvas_left_down(self, event):
         if self.engine.num_frames == 0:
             return
 
-        # Check if Shift is held down (Shift + Left Click = Background Prompt)
+        # Check Alt key or Shift key (Alt / Shift + Left Click = Erase / Negative Prompt)
+        is_alt = (
+            self.is_alt_pressed
+            or bool(event.state & 0x20000)
+            or bool(event.state & 0x0008)
+            or bool(event.state & 0x0080)
+        )
         is_shift = (event.state & 0x0001) != 0
         mode = self.prompt_mode.get()
 
@@ -790,7 +844,7 @@ class SAM2MaskerDialog:
         img_y = (event.y - self.pan_y) / self.zoom
 
         if 0 <= img_x < self.engine.orig_width and 0 <= img_y < self.engine.orig_height:
-            label = 0 if (is_shift or mode == "Background") else 1
+            label = 0 if (is_alt or is_shift or mode == "Background") else 1
             self._apply_point_prompt(img_x, img_y, label)
 
     def _on_canvas_left_drag(self, event):
@@ -824,7 +878,7 @@ class SAM2MaskerDialog:
                 self._apply_box_prompt([ix0, iy0, ix1, iy1])
 
     def _on_canvas_right_down(self, event):
-        # Right click adds a negative (background) prompt directly
+        # Right click adds a negative (erase) prompt directly
         if self.engine.num_frames == 0:
             return
 
@@ -838,11 +892,14 @@ class SAM2MaskerDialog:
             self._on_canvas_pan_start(event)
 
     def _apply_point_prompt(self, x: float, y: float, label: int):
-        self.status_lbl.configure(text=f"Evaluating prompt on frame {self.current_frame_idx + 1}...", fg=ACCENT)
+        lbl_text = "Erase (−)" if label == 0 else "Foreground (+)"
+        self.status_lbl.configure(text=f"Evaluating {lbl_text} prompt on frame {self.current_frame_idx + 1}...",
+                                  fg=DANGER if label == 0 else ACCENT)
         try:
             self.engine.add_point(self.current_frame_idx, x, y, label=label)
+            self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
-            self.status_lbl.configure(text="Prompt evaluated successfully", fg=SUCCESS)
+            self.status_lbl.configure(text=f"{lbl_text} prompt evaluated successfully", fg=SUCCESS)
         except Exception as e:
             self.status_lbl.configure(text=f"Prompt Error: {e}", fg=DANGER)
 
@@ -850,6 +907,7 @@ class SAM2MaskerDialog:
         self.status_lbl.configure(text=f"Evaluating box on frame {self.current_frame_idx + 1}...", fg=ACCENT)
         try:
             self.engine.add_box(self.current_frame_idx, box)
+            self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
             self.status_lbl.configure(text="Box evaluated successfully", fg=SUCCESS)
         except Exception as e:
@@ -857,16 +915,19 @@ class SAM2MaskerDialog:
 
     def _undo_last_prompt(self):
         self.engine.remove_last_prompt(self.current_frame_idx)
+        self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
 
     def _clear_current_frame_prompts(self):
         self.engine.clear_frame_prompts(self.current_frame_idx)
+        self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
 
     def _clear_all_prompts(self):
         if messagebox.askyesno("Reset All Prompts", "Are you sure you want to clear all prompts and tracked masks across all frames?", parent=self.dialog):
             self.engine.prompts.clear()
             self.engine.tracked_masks.clear()
+            self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
 
     # -------------------------------------------------------------------------
@@ -886,7 +947,8 @@ class SAM2MaskerDialog:
         self.track_progress["value"] = 0
         self.btn_export.configure(state=tk.DISABLED)
 
-        start_frame = self.current_frame_idx
+        # For single directional tracking, use current frame; for "both", pass None so engine starts from earliest keyframe
+        start_frame = self.current_frame_idx if direction != "both" else None
 
         def _prog(cur, tot, msg):
             pct = int(cur * 100 / tot)
@@ -914,7 +976,8 @@ class SAM2MaskerDialog:
     def _on_tracking_completed(self):
         self.is_tracking = False
         self.btn_export.configure(state=tk.NORMAL)
-        self.track_status_lbl.configure(text="Tracking complete!", fg=SUCCESS)
+        self.track_status_lbl.configure(text=f"Tracking complete ({len(self.engine.tracked_masks)} frames tracked)!", fg=SUCCESS)
+        self._composite_cache_key = None
         self._render_current_frame()
 
     # -------------------------------------------------------------------------
@@ -947,72 +1010,110 @@ class SAM2MaskerDialog:
         return bg
 
     def _render_current_frame(self):
-        if self.engine.num_frames == 0 or self.canvas.winfo_width() <= 1:
+        if self.engine.num_frames == 0:
             return
 
-        try:
-            rgb = self.engine.get_frame_rgb(self.current_frame_idx)
-        except Exception:
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        if canvas_w <= 1 or canvas_h <= 1:
             return
 
-        # Fetch refined mask for this frame
-        mask = self.engine.get_processed_mask(
+        orig_w = self.engine.orig_width
+        orig_h = self.engine.orig_height
+        if orig_w <= 0 or orig_h <= 0:
+            return
+
+        # 1. Composite Frame Cache: Only recompute full mask & blending when frame/params change
+        p_data = self.engine.prompts.get(self.current_frame_idx, {})
+        pts_tuple = tuple(p_data.get("points", []))
+        lbls_tuple = tuple(p_data.get("labels", []))
+        box_tuple = tuple(p_data["box"]) if p_data.get("box") is not None else None
+        has_tracked = self.current_frame_idx in self.engine.tracked_masks
+
+        cache_key = (
             self.current_frame_idx,
-            dilation=self.dilation_var.get(),
-            feather=self.feather_var.get(),
-            threshold=self.threshold_var.get(),
-            fill_holes=self.fill_holes_var.get(),
-            min_speckle=self.min_speckle_var.get(),
-            invert=self.invert_var.get()
+            self.dilation_var.get(),
+            self.feather_var.get(),
+            self.threshold_var.get(),
+            self.fill_holes_var.get(),
+            self.min_speckle_var.get(),
+            self.invert_var.get(),
+            self.view_mode.get(),
+            self.mask_color_name.get(),
+            round(self.overlay_opacity.get(), 2),
+            pts_tuple,
+            lbls_tuple,
+            box_tuple,
+            has_tracked
         )
 
-        mode = self.view_mode.get()
-
-        if mask is None or np.sum(mask) == 0:
-            rendered_rgb = rgb
-        elif mode == "Matte":
-            # Pure B&W Matte
-            rendered_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
-        elif mode == "Cutout":
-            # Alpha cutout over checkerboard
-            bg = self._get_checkerboard(self.engine.orig_width, self.engine.orig_height)
-            alpha_f = (mask.astype(np.float32) / 255.0)[..., None]
-            rendered_rgb = (rgb.astype(np.float32) * alpha_f + bg.astype(np.float32) * (1.0 - alpha_f)).astype(np.uint8)
+        if self._composite_cache_key == cache_key and self._composite_cache_img is not None:
+            rendered_rgb = self._composite_cache_img
         else:
-            # Translucent Overlay
-            tint_color = MASK_COLORS.get(self.mask_color_name.get(), (239, 68, 68))
-            opacity = self.overlay_opacity.get()
-            colored_mask = np.zeros_like(rgb)
-            colored_mask[mask > 0] = tint_color
+            try:
+                rgb = self.engine.get_frame_rgb(self.current_frame_idx)
+            except Exception:
+                return
 
-            # Blend
-            rendered_rgb = rgb.copy()
-            active_pixels = (mask > 0)
-            rendered_rgb[active_pixels] = cv2.addWeighted(
-                rgb[active_pixels], 1.0 - opacity,
-                colored_mask[active_pixels], opacity, 0.0
+            mask = self.engine.get_processed_mask(
+                self.current_frame_idx,
+                dilation=self.dilation_var.get(),
+                feather=self.feather_var.get(),
+                threshold=self.threshold_var.get(),
+                fill_holes=self.fill_holes_var.get(),
+                min_speckle=self.min_speckle_var.get(),
+                invert=self.invert_var.get()
             )
 
-            # Draw crisp contour edge
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(rendered_rgb, contours, -1, (255, 255, 255), 2)
+            mode = self.view_mode.get()
 
-        # Scale and position according to zoom & pan
-        disp_w = max(1, int(self.engine.orig_width * self.zoom))
-        disp_h = max(1, int(self.engine.orig_height * self.zoom))
+            if mask is None or np.sum(mask) == 0:
+                rendered_rgb = rgb
+            elif mode == "Matte":
+                rendered_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+            elif mode == "Cutout":
+                bg = self._get_checkerboard(orig_w, orig_h)
+                alpha_f = (mask.astype(np.float32) / 255.0)[..., None]
+                rendered_rgb = (rgb.astype(np.float32) * alpha_f + bg.astype(np.float32) * (1.0 - alpha_f)).astype(np.uint8)
+            else:
+                tint_color = MASK_COLORS.get(self.mask_color_name.get(), (239, 68, 68))
+                opacity = self.overlay_opacity.get()
+                colored_mask = np.zeros_like(rgb)
+                colored_mask[mask > 0] = tint_color
 
-        # Fast resize
-        disp_img = cv2.resize(rendered_rgb, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+                rendered_rgb = rgb.copy()
+                active_pixels = (mask > 0)
+                rendered_rgb[active_pixels] = cv2.addWeighted(
+                    rgb[active_pixels], 1.0 - opacity,
+                    colored_mask[active_pixels], opacity, 0.0
+                )
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(rendered_rgb, contours, -1, (255, 255, 255), 2)
 
-        # Convert to PIL and PhotoImage
-        pil_img = Image.fromarray(disp_img)
-        self.cached_photo_image = ImageTk.PhotoImage(pil_img)
+            self._composite_cache_key = cache_key
+            self._composite_cache_img = rendered_rgb
 
-        # Draw to canvas
+        # 2. Viewport Slicing: Only resize and blit the visible canvas region
+        ix0 = max(0, int(math.floor(-self.pan_x / self.zoom)))
+        iy0 = max(0, int(math.floor(-self.pan_y / self.zoom)))
+        ix1 = min(orig_w, int(math.ceil((canvas_w - self.pan_x) / self.zoom)))
+        iy1 = min(orig_h, int(math.ceil((canvas_h - self.pan_y) / self.zoom)))
+
+        if ix1 <= ix0 or iy1 <= iy0:
+            self.canvas.delete("all")
+            return
+
+        crop_rgb = rendered_rgb[iy0:iy1, ix0:ix1]
+        disp_w = max(1, int(round((ix1 - ix0) * self.zoom)))
+        disp_h = max(1, int(round((iy1 - iy0) * self.zoom)))
+        draw_x = self.pan_x + ix0 * self.zoom
+        draw_y = self.pan_y + iy0 * self.zoom
+
+        disp_img = cv2.resize(crop_rgb, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+        self.cached_photo_image = ImageTk.PhotoImage(Image.fromarray(disp_img))
+
         self.canvas.delete("all")
-        self.canvas.create_image(self.pan_x, self.pan_y, image=self.cached_photo_image, anchor="nw")
-
-        # Draw Prompt Markers on Canvas
+        self.canvas.create_image(draw_x, draw_y, image=self.cached_photo_image, anchor="nw")
         self._render_prompt_markers()
 
     def _render_prompt_markers(self):
@@ -1042,6 +1143,30 @@ class SAM2MaskerDialog:
     # -------------------------------------------------------------------------
     # Mask Export Actions
     # -------------------------------------------------------------------------
+
+    def _on_export_targets_changed(self):
+        cutout_on = self.export_cutout_var.get()
+        binary_on = self.export_binary_var.get()
+
+        if cutout_on:
+            self.cb_cut.configure(state="readonly")
+            self.cutout_fmt_lbl.configure(fg=TEXT)
+            self.chk_cut.configure(fg=ACCENT)
+        else:
+            self.cb_cut.configure(state="disabled")
+            self.cutout_fmt_lbl.configure(fg=DISABLED)
+            self.chk_cut.configure(fg=TEXT)
+
+        if binary_on and cutout_on:
+            btn_txt = "🚀 EXPORT MASKS & RGBA CUTOUTS (HARDWARE ACCELERATED)"
+        elif binary_on:
+            btn_txt = "🚀 EXPORT REALITYSCAN MASKS (BINARY ONLY)"
+        elif cutout_on:
+            btn_txt = "🚀 EXPORT RGBA CUTOUTS ONLY (HARDWARE ACCELERATED)"
+        else:
+            btn_txt = "🚀 SELECT AN EXPORT TARGET OPTION"
+
+        self.btn_export.configure(text=btn_txt)
 
     def _browse_output_dir(self):
         f = filedialog.askdirectory(title="Select Mask Export Directory", parent=self.dialog)
