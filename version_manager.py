@@ -116,6 +116,8 @@ def create_version_snapshot(version_str: str) -> None:
         "realityscan_engine.py",
         "workspace_3d.py",
         "version_manager.py",
+        "sam2_engine.py",
+        "sam2_masker_ui.py",
         "VERSION.txt",
         "Abu_Align_and_Train.bat",
         "Abu_Align_and_Train.exe",
