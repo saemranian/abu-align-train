@@ -1,53 +1,58 @@
-# Walkthrough: Abu Align & Train v0.1.1.9
-## Adaptive Aspect Ratio Engine, Per-Frame Orientation Preservation & Multi-Ratio Export
+# Walkthrough: Abu Align & Train v0.1.2.0
+## Video Frame Extractor: Native Portrait Ratio Preservation, Custom Resolution Export & Orientation Controls
 
 ### 1. Executive Summary
-In release **v0.1.1.9**, Abu Align's **AI Masking Studio** (`sam2_engine.py`, `sam2_masker_ui.py`) introduces a smart **Adaptive Aspect Ratio & Orientation Engine**:
-- **Smart Horizontal & Vertical Frame Handling**: Resolved the issue where mixed-orientation datasets (containing both landscape horizontal and portrait vertical images) had all mask layers forced into horizontal ratio. The studio now natively tracks each frame's individual dimensions and orientation throughout ingestion, interactive prompting, temporal tracking, viewport blitting, and batch export.
-- **Dynamic SAM 2 Predictor Hooks**: Hooked SAM 2's `_get_orig_video_res_output` and prompt normalization pipeline to dynamically resolve each frame's native $(W_i, H_i)$ geometry. Horizontal frames generate horizontal masks; vertical frames generate vertical masks without stretching, transposing, or distorting.
-- **Orientation-Preserving Hardware Exporters**:
-  - `export_masks` computes target dimensions `(frame_target_w, frame_target_h) = compute_scaled_size(cur_w, cur_h, scale_mode)` on a per-frame basis.
-  - **Horizontal input $\to$ horizontal export** (e.g. $6000 \times 4000$ native, or $2048 \times 1365$ at 2K).
-  - **Vertical input $\to$ vertical export** (e.g. $4000 \times 6000$ native, or $1365 \times 2048$ at 2K).
-  - Preserves exact aspect ratios across all downscale modes (4K UHD, 2K QHD, 1080p FHD, 50% Half-Scale, 25% Quarter-Scale) on both CUDA GPU and CPU pipelines.
-- **Responsive Viewport Navigation**:
-  - Viewport auto-fits (`_zoom_to_fit()`) whenever orientation toggles between consecutive frames during scrubbing or playback, ensuring portrait photos are never cropped at the top or bottom.
-  - Frame readout displays individual frame resolution and orientation: `Frame: 2 / 50 (IMG_002.JPG) [4000x6000 Portrait]`.
-  - Ingestion header detects mixed orientation sequences: `Res: Mixed Aspect (Auto H/V)`.
-- **Rigorous Verification**: Added `test_mixed_orientations()` to `test_sam2_masker.py`, verifying 100% dimensional accuracy across mixed landscape and portrait image sequences.
+Release **v0.1.2.0** brings a major overhaul to the **Video to Frame Sequence Extractor** (`video_extractor.py`, `abu_align_gui.py`):
+- **Native Orientation & Aspect-Ratio Preservation**: Fixed the issue where vertical (portrait) videos were forcibly squashed into 2:1 horizontal equirectangular frames. By default, the extractor strictly preserves the original input ratio: **vertical video inputs extract into native vertical frames**, and horizontal video inputs extract into native horizontal frames.
+- **Orientation & Display Matrix Detection**: `get_video_info` now parses both `Display Matrix` side data and stream/format `rotate` tags via `ffprobe` (and `cv2.CAP_PROP_ORIENTATION_META` in OpenCV), detecting upright display dimensions and distinguishing portrait from landscape videos automatically.
+- **Smart Adaptive Preset Scaling (4K, 2K, 1K)**:
+  - For planar videos, presets now scale the **longest edge** while strictly maintaining native aspect ratio:
+    - Vertical 9:16 at 4K $\to$ $2160 \times 3840$ (vertical portrait).
+    - Vertical 9:16 at 2K $\to$ $1080 \times 1920$ (vertical portrait).
+    - Vertical 4:5 at 2K $\to$ $1536 \times 1920$ (vertical portrait).
+    - Horizontal 16:9 at 2K $\to$ $1920 \times 1080$ (horizontal landscape).
+  - 2:1 scaling is retained exclusively for 360° Equirectangular (ERP) videos.
+- **Custom Resolution Export**:
+  - Full support for arbitrary user-defined resolutions (e.g. `1080x1920`, `2160x3840`, `720x1280`, `1440x2560`) in both GUI and CLI.
+  - GUI dialog features a dedicated custom `WxH` entry field that automatically enables when `"custom"` is selected and auto-populates with the detected video's upright dimensions.
+- **Orientation / Rotation Control Option**:
+  - `Original (Follow Input)`: Default. Vertical stays vertical; horizontal stays horizontal.
+  - `Rotate to Horizontal (Landscape)`: If input video is vertical, rotates it 90° CW so that frames render horizontally in landscape format.
+  - `Rotate 90° CW`, `Rotate 90° CCW`, `Rotate 180°`: Explicit rotation overrides.
+  - Fully integrated with NVIDIA NVDEC/CUDA hardware acceleration (`-hwaccel cuda`) and pure-Python OpenCV fallback.
+- **Live Video Detection Telemetry**:
+  - Displays instant badge upon selecting a video file: e.g. `Detected Video: 1080x1920 (Vertical (Portrait) 0.56:1) | 30.0 FPS | 12.4s (372 frames) | H.264`.
 
 ---
 
-### 2. Multi-Ratio Architecture
+### 2. Architecture & Pipeline Diagram
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│             Adaptive Aspect Ratio & Orientation Engine (v0.1.1.9)     │
+│             Video Frame Extractor Engine Architecture (v0.1.2.0)       │
 │                                                                        │
-│  [Mixed Image Dataset]                                                 │
-│  ├── Frame 0: 6000 x 4000 (Landscape)                                  │
-│  ├── Frame 1: 4000 x 6000 (Portrait)                                   │
-│  └── Frame 2: 6000 x 4000 (Landscape)                                  │
+│  [Video Input: e.g. 1080 x 1920 Portrait / Smartphone Video]           │
 │                                                            │           │
 │  ┌─────────────────────────────────────────────────────────┴────────┐  │
-│  │               PER-FRAME GEOMETRY REGISTRY (self.frame_dims)       │  │
-│  │  • Frame 0: W=6000, H=4000 | Aspect Ratio = 1.50 (Horizontal)    │  │
-│  │  • Frame 1: W=4000, H=6000 | Aspect Ratio = 0.67 (Vertical)      │  │
+│  │          METADATA & DISPLAY MATRIX PROBING (get_video_info)      │  │
+│  │  • Analyzes raw width, height, codec, fps, total frames          │  │
+│  │  • Parses Display Matrix & rotate tags (0°, 90°, 180°, 270°)     │  │
+│  │  • Determines upright dimensions & is_vertical boolean           │  │
 │  └─────────────────────────────────────────────────────────┬────────┘  │
 │                                                            │           │
 │  ┌─────────────────────────────────────────────────────────┴────────┐  │
-│  │                 DYNAMIC SAM 2 TEMPORAL TRACKING                  │  │
-│  │  • Prompt clicks normalized by native (W_i, H_i)                 │  │
-│  │  • Dynamic _get_orig_video_res_output queries frame geometry     │  │
-│  │  • Frame 0 mask: (4000, 6000) [Horizontal]                       │  │
-│  │  • Frame 1 mask: (6000, 4000) [Vertical]                         │  │
+│  │               ORIENTATION & RESOLUTION RESOLVER                  │  │
+│  │  • Mode: "Original" -> Keeps 1080 x 1920 vertical                │  │
+│  │  • Mode: "Horizontal" -> Applies transpose=1 (1920 x 1080)       │  │
+│  │  • Scaling: "2K" on vertical -> 1080 x 1920 (longest edge 1920)  │  │
+│  │  • Scaling: "Custom" -> user-specified exact W x H               │  │
 │  └─────────────────────────────────────────────────────────┬────────┘  │
 │                                                            │           │
 │  ┌─────────────────────────────────────────────────────────┴────────┐  │
-│  │               ADAPTIVE HARDWARE EXPORTER (RTX 4090 GPU)          │  │
-│  │  • Frame 0: Exported as Horizontal (e.g. 2048 x 1365 at 2K)      │  │
-│  │  • Frame 1: Exported as Vertical   (e.g. 1365 x 2048 at 2K)      │  │
-│  │  • Zero Distortion · Zero Squashing · Bit-Exact Aspect Ratio      │  │
+│  │        MULTI-THREADED HARDWARE EXTRACTION PIPELINE               │  │
+│  │  • FFmpeg + NVDEC CUDA: -vf fps=...,[transpose],[scale=W:H]      │  │
+│  │  • OpenCV Fallback: cv2.rotate() + cv2.resize() + ThreadPool     │  │
+│  │  • Output: Exact aspect ratio matching requested orientation     │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -56,21 +61,12 @@ In release **v0.1.1.9**, Abu Align's **AI Masking Studio** (`sam2_engine.py`, `s
 
 ### 3. Verification & Test Suite Results
 
-The comprehensive test suite in `test_sam2_masker.py` was executed with all assertions passing:
-- `SAM 2.1 Hiera Tiny` predictor model load on CUDA: **PASS**
-- Standard 5-frame sequence prompts, propagation, and filters: **PASS**
-- Hardware-accelerated multi-threaded WebP & PNG export: **PASS**
-- **Mixed Horizontal & Vertical Orientation Suite (`test_mixed_orientations`)**:
-  - Horizontal Frame 0 ($640 \times 480$) click and prompt evaluation: **PASS** (Mask shape: `(480, 640)`)
-  - Vertical Frame 1 ($480 \times 640$) click and prompt evaluation: **PASS** (Mask shape: `(640, 480)`)
-  - Bidirectional temporal tracking across mixed aspect sequence: **PASS**
-  - Native export:
-    - Frame 0 (Horizontal): Mask `640x480` | Cutout `640x480`: **PASS**
-    - Frame 1 (Vertical):   Mask `480x640` | Cutout `480x640`: **PASS**
-    - Frame 2 (Horizontal): Mask `800x600` | Cutout `800x600`: **PASS**
-    - Frame 3 (Vertical):   Mask `600x800` | Cutout `600x800`: **PASS**
-  - 50% Downscaled export:
-    - Frame 0 (Horizontal): `320x240`: **PASS**
-    - Frame 1 (Vertical):   `240x320`: **PASS**
-    - Frame 2 (Horizontal): `400x300`: **PASS**
-    - Frame 3 (Vertical):   `300x400`: **PASS**
+The comprehensive test suite in `test_video_extractor.py` was executed with all 8 verification tests passing:
+- **Test 1: Technical metadata and orientation detection**: **PASS** (Detected `288x360`, `is_vertical=True`).
+- **Test 2: Native vertical extraction (follows original ratio)**: **PASS** (Extracted native portrait frames `288x360`).
+- **Test 3: Smart preset scaling on vertical video (2K portrait)**: **PASS** (Extracted portrait frame `1536x1920`, longest edge 1920).
+- **Test 4: Custom resolution export (1080x1920)**: **PASS** (Extracted exact custom frame `1080x1920`).
+- **Test 5: Rotate vertical video to Horizontal (Landscape)**: **PASS** (Extracted rotated landscape frame `1920x1536`).
+- **Test 6: Explicit rotation transforms (180°)**: **PASS** (Extracted rotated 180° frame `288x360`).
+- **Test 7: OpenCV fallback pipeline with custom resolution**: **PASS** (Extracted 36 frames at `720x1280`).
+- **Test 8: Manifest telemetry verification**: **PASS** (Validated JSON manifest schema and extraction configuration).

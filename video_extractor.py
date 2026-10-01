@@ -84,8 +84,10 @@ def is_video_file(path: str) -> bool:
 
 def get_video_info(video_path: str) -> Dict[str, Any]:
     """
-    Extracts technical metadata (duration, total frames, FPS, resolution, codec)
+    Extracts technical metadata (duration, total frames, FPS, resolution, codec, rotation)
     from a video file using ffprobe, falling back to OpenCV.
+    Accurately handles stream rotation metadata (tags & display matrix) so upright
+    display dimensions and orientation (portrait vs landscape) are correctly detected.
     """
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -98,8 +100,12 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
         "duration_sec": 0.0,
         "total_frames": 0,
         "fps": 30.0,
+        "raw_width": 0,
+        "raw_height": 0,
+        "rotation": 0,
         "width": 0,
         "height": 0,
+        "is_vertical": False,
         "codec": "unknown",
         "aspect_ratio": "unknown",
         "is_erp_360": False,
@@ -111,7 +117,7 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
                 ffprobe_exe,
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,codec_name:format=duration",
+                "-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,codec_name,side_data_list:stream_tags=rotate:format=duration:format_tags=rotate",
                 "-of", "json",
                 video_path
             ]
@@ -120,8 +126,10 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
             streams = data.get("streams", [])
             if streams:
                 st = streams[0]
-                info["width"] = int(st.get("width", 0))
-                info["height"] = int(st.get("height", 0))
+                raw_w = int(st.get("width", 0))
+                raw_h = int(st.get("height", 0))
+                info["raw_width"] = raw_w
+                info["raw_height"] = raw_h
                 info["codec"] = st.get("codec_name", "unknown")
 
                 # Frame rate parsing
@@ -143,6 +151,42 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
                     info["total_frames"] = int(nb_f)
                 elif info["duration_sec"] > 0 and info["fps"] > 0:
                     info["total_frames"] = int(round(info["duration_sec"] * info["fps"]))
+
+                # Detect rotation from Display Matrix or Tags
+                rot = 0
+                side_data = st.get("side_data_list", [])
+                if isinstance(side_data, list):
+                    for sd in side_data:
+                        if isinstance(sd, dict) and "rotation" in sd:
+                            try:
+                                rot = int(round(float(sd["rotation"])))
+                                break
+                            except Exception:
+                                pass
+                if rot == 0:
+                    st_tags = st.get("tags", {})
+                    if isinstance(st_tags, dict) and "rotate" in st_tags:
+                        try:
+                            rot = int(round(float(st_tags["rotate"])))
+                        except Exception:
+                            pass
+                if rot == 0:
+                    fmt_tags = data.get("format", {}).get("tags", {})
+                    if isinstance(fmt_tags, dict) and "rotate" in fmt_tags:
+                        try:
+                            rot = int(round(float(fmt_tags["rotate"])))
+                        except Exception:
+                            pass
+
+                info["rotation"] = (rot % 360 + 360) % 360
+
+                # Compute upright display dimensions
+                if info["rotation"] in (90, 270):
+                    info["width"] = raw_h
+                    info["height"] = raw_w
+                else:
+                    info["width"] = raw_w
+                    info["height"] = raw_h
         except Exception:
             pass
 
@@ -151,10 +195,28 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
         try:
             cap = cv2.VideoCapture(video_path)
             if cap.isOpened():
+                raw_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                raw_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if info["raw_width"] == 0:
+                    info["raw_width"] = raw_w
+                if info["raw_height"] == 0:
+                    info["raw_height"] = raw_h
+
+                if info["rotation"] == 0 and hasattr(cv2, "CAP_PROP_ORIENTATION_META"):
+                    try:
+                        c_rot = int(round(cap.get(cv2.CAP_PROP_ORIENTATION_META)))
+                        info["rotation"] = (c_rot % 360 + 360) % 360
+                    except Exception:
+                        pass
+
                 if info["width"] == 0:
-                    info["width"] = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                if info["height"] == 0:
-                    info["height"] = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    if info["rotation"] in (90, 270):
+                        info["width"] = raw_h
+                        info["height"] = raw_w
+                    else:
+                        info["width"] = raw_w
+                        info["height"] = raw_h
+
                 if info["fps"] <= 0 or info["fps"] == 30.0:
                     cv_fps = float(cap.get(cv2.CAP_PROP_FPS))
                     if cv_fps > 0:
@@ -168,10 +230,11 @@ def get_video_info(video_path: str) -> Dict[str, Any]:
             pass
 
     if info["width"] > 0 and info["height"] > 0:
+        info["is_vertical"] = info["height"] > info["width"]
         ratio = info["width"] / info["height"]
         info["aspect_ratio"] = f"{ratio:.2f}:1"
-        # Equirectangular standard is 2:1 aspect ratio
-        info["is_erp_360"] = abs(ratio - 2.0) <= 0.15
+        # Equirectangular standard is 2:1 aspect ratio on horizontal video
+        info["is_erp_360"] = abs(ratio - 2.0) <= 0.15 and not info["is_vertical"]
 
     return info
 
@@ -200,7 +263,9 @@ def extract_video_frames(
     stride: int = 1,              # Frame stride when mode="stride"
     image_format: str = "jpg",    # "jpg" or "png"
     quality: int = 95,            # JPEG quality (1-100) or PNG compression
-    resolution: Optional[str] = None, # None (native), "8K", "5.7K", "4K", "2K", "1K", or "WxH"
+    resolution: Optional[str] = None, # None (native), "8k", "5.7k", "4k", "2k", "1k", "custom", or "WxH"
+    custom_resolution: Optional[str] = None, # "WxH" e.g. "1080x1920"
+    rotation: str = "original",   # "original", "horizontal", "cw90", "ccw90", "180"
     blur_threshold: float = 0.0,  # 0.0 = disabled, >0 = Laplacian variance threshold
     use_hwaccel: bool = True,     # Enable NVDEC / CUDA hardware decoding
     name_prefix: str = "frame",
@@ -208,6 +273,10 @@ def extract_video_frames(
 ) -> Dict[str, Any]:
     """
     Extracts a frame sequence from a video file into a target directory.
+    Supports intelligent aspect-ratio preservation for vertical (portrait) and
+    horizontal (landscape) planar video, standard 2:1 ERP scaling for 360 videos,
+    arbitrary custom resolutions (WxH), and orientation transforms (keeping native
+    ratio or rotating to horizontal landscape).
 
     Returns an extraction summary dict including total frames, elapsed time, and paths.
     """
@@ -219,25 +288,87 @@ def extract_video_frames(
     info = get_video_info(video_abs)
     ffmpeg_exe = get_ffmpeg_executable()
 
+    # Determine orientation transform
+    rot_filter: Optional[str] = None
+    cv_rot: Optional[int] = None
+    post_w = info.get("width", 0)
+    post_h = info.get("height", 0)
+    is_vert = info.get("is_vertical", False)
+
+    rot_mode = (rotation or "original").lower().strip()
+    if rot_mode == "horizontal":
+        # If input is portrait/vertical, rotate 90° CW to horizontal landscape
+        if is_vert:
+            rot_filter = "transpose=1"
+            if HAS_CV2:
+                cv_rot = cv2.ROTATE_90_CLOCKWISE
+            post_w, post_h = post_h, post_w
+    elif rot_mode == "cw90":
+        rot_filter = "transpose=1"
+        if HAS_CV2:
+            cv_rot = cv2.ROTATE_90_CLOCKWISE
+        post_w, post_h = post_h, post_w
+    elif rot_mode == "ccw90":
+        rot_filter = "transpose=2"
+        if HAS_CV2:
+            cv_rot = cv2.ROTATE_90_COUNTERCLOCKWISE
+        post_w, post_h = post_h, post_w
+    elif rot_mode == "180":
+        rot_filter = "hflip,vflip"
+        if HAS_CV2:
+            cv_rot = cv2.ROTATE_180
+
     # Determine target resolution
     target_w, target_h = None, None
-    if resolution and resolution.lower() != "native" and resolution.lower() != "original":
-        res_map = {
-            "8k": (7680, 3840),
-            "5.7k": (5760, 2880),
-            "4k": (3840, 1920),
-            "2k": (1920, 960),
-            "1k": (1024, 512),
-        }
-        res_key = resolution.lower().strip()
-        if res_key in res_map:
-            target_w, target_h = res_map[res_key]
-        elif "x" in res_key:
+    res_input = (custom_resolution if (resolution == "custom" and custom_resolution) else (custom_resolution or resolution or ""))
+    res_str = str(res_input).lower().strip()
+
+    if res_str and res_str not in ("native", "original", "none"):
+        if "x" in res_str:
             try:
-                parts = res_key.split("x")
-                target_w, target_h = int(parts[0]), int(parts[1])
+                parts = res_str.split("x")
+                tw = int(parts[0].strip())
+                th = int(parts[1].strip())
+                if tw > 0 and th > 0:
+                    target_w, target_h = tw, th
             except Exception:
                 target_w, target_h = None, None
+        else:
+            is_erp = info.get("is_erp_360", False) and rot_mode in ("original", "auto", "native")
+            if is_erp:
+                erp_map = {
+                    "8k": (7680, 3840),
+                    "5.7k": (5760, 2880),
+                    "4k": (3840, 1920),
+                    "2k": (1920, 960),
+                    "1k": (1024, 512),
+                }
+                if res_str in erp_map:
+                    target_w, target_h = erp_map[res_str]
+            else:
+                # Planar / Portrait / Landscape: scale longest edge while maintaining aspect ratio
+                preset_max = {
+                    "8k": 7680,
+                    "5.7k": 5760,
+                    "4k": 3840,
+                    "2k": 1920,
+                    "1k": 1024,
+                }
+                if res_str in preset_max:
+                    max_dim = preset_max[res_str]
+                    if post_h > post_w and post_h > 0:
+                        # Portrait / vertical frame
+                        target_h = max_dim
+                        target_w = int(round(max_dim * (post_w / post_h)))
+                    elif post_w > 0:
+                        # Landscape / horizontal frame
+                        target_w = max_dim
+                        target_h = int(round(max_dim * (post_h / post_w))) if post_w > 0 else post_h
+
+    # Ensure even dimensions (required for lanczos filter and video decoders)
+    if target_w and target_h:
+        target_w = max(2, target_w - (target_w % 2))
+        target_h = max(2, target_h - (target_h % 2))
 
     fmt = image_format.lower().replace(".", "")
     if fmt not in ("jpg", "jpeg", "png"):
@@ -276,6 +407,7 @@ def extract_video_frames(
             quality=quality,
             target_w=target_w,
             target_h=target_h,
+            rot_filter=rot_filter,
             use_hwaccel=use_hwaccel,
             name_prefix=name_prefix,
             info=info,
@@ -300,6 +432,7 @@ def extract_video_frames(
             quality=quality,
             target_w=target_w,
             target_h=target_h,
+            cv_rot=cv_rot,
             name_prefix=name_prefix,
             info=info,
             emit_progress=emit_progress,
@@ -328,7 +461,7 @@ def extract_video_frames(
 
     # Generate extraction manifest
     manifest = {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "source_video": info,
         "extraction_config": {
@@ -337,7 +470,9 @@ def extract_video_frames(
             "stride": stride if mode == "stride" else None,
             "image_format": fmt,
             "quality": quality,
+            "rotation": rot_mode,
             "resolution": f"{target_w}x{target_h}" if target_w and target_h else "native",
+            "effective_dimensions": f"{post_w}x{post_h}",
             "blur_threshold": blur_threshold,
             "discarded_blurred_frames": discarded_blur_count,
             "use_hwaccel": use_hwaccel,
@@ -376,18 +511,22 @@ def _extract_with_ffmpeg(
     quality: int,
     target_w: Optional[int],
     target_h: Optional[int],
+    rot_filter: Optional[str],
     use_hwaccel: bool,
     name_prefix: str,
     info: Dict[str, Any],
     emit_progress: Callable[[int, int, str], None],
 ) -> bool:
-    """Executes FFmpeg with hardware acceleration and live progress tracking."""
-    # Build filter chain
+    """Executes FFmpeg with hardware acceleration, orientation handling, and live progress tracking."""
+    # Build filter chain: sampling -> orientation transform -> lanczos scaling
     filters = []
     if mode == "fps" and fps > 0:
         filters.append(f"fps={fps}")
     elif mode == "stride" and stride > 1:
         filters.append(f"select='not(mod(n\\,{stride}))'")
+
+    if rot_filter:
+        filters.append(rot_filter)
 
     if target_w and target_h:
         filters.append(f"scale={target_w}:{target_h}:flags=lanczos")
@@ -436,7 +575,6 @@ def _extract_with_ffmpeg(
         return False
 
     # Estimate expected frames for progress tracking
-    native_fps = info.get("fps", 30.0) or 30.0
     total_native_frames = info.get("total_frames", 0)
     dur = info.get("duration_sec", 0.0)
     if mode == "fps" and fps > 0 and dur > 0:
@@ -446,7 +584,6 @@ def _extract_with_ffmpeg(
     else:
         est_total = total_native_frames if total_native_frames > 0 else 100
 
-    last_frame = 0
     hw_failed = False
     for line in proc.stderr:
         line_s = line.strip()
@@ -460,8 +597,7 @@ def _extract_with_ffmpeg(
                 if p.startswith("frame=") or p == "frame=":
                     val = p.split("=")[-1] if "=" in p else (parts[i+1] if i+1 < len(parts) else "")
                     if val.isdigit():
-                        last_frame = int(val)
-                        emit_progress(last_frame, est_total, "extracting")
+                        emit_progress(int(val), est_total, "extracting")
                         break
 
     proc.wait()
@@ -506,11 +642,12 @@ def _extract_with_opencv(
     quality: int,
     target_w: Optional[int],
     target_h: Optional[int],
+    cv_rot: Optional[int],
     name_prefix: str,
     info: Dict[str, Any],
     emit_progress: Callable[[int, int, str], None],
 ) -> List[str]:
-    """Pure-Python OpenCV fallback with ThreadPoolExecutor disk writing."""
+    """Pure-Python OpenCV fallback with ThreadPoolExecutor disk writing and orientation support."""
     if not HAS_CV2:
         return []
 
@@ -539,10 +676,29 @@ def _extract_with_opencv(
     saved_idx = 0
 
     pool = ThreadPoolExecutor(max_workers=4)
+    meta_rot = info.get("rotation", 0)
+    raw_w = info.get("raw_width", 0)
+    raw_h = info.get("raw_height", 0)
 
     def write_task(fpath: str, frame_data: Any):
+        # Normalize upright if OpenCV didn't auto-rotate stream metadata
+        fh, fw = frame_data.shape[:2]
+        if meta_rot in (90, 270) and fw == raw_w and fh == raw_h:
+            if meta_rot == 90:
+                frame_data = cv2.rotate(frame_data, cv2.ROTATE_90_CLOCKWISE)
+            elif meta_rot == 270:
+                frame_data = cv2.rotate(frame_data, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif meta_rot == 180 and fw == raw_w and fh == raw_h:
+            frame_data = cv2.rotate(frame_data, cv2.ROTATE_180)
+
+        # Apply user requested rotation transform
+        if cv_rot is not None:
+            frame_data = cv2.rotate(frame_data, cv_rot)
+
+        # Apply scaling
         if target_w and target_h:
             frame_data = cv2.resize(frame_data, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+
         cv2.imwrite(fpath, frame_data, encode_params)
 
     futures = []
@@ -580,6 +736,8 @@ def prepare_dataset_from_video_or_images(
     stride: int = 1,
     mode: str = "fps",
     resolution: Optional[str] = None,
+    custom_resolution: Optional[str] = None,
+    rotation: str = "original",
     image_format: str = "jpg",
     quality: int = 95,
     blur_threshold: float = 0.0,
@@ -620,6 +778,8 @@ def prepare_dataset_from_video_or_images(
         image_format=image_format,
         quality=quality,
         resolution=resolution,
+        custom_resolution=custom_resolution,
+        rotation=rotation,
         blur_threshold=blur_threshold,
         use_hwaccel=True,
         progress_callback=progress_callback,
@@ -645,7 +805,9 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stride", type=int, default=1, help="Extract every N-th frame when mode=stride")
     parser.add_argument("-f", "--format", choices=["jpg", "png"], default="jpg", help="Output image format")
     parser.add_argument("-q", "--quality", type=int, default=95, help="JPEG quality (1-100)")
-    parser.add_argument("-r", "--resolution", choices=["native", "8k", "5.7k", "4k", "2k", "1k"], default="native", help="Target ERP resolution")
+    parser.add_argument("-r", "--resolution", default="native", help="Target resolution: 'native', '4k', '2k', '1k', '8k', '5.7k', 'custom', or 'WIDTHxHEIGHT' (e.g. 1080x1920)")
+    parser.add_argument("--custom-res", default=None, help="Custom resolution in 'WIDTHxHEIGHT' format (e.g. 1080x1920)")
+    parser.add_argument("--rotation", choices=["original", "horizontal", "cw90", "ccw90", "180"], default="original", help="Frame orientation: 'original' (follow input ratio), 'horizontal' (rotate portrait to landscape), 'cw90', 'ccw90', or '180'")
     parser.add_argument("--blur-threshold", type=float, default=0.0, help="Laplacian variance threshold to discard blurred frames (0 = disabled)")
     parser.add_argument("--no-hwaccel", action="store_true", help="Disable NVIDIA NVDEC/CUDA hardware acceleration")
     parser.add_argument("--prefix", default="frame", help="Filename prefix for extracted frames")
@@ -686,6 +848,8 @@ def main():
                 image_format=args.format,
                 quality=args.quality,
                 resolution=args.resolution,
+                custom_resolution=args.custom_res,
+                rotation=args.rotation,
                 blur_threshold=args.blur_threshold,
                 use_hwaccel=not args.no_hwaccel,
                 name_prefix=args.prefix,
@@ -700,7 +864,8 @@ def main():
     print(f"    Output directory:      {out_dir}")
     print(f"    Sampling mode:         {args.mode.upper()} ({args.fps} FPS / stride {args.stride})")
     print(f"    Format & Quality:      {args.format.upper()} (quality {args.quality})")
-    print(f"    Resolution:            {args.resolution.upper()}")
+    print(f"    Resolution:            {args.resolution.upper() if args.resolution else 'NATIVE'}{f' ({args.custom_res})' if args.custom_res else ''}")
+    print(f"    Orientation/Rotation:  {args.rotation.upper()}")
     print(f"    Hardware Acceleration: {'Enabled (CUDA)' if not args.no_hwaccel else 'Disabled'}")
 
     res = extract_video_frames(
@@ -712,6 +877,8 @@ def main():
         image_format=args.format,
         quality=args.quality,
         resolution=args.resolution,
+        custom_resolution=args.custom_res,
+        rotation=args.rotation,
         blur_threshold=args.blur_threshold,
         use_hwaccel=not args.no_hwaccel,
         name_prefix=args.prefix,

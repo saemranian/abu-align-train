@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.1.9
+Abu Align & Train Version 0.1.2.0
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.1.9 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.2.0 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -1773,6 +1773,12 @@ class AbuAlignApp:
 
         tk.Button(r2, text="Browse Folder...", font=("Segoe UI", 8), bg="#29293d", fg=self.text_primary, relief=tk.FLAT, padx=8, command=browse_out).pack(side=tk.RIGHT)
 
+        # Row 3: Video Telemetry & Detection
+        r3 = tk.Frame(paths_card, bg=self.panel_bg)
+        r3.pack(fill=tk.X, pady=(4, 0))
+        vid_info_lbl = tk.Label(r3, text="", font=("Segoe UI", 8), fg="#38bdf8", bg=self.panel_bg, anchor="w")
+        vid_info_lbl.pack(fill=tk.X)
+
         # 2. Controls Card
         ctrl_card = tk.LabelFrame(
             content,
@@ -1795,6 +1801,8 @@ class AbuAlignApp:
         fmt_var = tk.StringVar(value="jpg")
         qual_var = tk.StringVar(value="95")
         res_var = tk.StringVar(value="native")
+        custom_res_var = tk.StringVar(value="1080x1920")
+        rotation_var = tk.StringVar(value="Original (Follow Input)")
         hwaccel_var = tk.BooleanVar(value=True)
         blur_filter_var = tk.BooleanVar(value=False)
         blur_val_var = tk.StringVar(value="30")
@@ -1823,8 +1831,68 @@ class AbuAlignApp:
         qual_entry.pack(side=tk.LEFT, padx=(0, 16), ipady=1)
 
         tk.Label(g2, text="Resolution:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        res_cb = ttk.Combobox(g2, textvariable=res_var, values=["native", "8k", "5.7k", "4k", "2k", "1k"], state="readonly", width=8)
-        res_cb.pack(side=tk.LEFT)
+        res_frame = tk.Frame(g2, bg=self.panel_bg)
+        res_frame.pack(side=tk.LEFT, padx=(0, 16))
+        res_cb = ttk.Combobox(res_frame, textvariable=res_var, values=["native", "4k", "2k", "1k", "8k (ERP)", "5.7k (ERP)", "custom"], state="readonly", width=10)
+        res_cb.pack(side=tk.LEFT, padx=(0, 4))
+        custom_res_entry = tk.Entry(res_frame, textvariable=custom_res_var, font=("Segoe UI", 9), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=10, relief=tk.FLAT, state=tk.DISABLED)
+        custom_res_entry.pack(side=tk.LEFT, ipady=1)
+
+        tk.Label(g2, text="Orientation:", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
+        rot_cb = ttk.Combobox(
+            g2,
+            textvariable=rotation_var,
+            values=[
+                "Original (Follow Input)",
+                "Rotate to Horizontal (Landscape)",
+                "Rotate 90° CW",
+                "Rotate 90° CCW",
+                "Rotate 180°"
+            ],
+            state="readonly",
+            width=24
+        )
+        rot_cb.pack(side=tk.LEFT)
+
+        def sync_res_toggle(*_):
+            if res_var.get() == "custom":
+                custom_res_entry.configure(state="normal")
+            else:
+                custom_res_entry.configure(state="disabled")
+
+        res_var.trace_add("write", sync_res_toggle)
+        sync_res_toggle()
+
+        def update_video_info(path: str):
+            p = (path or "").strip()
+            if not p or not os.path.isfile(p):
+                vid_info_lbl.config(text="")
+                return
+            try:
+                from video_extractor import get_video_info
+                v_info = get_video_info(p)
+                w, h = v_info.get("width", 0), v_info.get("height", 0)
+                is_vert = v_info.get("is_vertical", False)
+                fps = v_info.get("fps", 0)
+                dur = v_info.get("duration_sec", 0)
+                frames = v_info.get("total_frames", 0)
+                ratio = v_info.get("aspect_ratio", "")
+                codec = v_info.get("codec", "unknown")
+                rot = v_info.get("rotation", 0)
+
+                orient_str = "Vertical (Portrait)" if is_vert else "Horizontal (Landscape)"
+                rot_str = f" | Meta Rotation: {rot}°" if rot > 0 else ""
+                text = f"🎥 Detected Video: {w}x{h} ({orient_str} {ratio}) | {fps:.1f} FPS | {dur:.1f}s ({frames} frames) | {codec.upper()}{rot_str}"
+                vid_info_lbl.config(text=text)
+
+                if w > 0 and h > 0:
+                    custom_res_var.set(f"{w}x{h}")
+            except Exception:
+                vid_info_lbl.config(text="")
+
+        vid_in_var.trace_add("write", lambda *_: update_video_info(vid_in_var.get()))
+        if vid_in_var.get():
+            update_video_info(vid_in_var.get())
 
         g3 = tk.Frame(ctrl_card, bg=self.panel_bg)
         g3.pack(fill=tk.X, pady=(6, 2))
@@ -1961,7 +2029,32 @@ class AbuAlignApp:
                     fps_val = float(fps_var.get()) if mode == "fps" else 5.0
                     stride_val = int(stride_var.get()) if mode == "stride" else 1
                     qual_val = int(qual_var.get())
-                    res_val = res_var.get() if res_var.get() != "native" else None
+
+                    # Resolution parsing
+                    selected_res = res_var.get().strip()
+                    custom_res_val = None
+                    if selected_res == "custom":
+                        custom_res_val = custom_res_var.get().strip()
+                        if not custom_res_val or "x" not in custom_res_val.lower():
+                            raise ValueError(f"Custom resolution must be formatted as WIDTHxHEIGHT (e.g. 1080x1920), got: '{custom_res_val}'")
+                        res_val = "custom"
+                    elif "ERP" in selected_res:
+                        res_val = selected_res.split()[0].lower() # e.g. "8k" or "5.7k"
+                    else:
+                        res_val = selected_res if selected_res != "native" else None
+
+                    # Orientation / Rotation parsing
+                    rot_choice = rotation_var.get()
+                    rot_mode = "original"
+                    if "Horizontal" in rot_choice:
+                        rot_mode = "horizontal"
+                    elif "90° CW" in rot_choice:
+                        rot_mode = "cw90"
+                    elif "90° CCW" in rot_choice:
+                        rot_mode = "ccw90"
+                    elif "180" in rot_choice:
+                        rot_mode = "180"
+
                     blur_val = float(blur_val_var.get()) if blur_filter_var.get() else 0.0
 
                     res = extract_video_frames(
@@ -1973,6 +2066,8 @@ class AbuAlignApp:
                         image_format=fmt_var.get(),
                         quality=qual_val,
                         resolution=res_val,
+                        custom_resolution=custom_res_val,
+                        rotation=rot_mode,
                         blur_threshold=blur_val,
                         use_hwaccel=hwaccel_var.get(),
                         progress_callback=on_progress,
@@ -4441,7 +4536,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.1.9 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.2.0 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5000,7 +5095,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.1.9 - {title}")
+        doc_win.title(f"Abu Align v0.1.2.0 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5627,7 +5722,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.1.9\n"
+            "Abu Align & Train - Version 0.1.2.0\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
