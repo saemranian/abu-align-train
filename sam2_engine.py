@@ -149,6 +149,9 @@ class SAM2MaskingEngine:
         # Base cleaned mask cache for zero-latency parameter scrubbing
         self._base_mask_cache: Dict[Tuple[int, bool, int], np.ndarray] = {}
 
+        # Multi-level undo history stack: frame_idx -> list of {mask, prompt} snapshots
+        self.undo_stacks: Dict[int, List[Dict[str, Any]]] = {}
+
         self.log_callback: Optional[Callable[[str], None]] = None
 
     def set_log_callback(self, cb: Optional[Callable[[str], None]]):
@@ -484,35 +487,235 @@ class SAM2MaskingEngine:
     # Interactive Prompt System (Points & Bounding Boxes)
     # -------------------------------------------------------------------------
 
+    # -------------------------------------------------------------------------
+    # Interactive Prompt System & Precision Mask Modification Tools
+    # -------------------------------------------------------------------------
+
+    def push_undo_state(self, frame_idx: int):
+        """Saves current mask and prompt state snapshot for frame undo."""
+        if frame_idx not in self.undo_stacks:
+            self.undo_stacks[frame_idx] = []
+        cur_mask = self.tracked_masks.get(frame_idx, None)
+        cur_prompt = None
+        if frame_idx in self.prompts:
+            import copy
+            cur_prompt = copy.deepcopy(self.prompts[frame_idx])
+        self.undo_stacks[frame_idx].append({
+            "mask": cur_mask.copy() if cur_mask is not None else None,
+            "prompt": cur_prompt
+        })
+        if len(self.undo_stacks[frame_idx]) > 25:
+            self.undo_stacks[frame_idx].pop(0)
+
+    def undo(self, frame_idx: int, obj_id: int = 1) -> Optional[np.ndarray]:
+        """Reverts the last action (AI prompt, brush stroke, box cut) on this frame."""
+        if frame_idx in self.undo_stacks and self.undo_stacks[frame_idx]:
+            prev_state = self.undo_stacks[frame_idx].pop()
+            if prev_state["mask"] is not None:
+                self.tracked_masks[frame_idx] = prev_state["mask"]
+                self._sync_mask_to_sam2(frame_idx, self.tracked_masks[frame_idx], obj_id)
+            elif frame_idx in self.tracked_masks:
+                del self.tracked_masks[frame_idx]
+
+            if prev_state["prompt"] is not None:
+                self.prompts[frame_idx] = prev_state["prompt"]
+            elif frame_idx in self.prompts:
+                del self.prompts[frame_idx]
+
+            self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+            return self.tracked_masks.get(frame_idx, None)
+        else:
+            return self.remove_last_prompt(frame_idx, obj_id)
+
+    def _sync_mask_to_sam2(self, frame_idx: int, mask_np: np.ndarray, obj_id: int = 1):
+        """Feeds the edited binary mask into SAM 2's video memory predictor."""
+        if self.inference_state is None or self.video_predictor is None:
+            return
+        try:
+            w_curr, h_curr = self.get_frame_dims(frame_idx)
+            self.inference_state["_active_frame_idx"] = frame_idx
+            self.inference_state["video_width"] = w_curr
+            self.inference_state["video_height"] = h_curr
+            bool_mask = (mask_np > 128)
+            with torch.inference_mode(), self._autocast_context():
+                self.video_predictor.add_new_mask(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id,
+                    mask=bool_mask
+                )
+        except Exception as e:
+            self.log(f"Notice: mask memory sync: {e}")
+        finally:
+            if self.inference_state is not None:
+                self.inference_state["_active_frame_idx"] = None
+
     def add_point(self, frame_idx: int, x: float, y: float, label: int = 1, obj_id: int = 1) -> np.ndarray:
         """
         Adds a positive (label=1) or negative (label=0) click on a frame.
-        Coordinates (x, y) are in original image pixel space.
-        Returns the updated mask for this frame as (H, W) uint8.
+        Features intelligent foreground anchor point injection when erasing on tracked frames,
+        multi-point negative reinforcement, and a guaranteed fallback eraser.
         """
         if self.inference_state is None:
             raise RuntimeError("No sequence loaded.")
 
+        self.push_undo_state(frame_idx)
+
         if frame_idx not in self.prompts:
             self.prompts[frame_idx] = {"points": [], "labels": [], "box": None}
 
-        self.prompts[frame_idx]["points"].append([float(x), float(y)])
-        self.prompts[frame_idx]["labels"].append(int(label))
+        w_curr, h_curr = self.get_frame_dims(frame_idx)
+        cx = max(0.0, min(float(w_curr - 1), float(x)))
+        cy = max(0.0, min(float(h_curr - 1), float(y)))
 
-        return self._evaluate_frame_prompts(frame_idx, obj_id)
+        # If negative prompt (label=0) and no positive points currently exist on this frame:
+        if label == 0:
+            has_pos = any(l == 1 for l in self.prompts[frame_idx]["labels"])
+            if not has_pos:
+                # If a mask already exists on this frame, extract the highest-confidence foreground anchor point
+                existing_mask = self.tracked_masks.get(frame_idx, None)
+                if existing_mask is not None and np.any(existing_mask > 0):
+                    dist_map = cv2.distanceTransform((existing_mask > 128).astype(np.uint8), cv2.DIST_L2, 5)
+                    _, _, _, max_loc = cv2.minMaxLoc(dist_map)
+                    anchor_x, anchor_y = float(max_loc[0]), float(max_loc[1])
+                    self.prompts[frame_idx]["points"].append([anchor_x, anchor_y])
+                    self.prompts[frame_idx]["labels"].append(1)
+
+            # Add negative point with local multi-point reinforcement so SAM 2's negative attention token flips logits
+            self.prompts[frame_idx]["points"].append([cx, cy])
+            self.prompts[frame_idx]["labels"].append(0)
+            d = 3.5
+            for dx, dy in [(-d, 0.0), (d, 0.0), (0.0, -d), (0.0, d)]:
+                nx = max(0.0, min(float(w_curr - 1), cx + dx))
+                ny = max(0.0, min(float(h_curr - 1), cy + dy))
+                self.prompts[frame_idx]["points"].append([nx, ny])
+                self.prompts[frame_idx]["labels"].append(0)
+        else:
+            self.prompts[frame_idx]["points"].append([cx, cy])
+            self.prompts[frame_idx]["labels"].append(1)
+
+        mask_np = self._evaluate_frame_prompts(frame_idx, obj_id)
+
+        # Fallback guarantee: If it was an erase click and the clicked point is still foreground, apply local erase directly
+        if label == 0 and mask_np[int(cy), int(cx)] > 0:
+            cv2.circle(mask_np, (int(cx), int(cy)), 16, 0, -1)
+            self.tracked_masks[frame_idx] = mask_np
+            self._sync_mask_to_sam2(frame_idx, mask_np, obj_id)
+
+        return mask_np
 
     def add_box(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:
         """
-        Sets a bounding box prompt [x0, y0, x1, y1] on the specified frame.
+        Sets an AI bounding box prompt [x0, y0, x1, y1] on the specified frame.
+        Guarantees coordinates are clamped to frame dimensions, and purges contradictory out-of-box points.
         """
         if self.inference_state is None:
             raise RuntimeError("No sequence loaded.")
 
+        self.push_undo_state(frame_idx)
+
+        w_curr, h_curr = self.get_frame_dims(frame_idx)
+        bx0 = max(0.0, min(float(w_curr - 1), min(box[0], box[2])))
+        by0 = max(0.0, min(float(h_curr - 1), min(box[1], box[3])))
+        bx1 = max(0.0, min(float(w_curr - 1), max(box[0], box[2])))
+        by1 = max(0.0, min(float(h_curr - 1), max(box[1], box[3])))
+
+        if (bx1 - bx0) < 5 or (by1 - by0) < 5:
+            return self.tracked_masks.get(frame_idx, np.zeros((h_curr, w_curr), dtype=np.uint8))
+
         if frame_idx not in self.prompts:
             self.prompts[frame_idx] = {"points": [], "labels": [], "box": None}
 
-        self.prompts[frame_idx]["box"] = [float(v) for v in box]
+        # Filter out points that are outside the newly drawn box
+        keep_pts = []
+        keep_lbls = []
+        for (px, py), pl in zip(self.prompts[frame_idx]["points"], self.prompts[frame_idx]["labels"]):
+            if (bx0 - 10 <= px <= bx1 + 10) and (by0 - 10 <= py <= by1 + 10):
+                keep_pts.append([px, py])
+                keep_lbls.append(pl)
+        self.prompts[frame_idx]["points"] = keep_pts
+        self.prompts[frame_idx]["labels"] = keep_lbls
+        self.prompts[frame_idx]["box"] = [bx0, by0, bx1, by1]
+
         return self._evaluate_frame_prompts(frame_idx, obj_id)
+
+    def box_cut_mask(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:
+        """
+        Instantly zeroes out all mask pixels inside the bounding box rectangle [x0, y0, x1, y1].
+        Synchronizes the cut directly with SAM 2 memory so subsequent video tracking respects the erasure.
+        """
+        if self.inference_state is None:
+            raise RuntimeError("No sequence loaded.")
+
+        self.push_undo_state(frame_idx)
+
+        w_curr, h_curr = self.get_frame_dims(frame_idx)
+        bx0 = int(round(max(0.0, min(float(w_curr - 1), min(box[0], box[2])))))
+        by0 = int(round(max(0.0, min(float(h_curr - 1), min(box[1], box[3])))))
+        bx1 = int(round(max(0.0, min(float(w_curr - 1), max(box[0], box[2])))))
+        by1 = int(round(max(0.0, min(float(h_curr - 1), max(box[1], box[3])))))
+
+        mask = self.tracked_masks.get(frame_idx, None)
+        if mask is None:
+            mask = np.zeros((h_curr, w_curr), dtype=np.uint8)
+        else:
+            mask = mask.copy()
+
+        # Zero out the bounding box
+        mask[by0:by1 + 1, bx0:bx1 + 1] = 0
+        self.tracked_masks[frame_idx] = mask
+        self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+
+        # Sync modified mask to SAM 2
+        self._sync_mask_to_sam2(frame_idx, mask, obj_id)
+        return mask
+
+    def brush_stroke_mask(
+        self,
+        frame_idx: int,
+        stroke_points: List[Tuple[float, float]],
+        radius: int = 15,
+        mode: str = "erase",
+        obj_id: int = 1
+    ) -> np.ndarray:
+        """
+        Directly paints or erases pixels on the current frame mask using interactive brush strokes.
+        mode='erase' zeroes pixels; mode='paint' sets pixels to 255.
+        """
+        if self.inference_state is None:
+            raise RuntimeError("No sequence loaded.")
+
+        if not stroke_points:
+            return self.tracked_masks.get(frame_idx, np.zeros(self.get_frame_dims(frame_idx)[::-1], dtype=np.uint8))
+
+        w_curr, h_curr = self.get_frame_dims(frame_idx)
+        mask = self.tracked_masks.get(frame_idx, None)
+        if mask is None:
+            mask = np.zeros((h_curr, w_curr), dtype=np.uint8)
+        else:
+            mask = mask.copy()
+
+        color = 0 if mode == "erase" else 255
+        thickness = max(1, radius * 2)
+
+        for pt in stroke_points:
+            ix = int(round(max(0, min(w_curr - 1, pt[0]))))
+            iy = int(round(max(0, min(h_curr - 1, pt[1]))))
+            cv2.circle(mask, (ix, iy), radius, color, -1)
+
+        for i in range(len(stroke_points) - 1):
+            p0 = stroke_points[i]
+            p1 = stroke_points[i + 1]
+            ix0 = int(round(max(0, min(w_curr - 1, p0[0]))))
+            iy0 = int(round(max(0, min(h_curr - 1, p0[1]))))
+            ix1 = int(round(max(0, min(w_curr - 1, p1[0]))))
+            iy1 = int(round(max(0, min(h_curr - 1, p1[1]))))
+            cv2.line(mask, (ix0, iy0), (ix1, iy1), color, thickness=thickness)
+
+        self.tracked_masks[frame_idx] = mask
+        self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        self._sync_mask_to_sam2(frame_idx, mask, obj_id)
+        return mask
 
     def remove_last_prompt(self, frame_idx: int, obj_id: int = 1) -> Optional[np.ndarray]:
         """Undoes the most recent click on the frame."""
@@ -532,6 +735,7 @@ class SAM2MaskingEngine:
 
     def clear_frame_prompts(self, frame_idx: int, obj_id: int = 1):
         """Clears all manual prompts on the specified frame."""
+        self.push_undo_state(frame_idx)
         if frame_idx in self.prompts:
             del self.prompts[frame_idx]
 
@@ -546,10 +750,11 @@ class SAM2MaskingEngine:
         self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
 
     def clear_all(self):
-        """Resets all prompts, tracking caches, and loaded frames."""
+        """Resets all prompts, tracking caches, undo stacks, and loaded frames."""
         self.prompts.clear()
         self.tracked_masks.clear()
         self._base_mask_cache.clear()
+        self.undo_stacks.clear()
         if self.video_cap is not None:
             self.video_cap.release()
             self.video_cap = None

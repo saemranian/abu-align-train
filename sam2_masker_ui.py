@@ -84,7 +84,24 @@ class SAM2MaskerDialog:
         self.view_mode = tk.StringVar(value="Overlay")  # Overlay, Cutout, Matte
         self.mask_color_name = tk.StringVar(value="Ruby Red")
         self.overlay_opacity = tk.DoubleVar(value=0.55)
-        self.prompt_mode = tk.StringVar(value="Foreground")  # Foreground (+), Background (-), Box
+
+        # Tool Mode & Precision Editing State
+        # Modes: "AI Point", "AI Erase", "AI Box", "Box Cut", "Brush Paint", "Brush Erase"
+        self.tool_mode = tk.StringVar(value="AI Point")
+        self.prompt_mode = self.tool_mode  # Backward compatibility alias
+        self.brush_size_var = tk.IntVar(value=20)
+        self.brush_active_mode: str = "erase"
+        self.is_brushing: bool = False
+        self.current_stroke: Optional[List[Tuple[float, float]]] = None
+        self.box_is_cut: bool = False
+        self.brush_cursor_id = None
+        self.is_right_interacting: bool = False
+
+        # Sidebar scrollable container references
+        self.sidebar_frame: Optional[tk.Frame] = None
+        self.sidebar_canvas: Optional[tk.Canvas] = None
+        self.sidebar_scrollbar: Optional[ttk.Scrollbar] = None
+        self.scrollable_frame: Optional[tk.Frame] = None
 
         # Post-Processing Parameters
         self.dilation_var = tk.IntVar(value=0)
@@ -196,43 +213,32 @@ class SAM2MaskerDialog:
         self._build_viewport(viewport_frame)
 
     def _build_sidebar(self, parent: tk.Frame):
-        # Scrollable container for sidebar
-        canvas = tk.Canvas(parent, bg=SURFACE, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=SURFACE, padx=8, pady=8)
+        # 1. Non-Clipped Scrollable Sidebar Container with Responsive Scrollbar
+        self.sidebar_frame = parent
+        self.sidebar_scrollbar = ttk.Scrollbar(parent, orient="vertical")
+        self.sidebar_canvas = tk.Canvas(parent, bg=SURFACE, highlightthickness=0, yscrollcommand=self.sidebar_scrollbar.set)
+        self.sidebar_scrollbar.configure(command=self.sidebar_canvas.yview)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        # Dock scrollbar FIRST on the right so canvas expansion never squashes it
+        self.sidebar_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.sidebar_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        def _on_canvas_configure(event):
-            canvas.itemconfig(window_id, width=event.width)
-        canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        self.scrollable_frame = tk.Frame(self.sidebar_canvas, bg=SURFACE, padx=8, pady=8)
+        self.sidebar_window_id = self.sidebar_canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
-        # Smooth mousewheel scrolling over sidebar
-        def _on_sidebar_mousewheel(event):
-            if canvas.winfo_exists():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        def _on_sidebar_content_configure(event):
+            if self.sidebar_canvas.winfo_exists():
+                self.sidebar_canvas.configure(scrollregion=self.sidebar_canvas.bbox("all"))
 
-        def _bind_sidebar_mw(event):
-            canvas.bind_all("<MouseWheel>", _on_sidebar_mousewheel)
+        self.scrollable_frame.bind("<Configure>", _on_sidebar_content_configure)
 
-        def _unbind_sidebar_mw(event):
-            canvas.unbind_all("<MouseWheel>")
-
-        canvas.bind("<Enter>", _bind_sidebar_mw)
-        canvas.bind("<Leave>", _unbind_sidebar_mw)
-        scrollable_frame.bind("<Enter>", _bind_sidebar_mw)
-        scrollable_frame.bind("<Leave>", _unbind_sidebar_mw)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        def _on_sidebar_canvas_configure(event):
+            if self.sidebar_canvas.winfo_exists():
+                self.sidebar_canvas.itemconfig(self.sidebar_window_id, width=event.width)
+        self.sidebar_canvas.bind("<Configure>", _on_sidebar_canvas_configure)
 
         # CARD 1: Input Sequence / Video
-        c1 = self._create_card(scrollable_frame, "📁 SOURCE MEDIA")
+        c1 = self._create_card(self.scrollable_frame, "📁 SOURCE MEDIA")
         r_btns = tk.Frame(c1, bg=SURFACE)
         r_btns.pack(fill=tk.X, pady=(2, 6))
 
@@ -250,45 +256,82 @@ class SAM2MaskerDialog:
                                         font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=410)
         self.source_info_lbl.pack(anchor="w", pady=(0, 4))
 
-        # CARD 2: Prompt Mode & Interactive Tools (Clean 2-Row Layout)
-        c2 = self._create_card(scrollable_frame, "🎯 PROMPT TOOLS")
+        # CARD 2: Prompt Mode & Precision Interactive Tools
+        c2 = self._create_card(self.scrollable_frame, "🎯 PROMPT & SELECTION TOOLS")
+
+        # Row 1: AI Prompt Modes
         r_prompts_1 = tk.Frame(c2, bg=SURFACE)
-        r_prompts_1.pack(fill=tk.X, pady=(2, 3))
+        r_prompts_1.pack(fill=tk.X, pady=(1, 3))
+        tk.Label(r_prompts_1, text="AI Modes:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=11, anchor="w").pack(side=tk.LEFT)
 
-        rb_fg = tk.Radiobutton(r_prompts_1, text="Foreground (+)", variable=self.prompt_mode, value="Foreground",
-                               font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
-                               activebackground=SURFACE, activeforeground=SUCCESS)
-        rb_fg.pack(side=tk.LEFT, padx=(0, 12))
+        rb_ai_pt = tk.Radiobutton(r_prompts_1, text="Point (+)", variable=self.tool_mode, value="AI Point",
+                                  font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
+                                  activebackground=SURFACE, activeforeground=SUCCESS)
+        rb_ai_pt.pack(side=tk.LEFT, padx=(0, 10))
 
-        rb_bg = tk.Radiobutton(r_prompts_1, text="Erase (−) [Alt+Click]", variable=self.prompt_mode, value="Background",
-                               font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
-                               activebackground=SURFACE, activeforeground=DANGER)
-        rb_bg.pack(side=tk.LEFT)
+        rb_ai_er = tk.Radiobutton(r_prompts_1, text="Erase (−)", variable=self.tool_mode, value="AI Erase",
+                                  font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
+                                  activebackground=SURFACE, activeforeground=DANGER)
+        rb_ai_er.pack(side=tk.LEFT, padx=(0, 10))
 
+        rb_ai_bx = tk.Radiobutton(r_prompts_1, text="Box (+)", variable=self.tool_mode, value="AI Box",
+                                  font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
+                                  activebackground=SURFACE, activeforeground=ACCENT)
+        rb_ai_bx.pack(side=tk.LEFT)
+
+        # Row 2: Precision Direct Modification Tools (Guaranteed 100% Reliable Override)
         r_prompts_2 = tk.Frame(c2, bg=SURFACE)
         r_prompts_2.pack(fill=tk.X, pady=(1, 4))
-        rb_box = tk.Radiobutton(r_prompts_2, text="Bounding Box Marquee [Drag]", variable=self.prompt_mode, value="Box",
-                                font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
-                                activebackground=SURFACE, activeforeground=ACCENT)
-        rb_box.pack(side=tk.LEFT)
+        tk.Label(r_prompts_2, text="Direct Edit:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=11, anchor="w").pack(side=tk.LEFT)
 
-        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Left-Click adds (+) · Hold Alt + Click (or Right-Click) to Erase (−)",
+        rb_bx_cut = tk.Radiobutton(r_prompts_2, text="Box Cut (−)", variable=self.tool_mode, value="Box Cut",
+                                   font=("Segoe UI", 8, "bold"), fg=WARNING, bg=SURFACE, selectcolor=FIELD,
+                                   activebackground=SURFACE, activeforeground=WARNING)
+        rb_bx_cut.pack(side=tk.LEFT, padx=(0, 6))
+
+        rb_br_pt = tk.Radiobutton(r_prompts_2, text="Brush Paint (+)", variable=self.tool_mode, value="Brush Paint",
+                                  font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
+                                  activebackground=SURFACE, activeforeground=SUCCESS)
+        rb_br_pt.pack(side=tk.LEFT, padx=(0, 6))
+
+        rb_br_er = tk.Radiobutton(r_prompts_2, text="Eraser (−)", variable=self.tool_mode, value="Brush Erase",
+                                  font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
+                                  activebackground=SURFACE, activeforeground=DANGER)
+        rb_br_er.pack(side=tk.LEFT)
+
+        # Row 3: Brush Radius Control
+        r_b_size = tk.Frame(c2, bg=SURFACE)
+        r_b_size.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_b_size, text="Brush Radius (px):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=16, anchor="w").pack(side=tk.LEFT)
+        self.brush_size_entry = tk.Entry(r_b_size, width=5, font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT,
+                                         insertbackground=TEXT, justify="center", relief=tk.FLAT)
+        self.brush_size_entry.pack(side=tk.RIGHT)
+        self.brush_size_entry.insert(0, str(self.brush_size_var.get()))
+        self.brush_size_entry.bind("<Return>", lambda e: self._on_brush_size_commit())
+        self.brush_size_entry.bind("<FocusOut>", lambda e: self._on_brush_size_commit())
+        s_bs = ttk.Scale(r_b_size, from_=2, to=120, variable=self.brush_size_var,
+                         command=lambda v: self._on_brush_scale_moved(v))
+        s_bs.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+        # Row 4: Shortcuts and Guidance
+        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Left-Click paints/prompts · Alt+Click or Right-Click erases · [ / ] adjusts brush size",
                                    font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, wraplength=410, justify=tk.LEFT)
-        lbl_prompt_hint.pack(anchor="w", pady=(0, 4))
+        lbl_prompt_hint.pack(anchor="w", pady=(1, 4))
 
+        # Row 5: Action Buttons (Undo, Clear, Reset)
         r_pbtns = tk.Frame(c2, bg=SURFACE)
         r_pbtns.pack(fill=tk.X, pady=(2, 4))
 
-        btn_undo = tk.Button(r_pbtns, text="↩ Undo Click", command=self._undo_last_prompt,
-                             font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
+        btn_undo = tk.Button(r_pbtns, text="↩ Undo (Ctrl+Z)", command=self._undo_last_action,
+                             font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
         btn_undo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_clr_frame = tk.Button(r_pbtns, text="Clear Frame", command=self._clear_current_frame_prompts,
-                                  font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
+        btn_clr_frame = tk.Button(r_pbtns, text="Clear Frame (Del)", command=self._clear_current_frame_prompts,
+                                  font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
         btn_clr_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
         btn_clr_all = tk.Button(r_pbtns, text="Reset All", command=self._clear_all_prompts,
-                                font=("Segoe UI", 8), bg=FIELD, fg=DANGER, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
+                                font=("Segoe UI", 8), bg=FIELD, fg=DANGER, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
         btn_clr_all.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.keyframe_info_lbl = tk.Label(c2, text="Keyframes: 0 | Current Frame: Unprompted",
@@ -296,7 +339,7 @@ class SAM2MaskerDialog:
         self.keyframe_info_lbl.pack(anchor="w", pady=(4, 0))
 
         # CARD 3: Temporal Tracking / Propagation
-        c3 = self._create_card(scrollable_frame, "⚡ TIMELINE PROPAGATION")
+        c3 = self._create_card(self.scrollable_frame, "⚡ TIMELINE PROPAGATION")
         r_track = tk.Frame(c3, bg=SURFACE)
         r_track.pack(fill=tk.X, pady=(4, 6))
 
@@ -321,7 +364,7 @@ class SAM2MaskerDialog:
         self.track_status_lbl.pack(anchor="w")
 
         # CARD 4: Mask Customization & Refinement (With Direct Numeric Inputs & Instant Drag Debounce)
-        c4 = self._create_card(scrollable_frame, "✨ MASK REFINEMENT")
+        c4 = self._create_card(self.scrollable_frame, "✨ MASK REFINEMENT")
 
         # Dilation / Erosion
         r_dil = tk.Frame(c4, bg=SURFACE)
@@ -397,7 +440,7 @@ class SAM2MaskerDialog:
         chk_inv.pack(side=tk.LEFT)
 
         # CARD 5: Export Settings & Codecs (Hardware Accelerated)
-        c5 = self._create_card(scrollable_frame, "💾 EXPORT MASKS & CUTOUTS")
+        c5 = self._create_card(self.scrollable_frame, "💾 EXPORT MASKS & CUTOUTS")
 
         # Output Directory
         r_out = tk.Frame(c5, bg=SURFACE)
@@ -611,16 +654,55 @@ class SAM2MaskerDialog:
         self.canvas.bind("<ButtonRelease-2>", self._on_canvas_pan_end)
 
         self.canvas.bind("<ButtonPress-3>", self._on_canvas_right_down)
-        self.canvas.bind("<B3-Motion>", self._on_canvas_pan_drag)
-        self.canvas.bind("<ButtonRelease-3>", self._on_canvas_pan_end)
+        self.canvas.bind("<B3-Motion>", self._on_canvas_right_drag)
+        self.canvas.bind("<ButtonRelease-3>", self._on_canvas_right_up)
 
-        # Zoom via Mouse Wheel & Canvas Resizing
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+
+        # Centralized MouseWheel Routing (Smooth Sidebar Scroll & Viewport Zoom)
+        def _on_window_mousewheel(event):
+            rx = event.x_root
+            ry = event.y_root
+
+            # 1. Check if pointer is over sidebar area
+            if hasattr(self, "sidebar_frame") and self.sidebar_frame is not None and self.sidebar_frame.winfo_exists():
+                try:
+                    sx = self.sidebar_frame.winfo_rootx()
+                    sy = self.sidebar_frame.winfo_rooty()
+                    sw = self.sidebar_frame.winfo_width()
+                    sh = self.sidebar_frame.winfo_height()
+                    if sx <= rx <= sx + sw and sy <= ry <= sy + sh:
+                        if hasattr(self, "sidebar_canvas") and self.sidebar_canvas is not None and self.sidebar_canvas.winfo_exists():
+                            delta = event.delta if hasattr(event, "delta") and event.delta else (120 if getattr(event, "num", None) == 4 else -120)
+                            self.sidebar_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                            return "break"
+                except Exception:
+                    pass
+
+            # 2. Check if pointer is over main viewport canvas
+            if hasattr(self, "canvas") and self.canvas is not None and self.canvas.winfo_exists():
+                try:
+                    cx = self.canvas.winfo_rootx()
+                    cy = self.canvas.winfo_rooty()
+                    cw = self.canvas.winfo_width()
+                    ch = self.canvas.winfo_height()
+                    if cx <= rx <= cx + cw and cy <= ry <= cy + ch:
+                        self._on_canvas_mousewheel(event)
+                        return "break"
+                except Exception:
+                    pass
+
+        self.dialog.bind("<MouseWheel>", _on_window_mousewheel)
+        self.dialog.bind("<Button-4>", _on_window_mousewheel)
+        self.dialog.bind("<Button-5>", _on_window_mousewheel)
+
         def _on_canvas_enter(event):
-            self.canvas.bind_all("<MouseWheel>", self._on_canvas_mousewheel)
             self._sync_alt_state(event)
 
         def _on_canvas_leave(event):
-            self.canvas.unbind_all("<MouseWheel>")
+            if self.brush_cursor_id:
+                self.canvas.delete(self.brush_cursor_id)
+                self.brush_cursor_id = None
             self._on_alt_up()
 
         self.canvas.bind("<Enter>", _on_canvas_enter)
@@ -640,10 +722,13 @@ class SAM2MaskerDialog:
         self.dialog.bind("<space>", lambda e: self._toggle_playback())
         self.dialog.bind("<Left>", lambda e: self._set_frame(self.current_frame_idx - 1))
         self.dialog.bind("<Right>", lambda e: self._set_frame(self.current_frame_idx + 1))
-        self.dialog.bind("<Control-z>", lambda e: self._undo_last_prompt())
+        self.dialog.bind("<Control-z>", lambda e: self._undo_last_action())
+        self.dialog.bind("<Control-Z>", lambda e: self._undo_last_action())
         self.dialog.bind("<Delete>", lambda e: self._clear_current_frame_prompts())
         self.dialog.bind("<f>", lambda e: self._zoom_to_fit())
         self.dialog.bind("<F>", lambda e: self._zoom_to_fit())
+        self.dialog.bind("[", lambda e: self._adjust_brush_size(-5))
+        self.dialog.bind("]", lambda e: self._adjust_brush_size(5))
 
     # -------------------------------------------------------------------------
     # Model Loading (Asynchronous)
@@ -886,12 +971,18 @@ class SAM2MaskerDialog:
     def _on_alt_down(self, event=None):
         self.is_alt_pressed = True
         self.canvas.configure(cursor="circle")
-        self.status_lbl.configure(text="[ALT HELD] Click anywhere on the mask to ERASE / Subtract (−)", fg=DANGER)
+        mode = self.tool_mode.get()
+        if mode == "AI Box":
+            self.status_lbl.configure(text="[ALT HELD] Box Marquee will CUT / ERASE (−)", fg=DANGER)
+        elif mode == "Brush Paint":
+            self.status_lbl.configure(text="[ALT HELD] Brush will ERASE (−)", fg=DANGER)
+        else:
+            self.status_lbl.configure(text="[ALT HELD] Click / Drag to ERASE / Subtract (−)", fg=DANGER)
 
     def _on_alt_up(self, event=None):
         self.is_alt_pressed = False
         self.canvas.configure(cursor="crosshair")
-        self.status_lbl.configure(text="Ready. Left-Click adds (+) · Hold Alt + Click (or Right-Click) to Erase (−)", fg=MUTED)
+        self.status_lbl.configure(text="Ready. Select tool mode: AI Point/Box or Direct Brush/Cut", fg=MUTED)
 
     def _sync_alt_state(self, event=None):
         """Ensures is_alt_pressed is cleared if the physical Alt key is not depressed."""
@@ -909,43 +1000,97 @@ class SAM2MaskerDialog:
         if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
             self._apply_point_prompt(img_x, img_y, label=0)
 
+    def _on_canvas_motion(self, event):
+        mode = self.tool_mode.get()
+        if mode in ("Brush Paint", "Brush Erase"):
+            r_img = self.brush_size_var.get()
+            r_canvas = max(2, int(round(r_img * self.zoom)))
+            x, y = event.x, event.y
+            color = DANGER if (mode == "Brush Erase" or self.is_alt_pressed) else SUCCESS
+            if self.brush_cursor_id:
+                self.canvas.coords(self.brush_cursor_id, x - r_canvas, y - r_canvas, x + r_canvas, y + r_canvas)
+                self.canvas.itemconfig(self.brush_cursor_id, outline=color)
+            else:
+                self.brush_cursor_id = self.canvas.create_oval(
+                    x - r_canvas, y - r_canvas, x + r_canvas, y + r_canvas,
+                    outline=color, width=1, dash=(3, 3), tags="brush_cursor"
+                )
+        else:
+            if self.brush_cursor_id:
+                self.canvas.delete(self.brush_cursor_id)
+                self.brush_cursor_id = None
+
     def _on_canvas_left_down(self, event):
         if self.engine.num_frames == 0:
             return
 
-        # Check Alt key or Shift key (Alt / Shift + Left Click = Erase / Negative Prompt)
-        # Note: 0x20000 is Alt on Windows. NEVER test 0x0008 (which is NumLock!) or 0x0080.
         is_alt = bool(event.state & 0x20000) or self.is_alt_pressed
         is_shift = bool(event.state & 0x0001)
-        mode = self.prompt_mode.get()
+        mode = self.tool_mode.get()
 
-        if mode == "Box":
-            self.box_start = (event.x, event.y)
-            return
-
-        # Screen to Image Space
         cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
         img_x = (event.x - self.pan_x) / self.zoom
         img_y = (event.y - self.pan_y) / self.zoom
 
+        if mode in ("AI Box", "Box Cut"):
+            self.box_start = (event.x, event.y)
+            self.box_is_cut = (mode == "Box Cut" or is_alt or is_shift)
+            return
+
+        if mode in ("Brush Paint", "Brush Erase"):
+            if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
+                self.is_brushing = True
+                self.brush_active_mode = "erase" if (mode == "Brush Erase" or is_alt or is_shift) else "paint"
+                self.engine.push_undo_state(self.current_frame_idx)
+                self.current_stroke = [(img_x, img_y)]
+                self.engine.brush_stroke_mask(
+                    self.current_frame_idx,
+                    self.current_stroke,
+                    radius=self.brush_size_var.get(),
+                    mode=self.brush_active_mode
+                )
+                self._composite_cache_key = None
+                self._render_current_frame()
+            return
+
+        # AI Point mode (AI Point or AI Erase)
         if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
-            # Normal left click in Foreground mode is label 1 (Subject / Green +)
-            # Erase is triggered ONLY by holding Alt, holding Shift, or selecting Erase mode
-            label = 0 if (is_alt or is_shift or mode == "Background") else 1
+            label = 0 if (mode == "AI Erase" or is_alt or is_shift) else 1
             self._apply_point_prompt(img_x, img_y, label)
 
     def _on_canvas_left_drag(self, event):
-        if self.prompt_mode.get() == "Box" and self.box_start:
+        if self.box_start:
             x0, y0 = self.box_start
             x1, y1 = event.x, event.y
+            outline_col = DANGER if self.box_is_cut else ACCENT
             if self.current_box_rect_id:
-                self.canvas.delete(self.current_box_rect_id)
-            self.current_box_rect_id = self.canvas.create_rectangle(
-                x0, y0, x1, y1, outline=ACCENT, width=2, dash=(4, 4)
-            )
+                self.canvas.coords(self.current_box_rect_id, x0, y0, x1, y1)
+                self.canvas.itemconfig(self.current_box_rect_id, outline=outline_col)
+            else:
+                self.current_box_rect_id = self.canvas.create_rectangle(
+                    x0, y0, x1, y1, outline=outline_col, width=2, dash=(4, 4)
+                )
+            return
+
+        if self.is_brushing:
+            cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
+            img_x = (event.x - self.pan_x) / self.zoom
+            img_y = (event.y - self.pan_y) / self.zoom
+            img_x = max(0.0, min(float(cur_w - 1), img_x))
+            img_y = max(0.0, min(float(cur_h - 1), img_y))
+            if self.current_stroke:
+                self.current_stroke.append((img_x, img_y))
+                self.engine.brush_stroke_mask(
+                    self.current_frame_idx,
+                    self.current_stroke[-2:],
+                    radius=self.brush_size_var.get(),
+                    mode=self.brush_active_mode
+                )
+                self._composite_cache_key = None
+                self._render_current_frame()
 
     def _on_canvas_left_up(self, event):
-        if self.prompt_mode.get() == "Box" and self.box_start:
+        if self.box_start:
             if self.current_box_rect_id:
                 self.canvas.delete(self.current_box_rect_id)
                 self.current_box_rect_id = None
@@ -954,18 +1099,33 @@ class SAM2MaskerDialog:
             sx1, sy1 = event.x, event.y
             self.box_start = None
 
-            # Convert to image coords
+            cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
             ix0 = (min(sx0, sx1) - self.pan_x) / self.zoom
             iy0 = (min(sy0, sy1) - self.pan_y) / self.zoom
             ix1 = (max(sx0, sx1) - self.pan_x) / self.zoom
             iy1 = (max(sy0, sy1) - self.pan_y) / self.zoom
 
-            # Ensure minimum bounding box size
-            if (ix1 - ix0) > 10 and (iy1 - iy0) > 10:
-                self._apply_box_prompt([ix0, iy0, ix1, iy1])
+            ix0 = max(0.0, min(float(cur_w - 1), ix0))
+            iy0 = max(0.0, min(float(cur_h - 1), iy0))
+            ix1 = max(0.0, min(float(cur_w - 1), ix1))
+            iy1 = max(0.0, min(float(cur_h - 1), iy1))
+
+            if (ix1 - ix0) > 5 and (iy1 - iy0) > 5:
+                if self.box_is_cut:
+                    self._apply_box_cut([ix0, iy0, ix1, iy1])
+                else:
+                    self._apply_box_prompt([ix0, iy0, ix1, iy1])
+            self.box_is_cut = False
+            return
+
+        if self.is_brushing:
+            self.is_brushing = False
+            self.current_stroke = None
+            self.status_lbl.configure(text=f"Brush {self.brush_active_mode} applied to frame {self.current_frame_idx + 1}", fg=SUCCESS)
+            self._composite_cache_key = None
+            self._set_frame(self.current_frame_idx)
 
     def _on_canvas_right_down(self, event):
-        # Right click adds a negative (erase) prompt directly
         if self.engine.num_frames == 0:
             return
 
@@ -973,11 +1133,82 @@ class SAM2MaskerDialog:
         img_x = (event.x - self.pan_x) / self.zoom
         img_y = (event.y - self.pan_y) / self.zoom
 
+        mode = self.tool_mode.get()
         if 0 <= img_x < cur_w and 0 <= img_y < cur_h:
-            self._apply_point_prompt(img_x, img_y, label=0)
+            if mode in ("Brush Paint", "Brush Erase"):
+                self.is_right_interacting = True
+                self.brush_active_mode = "erase"
+                self.engine.push_undo_state(self.current_frame_idx)
+                self.current_stroke = [(img_x, img_y)]
+                self.engine.brush_stroke_mask(
+                    self.current_frame_idx,
+                    self.current_stroke,
+                    radius=self.brush_size_var.get(),
+                    mode="erase"
+                )
+                self._composite_cache_key = None
+                self._render_current_frame()
+            elif mode in ("AI Box", "Box Cut"):
+                self.is_right_interacting = True
+                self.box_start = (event.x, event.y)
+                self.box_is_cut = True
+            else:
+                # Right click in point mode = immediate AI Erase click
+                self._apply_point_prompt(img_x, img_y, label=0)
         else:
-            # If outside image, treat as pan start
+            # Outside image: pan canvas
             self._on_canvas_pan_start(event)
+
+    def _on_canvas_right_drag(self, event):
+        if self.is_right_interacting:
+            mode = self.tool_mode.get()
+            if mode in ("Brush Paint", "Brush Erase"):
+                cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
+                img_x = max(0.0, min(float(cur_w - 1), (event.x - self.pan_x) / self.zoom))
+                img_y = max(0.0, min(float(cur_h - 1), (event.y - self.pan_y) / self.zoom))
+                if self.current_stroke:
+                    self.current_stroke.append((img_x, img_y))
+                    self.engine.brush_stroke_mask(
+                        self.current_frame_idx,
+                        self.current_stroke[-2:],
+                        radius=self.brush_size_var.get(),
+                        mode="erase"
+                    )
+                    self._composite_cache_key = None
+                    self._render_current_frame()
+            elif mode in ("AI Box", "Box Cut"):
+                self._on_canvas_left_drag(event)
+        else:
+            self._on_canvas_pan_drag(event)
+
+    def _on_canvas_right_up(self, event):
+        if self.is_right_interacting:
+            mode = self.tool_mode.get()
+            if mode in ("Brush Paint", "Brush Erase"):
+                self.current_stroke = None
+                self._set_frame(self.current_frame_idx)
+            elif mode in ("AI Box", "Box Cut"):
+                self._on_canvas_left_up(event)
+            self.is_right_interacting = False
+        else:
+            self._on_canvas_pan_end(event)
+
+    def _adjust_brush_size(self, delta: int):
+        cur = self.brush_size_var.get()
+        new_val = max(2, min(200, cur + delta))
+        self.brush_size_var.set(new_val)
+        self.brush_size_entry.delete(0, tk.END)
+        self.brush_size_entry.insert(0, str(new_val))
+        self.status_lbl.configure(text=f"Brush size: {new_val}px", fg=ACCENT)
+
+    def _on_brush_scale_moved(self, value):
+        val = int(round(float(value)))
+        self.brush_size_entry.delete(0, tk.END)
+        self.brush_size_entry.insert(0, str(val))
+
+    def _on_brush_size_commit(self):
+        val = self._parse_and_clamp_entry(self.brush_size_entry, self.brush_size_var.get(), 2, 200)
+        self.brush_size_var.set(val)
 
     def _apply_point_prompt(self, x: float, y: float, label: int):
         lbl_text = "Erase (−)" if label == 0 else "Foreground (+)"
@@ -987,29 +1218,44 @@ class SAM2MaskerDialog:
             self.engine.add_point(self.current_frame_idx, x, y, label=label)
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
-            self.status_lbl.configure(text=f"{lbl_text} prompt evaluated successfully", fg=SUCCESS)
+            self.status_lbl.configure(text=f"{lbl_text} evaluated successfully on frame {self.current_frame_idx + 1}", fg=SUCCESS)
         except Exception as e:
             self.status_lbl.configure(text=f"Prompt Error: {e}", fg=DANGER)
 
     def _apply_box_prompt(self, box: List[float]):
-        self.status_lbl.configure(text=f"Evaluating box on frame {self.current_frame_idx + 1}...", fg=ACCENT)
+        self.status_lbl.configure(text=f"Evaluating AI Box on frame {self.current_frame_idx + 1}...", fg=ACCENT)
         try:
             self.engine.add_box(self.current_frame_idx, box)
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
-            self.status_lbl.configure(text="Box evaluated successfully", fg=SUCCESS)
+            self.status_lbl.configure(text=f"AI Box evaluated successfully on frame {self.current_frame_idx + 1}", fg=SUCCESS)
         except Exception as e:
-            self.status_lbl.configure(text=f"Prompt Error: {e}", fg=DANGER)
+            self.status_lbl.configure(text=f"Box Error: {e}", fg=DANGER)
 
-    def _undo_last_prompt(self):
-        self.engine.remove_last_prompt(self.current_frame_idx)
+    def _apply_box_cut(self, box: List[float]):
+        self.status_lbl.configure(text=f"Applying Box Cut on frame {self.current_frame_idx + 1}...", fg=DANGER)
+        try:
+            self.engine.box_cut_mask(self.current_frame_idx, box)
+            self._composite_cache_key = None
+            self._set_frame(self.current_frame_idx)
+            self.status_lbl.configure(text=f"Box Cut applied on frame {self.current_frame_idx + 1}", fg=SUCCESS)
+        except Exception as e:
+            self.status_lbl.configure(text=f"Box Cut Error: {e}", fg=DANGER)
+
+    def _undo_last_action(self):
+        res = self.engine.undo(self.current_frame_idx)
         self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
+        self.status_lbl.configure(text=f"Reverted last edit on frame {self.current_frame_idx + 1}", fg=WARNING)
+
+    def _undo_last_prompt(self):
+        self._undo_last_action()
 
     def _clear_current_frame_prompts(self):
         self.engine.clear_frame_prompts(self.current_frame_idx)
         self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
+        self.status_lbl.configure(text=f"Cleared prompts & mask on frame {self.current_frame_idx + 1}", fg=WARNING)
 
     def _clear_all_prompts(self):
         if messagebox.askyesno("Reset All Prompts", "Are you sure you want to clear all prompts and tracked masks across all frames?", parent=self.dialog):

@@ -300,6 +300,71 @@ def test_mixed_orientations():
     print("=" * 70)
 
 
+def test_selection_and_editing_tools():
+    print("\n" + "=" * 70)
+    print("RUNNING ADVANCED SELECTION, ERASE, BOX CUT & BRUSH TEST SUITE")
+    print("=" * 70)
+
+    engine = SAM2MaskingEngine()
+    engine.load_model("tiny")
+
+    temp_dir = tempfile.mkdtemp(prefix="sam2_edit_test_")
+    frames_dir = os.path.join(temp_dir, "test_images")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    # Create synthetic test frame with a white circular subject at (200, 200)
+    img = np.zeros((400, 400, 3), dtype=np.uint8)
+    cv2.circle(img, (200, 200), 80, (255, 255, 255), -1)
+    cv2.imwrite(os.path.join(frames_dir, "frame_0000.png"), img)
+
+    engine.load_source(frames_dir)
+
+    # 1. Test AI Box prompt with clamping
+    print("[1] Testing AI Bounding Box Marquee with coordinate clamping...")
+    m_box = engine.add_box(0, [100, 100, 300, 300])
+    assert m_box is not None and m_box[200, 200] == 255, "Subject center should be 255"
+    print("    [PASS] AI Box prompt segmented subject successfully.")
+
+    # 2. Test Direct Manual Brush Eraser
+    print("\n[2] Testing Direct Brush Eraser Stroke...")
+    engine.push_undo_state(0)
+    m_erased = engine.brush_stroke_mask(0, [(200, 200), (210, 200)], radius=20, mode="erase")
+    assert m_erased[200, 200] == 0, "Center pixel should be erased to 0"
+    print("    [PASS] Brush stroke directly erased subject center to 0.")
+
+    # 3. Test Undo of Brush Eraser
+    print("\n[3] Testing Undo History...")
+    m_undone = engine.undo(0)
+    assert m_undone is not None and m_undone[200, 200] == 255, "Undo should restore erased pixel to 255"
+    print("    [PASS] Undo restored erased pixel back to 255.")
+
+    # 4. Test Box Cut / Marquee Deselect
+    print("\n[4] Testing Box Cut / Marquee Deselect...")
+    m_cut = engine.box_cut_mask(0, [180, 180, 220, 220])
+    assert m_cut[200, 200] == 0, "Box cut should zero out center region"
+    print("    [PASS] Box Cut successfully zeroed out marquee region.")
+
+    # 5. Test Undo of Box Cut
+    print("\n[5] Testing Undo of Box Cut...")
+    m_undone2 = engine.undo(0)
+    assert m_undone2 is not None and m_undone2[200, 200] == 255, "Undo should restore cut box"
+    print("    [PASS] Undo restored cut box area back to 255.")
+
+    # 6. Test Smart Anchor Positive Point on Tracked Frame Erase
+    print("\n[6] Testing Smart Anchor Detection on Tracked Frame...")
+    engine.prompts.clear()
+    engine.tracked_masks[0] = (img[:, :, 0] > 0).astype(np.uint8) * 255
+    # Click negative point at edge of circle without previous positive prompts
+    m_neg = engine.add_point(0, 260, 200, label=0)
+    assert m_neg.sum() > 0, "Smart anchor injection should prevent mask collapse"
+    print(f"    [PASS] Anchor injected and negative click evaluated without mask collapse (Mask sum: {m_neg.sum()}).")
+
+    print("\n" + "=" * 70)
+    print("ALL ADVANCED SELECTION & EDITING TESTS PASSED PERFECTLY!")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     test_sam2_all()
     test_mixed_orientations()
+    test_selection_and_editing_tools()
