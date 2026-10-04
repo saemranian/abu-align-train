@@ -43,6 +43,72 @@ MASK_COLORS = {
 }
 
 
+class ToolTip:
+    """
+    Lightweight, modern floating tooltip for Tkinter controls.
+    Spawns after a short hover delay; auto-destroys on mouse exit or click.
+    """
+    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 350):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._tip_window = None
+        self._after_id = None
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _on_leave(self, event=None):
+        self._cancel()
+        self._hide()
+
+    def _cancel(self):
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if not self.widget.winfo_exists() or self._tip_window:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 8
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        except Exception:
+            return
+
+        self._tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.attributes("-topmost", True)
+        tw.wm_geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(tw, bg="#1a2024", padx=8, pady=5, highlightthickness=1, highlightbackground=ACCENT)
+        frame.pack()
+        lbl = tk.Label(frame, text=self.text, font=("Segoe UI", 8), bg="#1a2024", fg=TEXT,
+                       justify=tk.LEFT, wraplength=340)
+        lbl.pack()
+
+    def _hide(self):
+        if self._tip_window:
+            try:
+                self._tip_window.destroy()
+            except Exception:
+                pass
+            self._tip_window = None
+
+
+def add_tooltip(widget: tk.Widget, text: str):
+    """Helper to attach an instructive tooltip to any Tkinter widget."""
+    return ToolTip(widget, text)
+
+
 class SAM2MaskerDialog:
     """
     Main dialog window providing an interactive workspace for AI masking.
@@ -204,8 +270,8 @@ class SAM2MaskerDialog:
         main_body = tk.Frame(self.dialog, bg=BG)
         main_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        # Left Column: Control Sidebar (Generous 480px to eliminate horizontal and vertical cropping)
-        sidebar_frame = tk.Frame(main_body, bg=SURFACE, width=480)
+        # Left Column: Control Sidebar (Generous 500px to eliminate horizontal and vertical cropping)
+        sidebar_frame = tk.Frame(main_body, bg=SURFACE, width=500)
         sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         sidebar_frame.pack_propagate(False)
 
@@ -216,6 +282,9 @@ class SAM2MaskerDialog:
         viewport_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self._build_viewport(viewport_frame)
+
+        # 3. Setup Instructive Hover Tooltips for All Controls
+        self._setup_tooltips()
 
     def _build_sidebar(self, parent: tk.Frame):
         # 1. Non-Clipped Scrollable Sidebar Container with Responsive Scrollbar
@@ -247,64 +316,70 @@ class SAM2MaskerDialog:
         r_btns = tk.Frame(c1, bg=SURFACE)
         r_btns.pack(fill=tk.X, pady=(2, 6))
 
-        btn_folder = tk.Button(r_btns, text="Open Image Folder", command=self._browse_folder,
-                               font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, activebackground=BORDER,
-                               relief=tk.FLAT, padx=8, pady=5, cursor="hand2")
-        btn_folder.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.btn_folder = tk.Button(r_btns, text="Open Image Folder", command=self._browse_folder,
+                                    font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, activebackground=BORDER,
+                                    relief=tk.FLAT, padx=8, pady=5, cursor="hand2")
+        self.btn_folder.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_video = tk.Button(r_btns, text="Open Video File", command=self._browse_video,
-                              font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, activebackground=BORDER,
-                              relief=tk.FLAT, padx=8, pady=5, cursor="hand2")
-        btn_video.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_video = tk.Button(r_btns, text="Open Video File", command=self._browse_video,
+                                   font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, activebackground=BORDER,
+                                   relief=tk.FLAT, padx=8, pady=5, cursor="hand2")
+        self.btn_video.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.source_info_lbl = tk.Label(c1, text="No source loaded (open folder or video)",
-                                        font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=440)
+                                        font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=460)
         self.source_info_lbl.pack(anchor="w", pady=(0, 4))
 
         # CARD 2: Prompt Mode & Precision Interactive Tools
         c2 = self._create_card(self.scrollable_frame, "🎯 PROMPT & SELECTION TOOLS")
 
-        # Row 1: AI Prompt Modes
-        r_prompts_1 = tk.Frame(c2, bg=SURFACE)
-        r_prompts_1.pack(fill=tk.X, pady=(2, 3))
-        tk.Label(r_prompts_1, text="AI Modes:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=10, anchor="w").pack(side=tk.LEFT)
+        # Responsive Tool Grid Container: 4 columns (Label + 3 tool options)
+        tool_grid = tk.Frame(c2, bg=SURFACE)
+        tool_grid.pack(fill=tk.X, pady=(2, 4))
+        tool_grid.columnconfigure(0, weight=0, minsize=80)
+        tool_grid.columnconfigure(1, weight=1)
+        tool_grid.columnconfigure(2, weight=1)
+        tool_grid.columnconfigure(3, weight=1)
 
-        rb_ai_pt = tk.Radiobutton(r_prompts_1, text="Point (+)", variable=self.tool_mode, value="AI Point",
-                                  font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
-                                  activebackground=SURFACE, activeforeground=SUCCESS)
-        rb_ai_pt.pack(side=tk.LEFT, padx=(0, 8))
+        # Row 0: AI Prompt Tools
+        tk.Label(tool_grid, text="AI Modes:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(0, 4), pady=2
+        )
+        self.rb_ai_pt = tk.Radiobutton(tool_grid, text="Point (+)", variable=self.tool_mode, value="AI Point",
+                                       font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
+                                       activebackground=SURFACE, activeforeground=SUCCESS)
+        self.rb_ai_pt.grid(row=0, column=1, sticky="w", pady=2)
 
-        rb_ai_er = tk.Radiobutton(r_prompts_1, text="Erase (−)", variable=self.tool_mode, value="AI Erase",
-                                  font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
-                                  activebackground=SURFACE, activeforeground=DANGER)
-        rb_ai_er.pack(side=tk.LEFT, padx=(0, 8))
+        self.rb_ai_er = tk.Radiobutton(tool_grid, text="Erase (−)", variable=self.tool_mode, value="AI Erase",
+                                       font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
+                                       activebackground=SURFACE, activeforeground=DANGER)
+        self.rb_ai_er.grid(row=0, column=2, sticky="w", pady=2)
 
-        rb_ai_bx = tk.Radiobutton(r_prompts_1, text="Box (+)", variable=self.tool_mode, value="AI Box",
-                                  font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
-                                  activebackground=SURFACE, activeforeground=ACCENT)
-        rb_ai_bx.pack(side=tk.LEFT)
+        self.rb_ai_bx = tk.Radiobutton(tool_grid, text="Box (+)", variable=self.tool_mode, value="AI Box",
+                                       font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
+                                       activebackground=SURFACE, activeforeground=ACCENT)
+        self.rb_ai_bx.grid(row=0, column=3, sticky="w", pady=2)
 
-        # Row 2: Precision Direct Modification Tools (Guaranteed 100% Reliable Override)
-        r_prompts_2 = tk.Frame(c2, bg=SURFACE)
-        r_prompts_2.pack(fill=tk.X, pady=(2, 4))
-        tk.Label(r_prompts_2, text="Direct Edit:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=10, anchor="w").pack(side=tk.LEFT)
+        # Row 1: Direct Override Tools (Guaranteed 100% Reliable Override)
+        tk.Label(tool_grid, text="Direct Edit:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, anchor="w").grid(
+            row=1, column=0, sticky="w", padx=(0, 4), pady=2
+        )
+        self.rb_br_pt = tk.Radiobutton(tool_grid, text="Brush (+)", variable=self.tool_mode, value="Brush Paint",
+                                       font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
+                                       activebackground=SURFACE, activeforeground=SUCCESS)
+        self.rb_br_pt.grid(row=1, column=1, sticky="w", pady=2)
 
-        rb_br_pt = tk.Radiobutton(r_prompts_2, text="Brush Paint (+)", variable=self.tool_mode, value="Brush Paint",
-                                  font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
-                                  activebackground=SURFACE, activeforeground=SUCCESS)
-        rb_br_pt.pack(side=tk.LEFT, padx=(0, 8))
+        self.rb_br_er = tk.Radiobutton(tool_grid, text="Eraser (−)", variable=self.tool_mode, value="Brush Erase",
+                                       font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
+                                       activebackground=SURFACE, activeforeground=DANGER)
+        self.rb_br_er.grid(row=1, column=2, sticky="w", pady=2)
 
-        rb_br_er = tk.Radiobutton(r_prompts_2, text="Eraser (−)", variable=self.tool_mode, value="Brush Erase",
-                                  font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
-                                  activebackground=SURFACE, activeforeground=DANGER)
-        rb_br_er.pack(side=tk.LEFT, padx=(0, 8))
+        self.rb_bx_cut = tk.Radiobutton(tool_grid, text="Box Cut (−)", variable=self.tool_mode, value="Box Cut",
+                                        font=("Segoe UI", 8, "bold"), fg=WARNING, bg=SURFACE, selectcolor=FIELD,
+                                        activebackground=SURFACE, activeforeground=WARNING)
+        self.rb_bx_cut.grid(row=1, column=3, sticky="w", pady=2)
 
-        rb_bx_cut = tk.Radiobutton(r_prompts_2, text="Box Cut (−)", variable=self.tool_mode, value="Box Cut",
-                                   font=("Segoe UI", 8, "bold"), fg=WARNING, bg=SURFACE, selectcolor=FIELD,
-                                   activebackground=SURFACE, activeforeground=WARNING)
-        rb_bx_cut.pack(side=tk.LEFT)
-
-        # Row 3: Brush Radius Control
+        # Row 2: Brush Radius Control
         r_b_size = tk.Frame(c2, bg=SURFACE)
         r_b_size.pack(fill=tk.X, pady=(2, 4))
         tk.Label(r_b_size, text="Brush Radius (px):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=15, anchor="w").pack(side=tk.LEFT)
@@ -314,39 +389,54 @@ class SAM2MaskerDialog:
         self.brush_size_entry.insert(0, str(self.brush_size_var.get()))
         self.brush_size_entry.bind("<Return>", lambda e: self._on_brush_size_commit())
         self.brush_size_entry.bind("<FocusOut>", lambda e: self._on_brush_size_commit())
-        s_bs = ttk.Scale(r_b_size, from_=2, to=120, variable=self.brush_size_var,
-                         command=lambda v: self._on_brush_scale_moved(v))
-        s_bs.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_bs = ttk.Scale(r_b_size, from_=2, to=120, variable=self.brush_size_var,
+                              command=lambda v: self._on_brush_scale_moved(v))
+        self.s_bs.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+        # Row 3: AI Text Prompt Segmentation (OwLV2 + SAM 2.1 Grounded Pipeline)
+        r_txt = tk.Frame(c2, bg=SURFACE)
+        r_txt.pack(fill=tk.X, pady=(3, 3))
+        tk.Label(r_txt, text="Text Prompt:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=11, anchor="w").pack(side=tk.LEFT)
+        self.text_prompt_var = tk.StringVar(value="")
+        self.text_prompt_entry = tk.Entry(r_txt, textvariable=self.text_prompt_var, font=("Segoe UI", 9),
+                                          bg=FIELD, fg=TEXT, insertbackground=TEXT, relief=tk.FLAT)
+        self.text_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
+        self.text_prompt_entry.bind("<Return>", lambda e: self._on_generate_from_text())
+
+        self.btn_text_prompt = tk.Button(r_txt, text="✨ AI Mask", command=self._on_generate_from_text,
+                                         font=("Segoe UI", 8, "bold"), bg=ACCENT, fg=BG, activebackground=ACCENT_HOVER,
+                                         relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        self.btn_text_prompt.pack(side=tk.RIGHT)
 
         # Row 4: Shortcuts and Guidance
-        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Click/Box to prompt · Alt+Click erases · Brush overrides any neural blind spot",
-                                   font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, wraplength=440, justify=tk.LEFT)
+        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Text prompt, click or drag box · Alt+Click erases · Brush overrides blind spots",
+                                   font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, wraplength=460, justify=tk.LEFT)
         lbl_prompt_hint.pack(anchor="w", pady=(1, 4))
 
         # Row 5: Action Buttons (Undo, Clear, Reset)
         r_pbtns = tk.Frame(c2, bg=SURFACE)
         r_pbtns.pack(fill=tk.X, pady=(2, 3))
 
-        btn_undo = tk.Button(r_pbtns, text="↩ Undo (Ctrl+Z)", command=self._undo_last_action,
-                             font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
-        btn_undo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.btn_undo = tk.Button(r_pbtns, text="↩ Undo (Ctrl+Z)", command=self._undo_last_action,
+                                  font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
+        self.btn_undo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_clr_frame = tk.Button(r_pbtns, text="Clear Frame (Del)", command=self._clear_current_frame_prompts,
-                                  font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
-        btn_clr_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.btn_clr_frame = tk.Button(r_pbtns, text="Clear Frame (Del)", command=self._clear_current_frame_prompts,
+                                        font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
+        self.btn_clr_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_clr_all = tk.Button(r_pbtns, text="Reset All", command=self._clear_all_prompts,
-                                font=("Segoe UI", 8), bg=FIELD, fg=DANGER, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
-        btn_clr_all.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_clr_all = tk.Button(r_pbtns, text="Reset All", command=self._clear_all_prompts,
+                                     font=("Segoe UI", 8), bg=FIELD, fg=DANGER, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
+        self.btn_clr_all.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Row 6: Fresh Re-Prompt / Clear Conditioning Button
-        btn_fresh = tk.Button(c2, text="🔄 Fresh Re-Prompt (Reset Memory Conditioning)",
-                              command=self._reset_current_frame_conditioning,
-                              font=("Segoe UI", 8), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
-        btn_fresh.pack(fill=tk.X, pady=(1, 3))
+        self.btn_fresh = tk.Button(c2, text="🔄 Fresh Re-Prompt (Reset Memory Conditioning)",
+                                   command=self._reset_current_frame_conditioning,
+                                   font=("Segoe UI", 8), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
+        self.btn_fresh.pack(fill=tk.X, pady=(1, 3))
 
         self.keyframe_info_lbl = tk.Label(c2, text="Keyframes: 0 | Current Frame: Unprompted",
-                                          font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, wraplength=440, justify=tk.LEFT)
+                                          font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, wraplength=460, justify=tk.LEFT)
         self.keyframe_info_lbl.pack(anchor="w", pady=(2, 0))
 
         # CARD 3: Temporal Tracking / Propagation
@@ -354,18 +444,18 @@ class SAM2MaskerDialog:
         r_track = tk.Frame(c3, bg=SURFACE)
         r_track.pack(fill=tk.X, pady=(4, 6))
 
-        btn_track_fwd = tk.Button(r_track, text="Track Forward ▶", command=lambda: self._start_tracking("forward"),
-                                  font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=8, pady=6, cursor="hand2")
-        btn_track_fwd.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.btn_track_fwd = tk.Button(r_track, text="Track Forward ▶", command=lambda: self._start_tracking("forward"),
+                                       font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=8, pady=6, cursor="hand2")
+        self.btn_track_fwd.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_track_bwd = tk.Button(r_track, text="◀ Track Backward", command=lambda: self._start_tracking("backward"),
-                                  font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=8, pady=6, cursor="hand2")
-        btn_track_bwd.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_track_bwd = tk.Button(r_track, text="◀ Track Backward", command=lambda: self._start_tracking("backward"),
+                                       font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=8, pady=6, cursor="hand2")
+        self.btn_track_bwd.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        btn_track_all = tk.Button(c3, text="⚡ Track Full Sequence (Both Directions)", command=lambda: self._start_tracking("both"),
-                                  font=("Segoe UI", 9, "bold"), bg=ACCENT, fg=BG, activebackground=ACCENT_HOVER,
-                                  relief=tk.FLAT, padx=10, pady=7, cursor="hand2")
-        btn_track_all.pack(fill=tk.X, pady=(2, 6))
+        self.btn_track_all = tk.Button(c3, text="⚡ Track Full Sequence (Both Directions)", command=lambda: self._start_tracking("both"),
+                                       font=("Segoe UI", 9, "bold"), bg=ACCENT, fg=BG, activebackground=ACCENT_HOVER,
+                                       relief=tk.FLAT, padx=10, pady=7, cursor="hand2")
+        self.btn_track_all.pack(fill=tk.X, pady=(2, 6))
 
         self.track_progress = ttk.Progressbar(c3, orient="horizontal", mode="determinate")
         self.track_progress.pack(fill=tk.X, pady=(2, 4))
@@ -387,10 +477,10 @@ class SAM2MaskerDialog:
         self.dilation_entry.insert(0, str(self.dilation_var.get()))
         self.dilation_entry.bind("<Return>", lambda e: self._on_entry_param_commit("dilation"))
         self.dilation_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("dilation"))
-        s_dil = ttk.Scale(r_dil, from_=-25, to=25, variable=self.dilation_var,
-                          command=lambda v: self._on_refine_slider_moved("dilation", v))
-        s_dil.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
-        s_dil.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_dil = ttk.Scale(r_dil, from_=-25, to=25, variable=self.dilation_var,
+                               command=lambda v: self._on_refine_slider_moved("dilation", v))
+        self.s_dil.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
+        self.s_dil.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Feather Radius
         r_fea = tk.Frame(c4, bg=SURFACE)
@@ -402,10 +492,10 @@ class SAM2MaskerDialog:
         self.feather_entry.insert(0, str(self.feather_var.get()))
         self.feather_entry.bind("<Return>", lambda e: self._on_entry_param_commit("feather"))
         self.feather_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("feather"))
-        s_fea = ttk.Scale(r_fea, from_=0, to=20, variable=self.feather_var,
-                          command=lambda v: self._on_refine_slider_moved("feather", v))
-        s_fea.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
-        s_fea.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_fea = ttk.Scale(r_fea, from_=0, to=20, variable=self.feather_var,
+                               command=lambda v: self._on_refine_slider_moved("feather", v))
+        self.s_fea.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
+        self.s_fea.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Edge Threshold
         r_thr = tk.Frame(c4, bg=SURFACE)
@@ -417,10 +507,10 @@ class SAM2MaskerDialog:
         self.threshold_entry.insert(0, str(self.threshold_var.get()))
         self.threshold_entry.bind("<Return>", lambda e: self._on_entry_param_commit("threshold"))
         self.threshold_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("threshold"))
-        s_thr = ttk.Scale(r_thr, from_=1, to=254, variable=self.threshold_var,
-                          command=lambda v: self._on_refine_slider_moved("threshold", v))
-        s_thr.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
-        s_thr.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_thr = ttk.Scale(r_thr, from_=1, to=254, variable=self.threshold_var,
+                               command=lambda v: self._on_refine_slider_moved("threshold", v))
+        self.s_thr.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
+        self.s_thr.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Speckle Removal Area
         r_spk = tk.Frame(c4, bg=SURFACE)
@@ -432,23 +522,23 @@ class SAM2MaskerDialog:
         self.speckle_entry.insert(0, str(self.min_speckle_var.get()))
         self.speckle_entry.bind("<Return>", lambda e: self._on_entry_param_commit("speckle"))
         self.speckle_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("speckle"))
-        s_spk = ttk.Scale(r_spk, from_=0, to=150, variable=self.min_speckle_var,
-                          command=lambda v: self._on_refine_slider_moved("speckle", v))
-        s_spk.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
-        s_spk.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_spk = ttk.Scale(r_spk, from_=0, to=150, variable=self.min_speckle_var,
+                               command=lambda v: self._on_refine_slider_moved("speckle", v))
+        self.s_spk.bind("<ButtonRelease-1>", lambda e: self._flush_refine_param())
+        self.s_spk.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Fill Holes & Invert
         r_chk = tk.Frame(c4, bg=SURFACE)
         r_chk.pack(fill=tk.X, pady=(4, 2))
-        chk_hole = tk.Checkbutton(r_chk, text="Fill Interior Holes", variable=self.fill_holes_var,
-                                  font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, selectcolor=FIELD,
-                                  command=self._on_refine_param_changed)
-        chk_hole.pack(side=tk.LEFT, padx=(0, 10))
+        self.chk_hole = tk.Checkbutton(r_chk, text="Fill Interior Holes", variable=self.fill_holes_var,
+                                       font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, selectcolor=FIELD,
+                                       command=self._on_refine_param_changed)
+        self.chk_hole.pack(side=tk.LEFT, padx=(0, 10))
 
-        chk_inv = tk.Checkbutton(r_chk, text="Invert Mask", variable=self.invert_var,
-                                 font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, selectcolor=FIELD,
-                                 command=self._on_refine_param_changed)
-        chk_inv.pack(side=tk.LEFT)
+        self.chk_inv = tk.Checkbutton(r_chk, text="Invert Mask", variable=self.invert_var,
+                                      font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, selectcolor=FIELD,
+                                      command=self._on_refine_param_changed)
+        self.chk_inv.pack(side=tk.LEFT)
 
         # CARD 5: Export Settings & Codecs (Hardware Accelerated)
         c5 = self._create_card(self.scrollable_frame, "💾 EXPORT MASKS & CUTOUTS")
@@ -460,9 +550,9 @@ class SAM2MaskerDialog:
         self.out_entry = tk.Entry(r_out, textvariable=self.export_dir_var, font=("Segoe UI", 8),
                                   bg=FIELD, fg=TEXT, insertbackground=TEXT, relief=tk.FLAT)
         self.out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        btn_browse_out = tk.Button(r_out, text="Browse", command=self._browse_output_dir,
-                                   font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_browse_out.pack(side=tk.LEFT)
+        self.btn_browse_out = tk.Button(r_out, text="Browse", command=self._browse_output_dir,
+                                        font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_browse_out.pack(side=tk.LEFT)
 
         # Target Checkboxes (Clean layout, Cutout is Optional)
         r_targets = tk.Frame(c5, bg=SURFACE)
@@ -492,19 +582,19 @@ class SAM2MaskerDialog:
         r_mask_fmt = tk.Frame(c5, bg=SURFACE)
         r_mask_fmt.pack(fill=tk.X, pady=(2, 4))
         tk.Label(r_mask_fmt, text="Mask Format:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
-        cb_mask = ttk.Combobox(r_mask_fmt, textvariable=self.mask_fmt_var,
-                               values=["png", "jpg", "webp"],
-                               state="readonly", width=18, font=("Segoe UI", 8))
-        cb_mask.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cb_mask = ttk.Combobox(r_mask_fmt, textvariable=self.mask_fmt_var,
+                                    values=["png", "jpg", "webp"],
+                                    state="readonly", width=18, font=("Segoe UI", 8))
+        self.cb_mask.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Output Resolution / Scale
         r_res = tk.Frame(c5, bg=SURFACE)
         r_res.pack(fill=tk.X, pady=(2, 4))
         tk.Label(r_res, text="Export Size:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
-        cb_scale = ttk.Combobox(r_res, textvariable=self.export_scale_var,
-                                values=["2K QHD (2048px - Auto Aspect)", "Original (100% Native)", "50% Half Res (Auto Aspect)", "4K UHD (3840px - Auto Aspect)", "1K HD (1024px - Auto Aspect)"],
-                                state="readonly", width=18, font=("Segoe UI", 8))
-        cb_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cb_scale = ttk.Combobox(r_res, textvariable=self.export_scale_var,
+                                     values=["2K QHD (2048px - Auto Aspect)", "Original (100% Native)", "50% Half Res (Auto Aspect)", "4K UHD (3840px - Auto Aspect)", "1K HD (1024px - Auto Aspect)"],
+                                     state="readonly", width=18, font=("Segoe UI", 8))
+        self.cb_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Quality / Compression Slider
         r_qual = tk.Frame(c5, bg=SURFACE)
@@ -512,17 +602,17 @@ class SAM2MaskerDialog:
         tk.Label(r_qual, text="Quality (WebP/JPG):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=15, anchor="w").pack(side=tk.LEFT)
         self.qual_lbl = tk.Label(r_qual, text="92", font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, width=3)
         self.qual_lbl.pack(side=tk.RIGHT)
-        s_qual = ttk.Scale(r_qual, from_=50, to=100, variable=self.export_quality_var,
-                           command=lambda v: self.qual_lbl.configure(text=str(int(float(v)))))
-        s_qual.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.s_qual = ttk.Scale(r_qual, from_=50, to=100, variable=self.export_quality_var,
+                                command=lambda v: self.qual_lbl.configure(text=str(int(float(v)))))
+        self.s_qual.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Hardware Acceleration & Size Badge
         r_hw = tk.Frame(c5, bg=SURFACE)
         r_hw.pack(fill=tk.X, pady=(2, 4))
-        chk_hw = tk.Checkbutton(r_hw, text="⚡ Hardware Accelerated (CUDA GPU + I/O)",
-                                variable=self.export_hw_accel_var, font=("Segoe UI", 8, "bold"),
-                                fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
-        chk_hw.pack(side=tk.LEFT)
+        self.chk_hw = tk.Checkbutton(r_hw, text="⚡ Hardware Accelerated (CUDA GPU + I/O)",
+                                     variable=self.export_hw_accel_var, font=("Segoe UI", 8, "bold"),
+                                     fg=ACCENT, bg=SURFACE, selectcolor=FIELD)
+        self.chk_hw.pack(side=tk.LEFT)
 
         lbl_hint = tk.Label(c5, text="💡 Tip: WebP at 2K reduces cutout file size from ~70MB down to ~1.5MB with zero visual loss!",
                             font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=440)
@@ -585,24 +675,24 @@ class SAM2MaskerDialog:
 
         # Mask Tint Color Selector
         tk.Label(v_toolbar, text="Tint:", font=("Segoe UI", 8, "bold"), fg=TEXT, bg=SURFACE).pack(side=tk.LEFT, padx=(10, 4))
-        color_combo = ttk.Combobox(v_toolbar, textvariable=self.mask_color_name,
-                                   values=list(MASK_COLORS.keys()), state="readonly", width=9, font=("Segoe UI", 8))
-        color_combo.pack(side=tk.LEFT, padx=(0, 10))
-        color_combo.bind("<<ComboboxSelected>>", lambda e: self._render_current_frame())
+        self.color_combo = ttk.Combobox(v_toolbar, textvariable=self.mask_color_name,
+                                        values=list(MASK_COLORS.keys()), state="readonly", width=9, font=("Segoe UI", 8))
+        self.color_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.color_combo.bind("<<ComboboxSelected>>", lambda e: self._render_current_frame())
 
         # Opacity Slider
         tk.Label(v_toolbar, text="Opacity:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE).pack(side=tk.LEFT, padx=(0, 4))
-        s_op = ttk.Scale(v_toolbar, from_=0.1, to=1.0, variable=self.overlay_opacity, command=lambda v: self._render_current_frame())
-        s_op.pack(side=tk.LEFT, padx=(0, 14), fill=tk.X)
+        self.s_op = ttk.Scale(v_toolbar, from_=0.1, to=1.0, variable=self.overlay_opacity, command=lambda v: self._render_current_frame())
+        self.s_op.pack(side=tk.LEFT, padx=(0, 14), fill=tk.X)
 
         # Zoom Controls
-        btn_fit = tk.Button(v_toolbar, text="Fit View [F]", command=self._zoom_to_fit,
-                            font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_fit.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_fit = tk.Button(v_toolbar, text="Fit View [F]", command=self._zoom_to_fit,
+                                 font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_fit.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_100 = tk.Button(v_toolbar, text="100%", command=self._zoom_to_100,
-                            font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_100.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_100 = tk.Button(v_toolbar, text="100%", command=self._zoom_to_100,
+                                 font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_100.pack(side=tk.LEFT, padx=(0, 10))
 
         self.zoom_lbl = tk.Label(v_toolbar, text="Zoom: 100%", font=("Segoe UI", 8), fg=MUTED, bg=SURFACE)
         self.zoom_lbl.pack(side=tk.LEFT)
@@ -622,42 +712,42 @@ class SAM2MaskerDialog:
         r_ctrl = tk.Frame(timeline_bar, bg=SURFACE)
         r_ctrl.pack(fill=tk.X, pady=(0, 4))
 
-        btn_first = tk.Button(r_ctrl, text="|◀", command=lambda: self._set_frame(0),
-                              font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_first.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_first = tk.Button(r_ctrl, text="|◀", command=lambda: self._set_frame(0),
+                                   font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_first.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_prev10 = tk.Button(r_ctrl, text="◀ -10", command=lambda: self._set_frame(self.current_frame_idx - 10),
-                               font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_prev10.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_prev10 = tk.Button(r_ctrl, text="◀ -10", command=lambda: self._set_frame(self.current_frame_idx - 10),
+                                    font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_prev10.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_prev = tk.Button(r_ctrl, text="◀ Prev", command=lambda: self._set_frame(self.current_frame_idx - 1),
-                             font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_prev.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_prev = tk.Button(r_ctrl, text="◀ Prev", command=lambda: self._set_frame(self.current_frame_idx - 1),
+                                  font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_prev.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_play = tk.Button(r_ctrl, text="▶ Play", command=self._toggle_playback,
                                   font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=10, cursor="hand2")
         self.btn_play.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_next = tk.Button(r_ctrl, text="Next ▶", command=lambda: self._set_frame(self.current_frame_idx + 1),
-                             font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_next.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_next = tk.Button(r_ctrl, text="Next ▶", command=lambda: self._set_frame(self.current_frame_idx + 1),
+                                  font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_next.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_next10 = tk.Button(r_ctrl, text="+10 ▶", command=lambda: self._set_frame(self.current_frame_idx + 10),
-                               font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_next10.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_next10 = tk.Button(r_ctrl, text="+10 ▶", command=lambda: self._set_frame(self.current_frame_idx + 10),
+                                    font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_next10.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_last = tk.Button(r_ctrl, text="▶|", command=lambda: self._set_frame(self.engine.num_frames - 1),
-                             font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_last.pack(side=tk.LEFT, padx=(0, 14))
+        self.btn_last = tk.Button(r_ctrl, text="▶|", command=lambda: self._set_frame(self.engine.num_frames - 1),
+                                  font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_last.pack(side=tk.LEFT, padx=(0, 14))
 
         # Keyframe jump buttons
-        btn_prev_kf = tk.Button(r_ctrl, text="◀ Keyframe", command=self._jump_prev_keyframe,
-                                font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_prev_kf.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_prev_kf = tk.Button(r_ctrl, text="◀ Keyframe", command=self._jump_prev_keyframe,
+                                     font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_prev_kf.pack(side=tk.LEFT, padx=(0, 4))
 
-        btn_next_kf = tk.Button(r_ctrl, text="Keyframe ▶", command=self._jump_next_keyframe,
-                                font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, cursor="hand2")
-        btn_next_kf.pack(side=tk.LEFT, padx=(0, 14))
+        self.btn_next_kf = tk.Button(r_ctrl, text="Keyframe ▶", command=self._jump_next_keyframe,
+                                     font=("Segoe UI", 8), bg=FIELD, fg=WARNING, relief=tk.FLAT, padx=6, cursor="hand2")
+        self.btn_next_kf.pack(side=tk.LEFT, padx=(0, 14))
 
         # Frame Readout Badge
         self.frame_readout_lbl = tk.Label(r_ctrl, text="Frame: 0 / 0", font=("Segoe UI", 9, "bold"),
@@ -669,6 +759,86 @@ class SAM2MaskerDialog:
         self.scrubber = ttk.Scale(timeline_bar, from_=0, to=0, orient="horizontal",
                                   variable=self.scrubber_var, command=self._on_scrubber_drag)
         self.scrubber.pack(fill=tk.X, pady=(2, 0))
+
+    def _setup_tooltips(self):
+        """Attaches instructive tooltips to all interactive controls and sliders across the UI."""
+        tips = {
+            # Header
+            "model_combo": "Select SAM 2.1 neural backbone:\n• tiny: Fastest, lowest VRAM (~38MB weights)\n• small: Balanced speed & precision (~92MB)\n• base_plus: High detail (~201MB)\n• large: Maximum segmentation accuracy (~898MB)",
+            "device_lbl": "Hardware acceleration device currently powering SAM 2.1 inference & memory tracking.",
+
+            # Source Media
+            "btn_folder": "Open a folder containing an ordered sequence of images (.png, .jpg, .tiff, etc.)",
+            "btn_video": "Open a video file (.mp4, .mov, .avi, etc.) to extract and segment frames.",
+
+            # Prompt & Selection Tools
+            "rb_ai_pt": "AI Foreground Point (+):\nClick inside target subject to prompt SAM 2.1 to select it.",
+            "rb_ai_er": "AI Background Point (−):\nClick on non-target or background areas to subtract them. (Shortcut: Alt+Click)",
+            "rb_ai_bx": "AI Bounding Box (+):\nDrag a rectangular marquee around the subject. SAM 2.1 segments within the box boundary.",
+            "rb_br_pt": "Direct Brush Paint (+):\nDraw directly on the mask to manually force-include pixels. Overrides model ambiguity.",
+            "rb_br_er": "Direct Brush Eraser (−):\nErase directly on the mask to manually carve away unwanted parts. 100% reliable direct override.",
+            "rb_bx_cut": "Direct Box Cut (−):\nDrag a rectangle to instantly carve out and delete everything within it from the mask.",
+            "s_bs": "Adjust the radius (in pixels) of the direct Brush Paint and Eraser tools.",
+            "brush_size_entry": "Type exact brush radius in pixels and press Enter.",
+            "text_prompt_entry": "Type natural language description (e.g., 'white turntable', 'bracket', 'screw', 'person') for automated zero-shot object detection.",
+            "btn_text_prompt": "Run OwLV2 zero-shot detection to find bounding boxes matching the text prompt, then feed directly into SAM 2.1 to mask the subject.",
+            "btn_undo": "Undo the last prompt point, box, or brush stroke (Ctrl+Z).",
+            "btn_clr_frame": "Remove all prompts and generated mask from the active frame (Delete key).",
+            "btn_clr_all": "Completely reset and clear all prompts, keyframes, and masks across all frames.",
+            "btn_fresh": "Fresh Re-Prompt:\nPurges cached temporal conditioning and memory features for this frame so you can start clean.",
+
+            # Timeline Propagation
+            "btn_track_fwd": "Propagate and track the mask forward from the current keyframe through remaining frames.",
+            "btn_track_bwd": "Propagate and track the mask backward from the current keyframe towards the beginning.",
+            "btn_track_all": "Propagate and track the mask across the entire sequence in both directions.",
+
+            # Mask Refinement
+            "s_dil": "Dilation / Margin:\nExpand (positive) or contract (negative) mask edges by pixels to eliminate background fringes.",
+            "dilation_entry": "Exact pixel dilation/margin value (-25 to +25). Press Enter to apply.",
+            "s_fea": "Edge Feather:\nApplies Gaussian softening to mask borders for smooth, natural subject cutouts.",
+            "feather_entry": "Exact feather radius in pixels (0 to 20). Press Enter to apply.",
+            "s_thr": "Binarize Threshold:\nCutoff probability (1–254) for converting model logits into binary foreground/background.",
+            "threshold_entry": "Exact binarization cutoff threshold (1–254). Press Enter to apply.",
+            "s_spk": "Clean Speckles:\nAutomatically removes floating noise islands smaller than the specified pixel area.",
+            "speckle_entry": "Minimum island area in pixels (0 to 150) below which noise is erased. Press Enter to apply.",
+            "chk_hole": "Fill Interior Holes:\nAutomatically detects and fills enclosed unselected holes inside the segmented subject.",
+            "chk_inv": "Invert Mask:\nSwaps foreground and background selections.",
+
+            # Export Settings
+            "out_entry": "Folder path where masks and cutout images will be saved.",
+            "btn_browse_out": "Browse file system to choose output export folder.",
+            "chk_bin": "Generate 8-bit black-and-white mask files named <image>.mask.png, ready for RealityScan photogrammetry.",
+            "chk_cut": "Generate transparent RGBA images with background removed.",
+            "cb_cut": "Cutout file format:\n• WebP: Highly compressed (~1.5MB vs 70MB PNG) with lossless alpha channel.\n• PNG: Standard lossless RGBA.",
+            "cb_mask": "File format for binary mask images (PNG, JPG, or WebP).",
+            "cb_scale": "Target resolution scaling for export:\n• Native: Full original camera resolution\n• 2K QHD / 4K UHD: Standard downscaled targets",
+            "s_qual": "Compression quality (50–100) for WebP and JPG exports.",
+            "chk_hw": "Enable GPU-accelerated batch image processing and multithreaded file I/O for faster exports.",
+            "btn_export": "Start exporting masks/cutouts for all frames in the sequence.",
+            "btn_pause_export": "Pause the running export process. Click again to resume.",
+            "btn_stop_export": "Cancel and abort the active export immediately.",
+
+            # Viewport & Scrubber
+            "color_combo": "Change the tinted overlay color used to visualize the mask on the canvas.",
+            "s_op": "Adjust transparency of the mask overlay on top of the original image.",
+            "btn_fit": "Fit the image to the viewport window (Hot-key: F).",
+            "btn_100": "Zoom image to 100% native pixel resolution (Hot-key: 1).",
+            "btn_first": "Jump to the first frame (Frame 0).",
+            "btn_prev10": "Jump backward 10 frames.",
+            "btn_prev": "Step to previous frame (Left Arrow).",
+            "btn_play": "Toggle real-time sequence playback (Spacebar).",
+            "btn_next": "Step to next frame (Right Arrow).",
+            "btn_next10": "Jump forward 10 frames.",
+            "btn_last": "Jump to the last frame in the sequence.",
+            "btn_prev_kf": "Jump to the previous annotated keyframe.",
+            "btn_next_kf": "Jump to the next annotated keyframe.",
+            "scrubber": "Drag or click to scrub through frames across the timeline.",
+        }
+
+        for attr_name, text in tips.items():
+            widget = getattr(self, attr_name, None)
+            if widget is not None:
+                add_tooltip(widget, text)
 
     # -------------------------------------------------------------------------
     # Event Bindings (Canvas, Mouse, Keyboard)
@@ -766,20 +936,92 @@ class SAM2MaskerDialog:
     # -------------------------------------------------------------------------
 
     def _init_model_async(self, model_key: str):
-        self.status_lbl.configure(text=f"Loading SAM 2 ({model_key})...", fg=ACCENT)
+        self.status_lbl.configure(text=f"Loading SAM 2.1 ({model_key})...", fg=ACCENT)
+        self.model_combo.configure(state=tk.DISABLED)
 
         def _worker():
             try:
                 self.engine.load_model(model_key, progress_callback=lambda msg: self.dialog.after(0, lambda: self.status_lbl.configure(text=msg)))
-                self.dialog.after(0, lambda: self.status_lbl.configure(text=f"SAM 2 {model_key.upper()} Ready", fg=SUCCESS))
+                def _on_success():
+                    self.model_combo.configure(state="readonly")
+                    self.status_lbl.configure(text=f"SAM 2.1 {model_key.upper()} Ready", fg=SUCCESS)
+                    # Refresh device badge
+                    dev_text = f"⚡ {self.engine.device.upper()}"
+                    if torch.cuda.is_available():
+                        dev_text = f"⚡ CUDA: {torch.cuda.get_device_name(0)}"
+                    self.device_lbl.configure(text=dev_text)
+                    # If sequence is loaded, re-render current frame with new model's output
+                    if self.engine.num_frames > 0:
+                        self._cached_mask_key = None
+                        self._cached_mask = None
+                        self._composite_cache_key = None
+                        self._set_frame(self.current_frame_idx)
+                self.dialog.after(0, _on_success)
             except Exception as e:
-                self.dialog.after(0, lambda: self.status_lbl.configure(text=f"Model Error: {e}", fg=DANGER))
+                def _on_error():
+                    self.model_combo.configure(state="readonly")
+                    self.status_lbl.configure(text=f"Model Error: {e}", fg=DANGER)
+                self.dialog.after(0, _on_error)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_model_changed(self, event=None):
         model_key = self.model_combo_var.get()
         self._init_model_async(model_key)
+
+    # -------------------------------------------------------------------------
+    # Text-Prompt AI Masking Callbacks (Grounded-SAM 2)
+    # -------------------------------------------------------------------------
+
+    def _on_generate_from_text(self):
+        prompt_text = self.text_prompt_var.get().strip()
+        if not prompt_text:
+            messagebox.showinfo("Text Prompt", "Please enter a descriptive object name (e.g. 'turntable', 'bracket', 'screw', 'camera').", parent=self.dialog)
+            return
+
+        if self.engine.num_frames == 0:
+            messagebox.showwarning("No Source", "Please load an image sequence or video first.", parent=self.dialog)
+            return
+
+        self.status_lbl.configure(text=f"🔍 Grounding '{prompt_text}' with OwLV2 & SAM 2.1...", fg=ACCENT)
+        self.btn_text_prompt.configure(state=tk.DISABLED)
+
+        def _worker():
+            try:
+                def _prog(msg):
+                    self.dialog.after(0, lambda: self.status_lbl.configure(text=msg))
+
+                mask_np, box, score = self.engine.generate_mask_from_text(
+                    self.current_frame_idx,
+                    prompt_text,
+                    threshold=0.10,
+                    progress_callback=_prog
+                )
+                if mask_np is not None:
+                    self.dialog.after(0, lambda: self._on_text_mask_success(prompt_text, box, score))
+                else:
+                    self.dialog.after(0, lambda: self._on_text_mask_not_found(prompt_text))
+            except Exception as e:
+                self.dialog.after(0, lambda: self._on_text_mask_error(prompt_text, str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_text_mask_success(self, prompt_text: str, box: List[float], score: float):
+        self.btn_text_prompt.configure(state=tk.NORMAL)
+        self._cached_mask_key = None
+        self._cached_mask = None
+        self._composite_cache_key = None
+        self._set_frame(self.current_frame_idx)
+        score_pct = int(round(score * 100))
+        self.status_lbl.configure(text=f"✨ AI Mask created for '{prompt_text}' ({score_pct}% confidence)", fg=SUCCESS)
+
+    def _on_text_mask_not_found(self, prompt_text: str):
+        self.btn_text_prompt.configure(state=tk.NORMAL)
+        self.status_lbl.configure(text=f"No matching '{prompt_text}' detected. Try different phrasing.", fg=WARNING)
+
+    def _on_text_mask_error(self, prompt_text: str, err: str):
+        self.btn_text_prompt.configure(state=tk.NORMAL)
+        self.status_lbl.configure(text=f"Text Prompt Error: {err}", fg=DANGER)
 
     # -------------------------------------------------------------------------
     # Source Media Ingestion
@@ -1078,12 +1320,10 @@ class SAM2MaskerDialog:
                     self.current_frame_idx,
                     self.current_stroke,
                     radius=self.brush_size_var.get(),
-                    mode=self.brush_active_mode
+                    mode=self.brush_active_mode,
+                    sync_to_sam2=False
                 )
-                self._cached_mask_key = None
-                self._cached_mask = None
-                self._composite_cache_key = None
-                self._render_current_frame()
+                self._render_current_frame(fast_brush=True)
             return
 
         # AI Point mode (AI Point or AI Erase)
@@ -1117,12 +1357,10 @@ class SAM2MaskerDialog:
                     self.current_frame_idx,
                     self.current_stroke[-2:],
                     radius=self.brush_size_var.get(),
-                    mode=self.brush_active_mode
+                    mode=self.brush_active_mode,
+                    sync_to_sam2=False
                 )
-                self._cached_mask_key = None
-                self._cached_mask = None
-                self._composite_cache_key = None
-                self._render_current_frame()
+                self._render_current_frame(fast_brush=True)
 
     def _on_canvas_left_up(self, event):
         if self.box_start:
@@ -1157,6 +1395,7 @@ class SAM2MaskerDialog:
             self.is_brushing = False
             self.current_stroke = None
             self.status_lbl.configure(text=f"Brush {self.brush_active_mode} applied to frame {self.current_frame_idx + 1}", fg=SUCCESS)
+            self.engine.sync_frame_mask_to_sam2(self.current_frame_idx, async_exec=True)
             self._cached_mask_key = None
             self._cached_mask = None
             self._composite_cache_key = None
@@ -1181,12 +1420,10 @@ class SAM2MaskerDialog:
                     self.current_frame_idx,
                     self.current_stroke,
                     radius=self.brush_size_var.get(),
-                    mode="erase"
+                    mode="erase",
+                    sync_to_sam2=False
                 )
-                self._cached_mask_key = None
-                self._cached_mask = None
-                self._composite_cache_key = None
-                self._render_current_frame()
+                self._render_current_frame(fast_brush=True)
             elif mode in ("AI Box", "Box Cut"):
                 self.is_right_interacting = True
                 self.box_start = (event.x, event.y)
@@ -1211,12 +1448,10 @@ class SAM2MaskerDialog:
                         self.current_frame_idx,
                         self.current_stroke[-2:],
                         radius=self.brush_size_var.get(),
-                        mode="erase"
+                        mode="erase",
+                        sync_to_sam2=False
                     )
-                    self._cached_mask_key = None
-                    self._cached_mask = None
-                    self._composite_cache_key = None
-                    self._render_current_frame()
+                    self._render_current_frame(fast_brush=True)
             elif mode in ("AI Box", "Box Cut"):
                 self._on_canvas_left_drag(event)
         else:
@@ -1227,6 +1462,7 @@ class SAM2MaskerDialog:
             mode = self.tool_mode.get()
             if mode in ("Brush Paint", "Brush Erase"):
                 self.current_stroke = None
+                self.engine.sync_frame_mask_to_sam2(self.current_frame_idx, async_exec=True)
                 self._cached_mask_key = None
                 self._cached_mask = None
                 self._composite_cache_key = None
@@ -1283,7 +1519,8 @@ class SAM2MaskerDialog:
     def _apply_box_cut(self, box: List[float]):
         self.status_lbl.configure(text=f"Applying Box Cut on frame {self.current_frame_idx + 1}...", fg=DANGER)
         try:
-            self.engine.box_cut_mask(self.current_frame_idx, box)
+            self.engine.box_cut_mask(self.current_frame_idx, box, sync_to_sam2=False)
+            self.engine.sync_frame_mask_to_sam2(self.current_frame_idx, async_exec=True)
             self._cached_mask_key = None
             self._cached_mask = None
             self._composite_cache_key = None
@@ -1468,7 +1705,7 @@ class SAM2MaskerDialog:
         self._checkerboard_cache = bg
         return bg
 
-    def _render_current_frame(self):
+    def _render_current_frame(self, fast_brush: bool = False):
         if self.engine.num_frames == 0:
             return
 
@@ -1481,43 +1718,46 @@ class SAM2MaskerDialog:
         if orig_w <= 0 or orig_h <= 0:
             return
 
-        # 1. Mask Processing & Cache: Only recompute mask when frame or refine params change
-        p_data = self.engine.prompts.get(self.current_frame_idx, {})
-        pts_tuple = tuple(p_data.get("points", []))
-        lbls_tuple = tuple(p_data.get("labels", []))
-        box_tuple = tuple(p_data["box"]) if p_data.get("box") is not None else None
-        has_tracked = self.current_frame_idx in self.engine.tracked_masks
-        mask_rev = self.engine.get_mask_revision(self.current_frame_idx)
-
-        mask_cache_key = (
-            self.current_frame_idx,
-            mask_rev,
-            self.dilation_var.get(),
-            self.feather_var.get(),
-            self.threshold_var.get(),
-            self.fill_holes_var.get(),
-            self.min_speckle_var.get(),
-            self.invert_var.get(),
-            pts_tuple,
-            lbls_tuple,
-            box_tuple,
-            has_tracked
-        )
-
-        if self._cached_mask_key == mask_cache_key and self._cached_mask is not None:
-            mask = self._cached_mask
+        if fast_brush:
+            mask = self.engine.tracked_masks.get(self.current_frame_idx, None)
         else:
-            mask = self.engine.get_processed_mask(
+            # 1. Mask Processing & Cache: Only recompute mask when frame or refine params change
+            p_data = self.engine.prompts.get(self.current_frame_idx, {})
+            pts_tuple = tuple(p_data.get("points", []))
+            lbls_tuple = tuple(p_data.get("labels", []))
+            box_tuple = tuple(p_data["box"]) if p_data.get("box") is not None else None
+            has_tracked = self.current_frame_idx in self.engine.tracked_masks
+            mask_rev = self.engine.get_mask_revision(self.current_frame_idx)
+
+            mask_cache_key = (
                 self.current_frame_idx,
-                dilation=self.dilation_var.get(),
-                feather=self.feather_var.get(),
-                threshold=self.threshold_var.get(),
-                fill_holes=self.fill_holes_var.get(),
-                min_speckle=self.min_speckle_var.get(),
-                invert=self.invert_var.get()
+                mask_rev,
+                self.dilation_var.get(),
+                self.feather_var.get(),
+                self.threshold_var.get(),
+                self.fill_holes_var.get(),
+                self.min_speckle_var.get(),
+                self.invert_var.get(),
+                pts_tuple,
+                lbls_tuple,
+                box_tuple,
+                has_tracked
             )
-            self._cached_mask_key = mask_cache_key
-            self._cached_mask = mask
+
+            if self._cached_mask_key == mask_cache_key and self._cached_mask is not None:
+                mask = self._cached_mask
+            else:
+                mask = self.engine.get_processed_mask(
+                    self.current_frame_idx,
+                    dilation=self.dilation_var.get(),
+                    feather=self.feather_var.get(),
+                    threshold=self.threshold_var.get(),
+                    fill_holes=self.fill_holes_var.get(),
+                    min_speckle=self.min_speckle_var.get(),
+                    invert=self.invert_var.get()
+                )
+                self._cached_mask_key = mask_cache_key
+                self._cached_mask = mask
 
         # 2. Viewport Slicing: Only slice and blit the visible canvas region (Instant sub-10ms blitting)
         ix0 = max(0, int(math.floor(-self.pan_x / self.zoom)))

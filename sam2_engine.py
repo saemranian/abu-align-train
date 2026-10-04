@@ -16,6 +16,7 @@ import warnings
 from typing import List, Dict, Tuple, Optional, Callable, Any
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import numpy as np
 import cv2
@@ -155,7 +156,19 @@ class SAM2MaskingEngine:
         # Mask revision tracking: frame_idx -> revision counter integer
         self.mask_revisions: Dict[int, int] = {}
 
+        # Thread safety lock for model loading & switching
+        self._model_lock = threading.Lock()
+
+        # Text-grounding open-vocabulary model (OwLV2)
+        self.owl_processor = None
+        self.owl_model = None
+
         self.log_callback: Optional[Callable[[str], None]] = None
+
+    @property
+    def model_name(self) -> Optional[str]:
+        """Returns the active model key name (e.g. 'tiny', 'small', 'base_plus', 'large')."""
+        return self.current_model_key
 
     def get_mask_revision(self, frame_idx: int) -> int:
         """Returns monotonically increasing revision counter for cache invalidation."""
@@ -290,37 +303,163 @@ class SAM2MaskingEngine:
 
     def load_model(self, model_key: str = "tiny", progress_callback: Optional[Callable[[str], None]] = None):
         """Loads or switches the active SAM 2 model."""
-        if self.current_model_key == model_key and self.video_predictor is not None:
+        with self._model_lock:
+            if self.current_model_key == model_key and self.video_predictor is not None:
+                return
+
+            if progress_callback:
+                progress_callback(f"Ensuring checkpoint for {SAM2_MODELS[model_key]['name']}...")
+
+            ckpt_path = self.download_model(model_key, progress_callback=lambda d, t, m: progress_callback(m) if progress_callback else None)
+
+            if progress_callback:
+                progress_callback(f"Building SAM 2 video predictor ({model_key}) on {self.device}...")
+
+            from sam2.build_sam import build_sam2_video_predictor, build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+            cfg = SAM2_MODELS[model_key]["config"]
+
+            # Clean previous model from GPU memory if active
+            if self.video_predictor is not None:
+                del self.video_predictor
+                del self.image_predictor
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            self.video_predictor = build_sam2_video_predictor(cfg, ckpt_path, device=self.device)
+            self._attach_dynamic_predictor_hooks(self.video_predictor)
+            sam_base = build_sam2(cfg, ckpt_path, device=self.device)
+            self.image_predictor = SAM2ImagePredictor(sam_base)
+            self.current_model_key = model_key
+
+            # If an inference sequence is already active, invalidate old backbone features & re-evaluate prompts
+            if self.inference_state is not None:
+                if progress_callback:
+                    progress_callback(f"Refreshing active sequence features for {SAM2_MODELS[model_key]['name']}...")
+                self.inference_state["cached_features"].clear()
+                self.video_predictor.reset_state(self.inference_state)
+                self._base_mask_cache.clear()
+
+                # Re-warmup feature extractor
+                active_frame = self.inference_state.get("_active_frame_idx", 0) or 0
+                if active_frame < self.num_frames:
+                    self.video_predictor._get_image_feature(self.inference_state, frame_idx=active_frame, batch_size=1)
+
+                # Re-evaluate all existing manual keyframe prompts with the new model weights!
+                for kf in self.get_keyframes():
+                    try:
+                        self._evaluate_frame_prompts(kf, obj_id=1)
+                    except Exception as e:
+                        self.log(f"Notice: re-evaluating prompt on frame {kf}: {e}")
+
+            if progress_callback:
+                progress_callback(f"Loaded {SAM2_MODELS[model_key]['name']} successfully.")
+
+    # -------------------------------------------------------------------------
+    # Text-Prompt Open-Vocabulary Grounding (Grounded-SAM 2)
+    # -------------------------------------------------------------------------
+
+    def load_text_grounding_model(self, progress_callback: Optional[Callable[[str], None]] = None):
+        """Lazy-loads OwLV2 open-vocabulary zero-shot detector for text-prompted segmentation."""
+        if self.owl_processor is not None and self.owl_model is not None:
             return
 
         if progress_callback:
-            progress_callback(f"Ensuring checkpoint for {SAM2_MODELS[model_key]['name']}...")
+            progress_callback("Loading OwLV2 zero-shot text-grounding vision model...")
 
-        ckpt_path = self.download_model(model_key, progress_callback=lambda d, t, m: progress_callback(m) if progress_callback else None)
-
-        if progress_callback:
-            progress_callback(f"Building SAM 2 video predictor ({model_key}) on {self.device}...")
-
-        from sam2.build_sam import build_sam2_video_predictor, build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-
-        cfg = SAM2_MODELS[model_key]["config"]
-
-        # Clean previous model from GPU memory if active
-        if self.video_predictor is not None:
-            del self.video_predictor
-            del self.image_predictor
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-        self.video_predictor = build_sam2_video_predictor(cfg, ckpt_path, device=self.device)
-        self._attach_dynamic_predictor_hooks(self.video_predictor)
-        sam_base = build_sam2(cfg, ckpt_path, device=self.device)
-        self.image_predictor = SAM2ImagePredictor(sam_base)
-        self.current_model_key = model_key
+        from transformers import Owlv2Processor, Owlv2ForObjectDetection
+        model_id = "google/owlv2-base-patch16-ensemble"
+        self.owl_processor = Owlv2Processor.from_pretrained(model_id)
+        self.owl_model = Owlv2ForObjectDetection.from_pretrained(model_id).to(self.device)
+        self.owl_model.eval()
 
         if progress_callback:
-            progress_callback(f"Loaded {SAM2_MODELS[model_key]['name']} successfully.")
+            progress_callback("OwLV2 text-grounding model ready.")
+
+    def detect_box_from_text(
+        self,
+        frame_idx: int,
+        text_prompt: str,
+        threshold: float = 0.10,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Uses OwLV2 zero-shot detector to detect candidate bounding boxes matching the text description.
+        Returns list of detections sorted by confidence score descending:
+        [{'box': [x0, y0, x1, y1], 'score': float, 'label': str}, ...]
+        """
+        if self.inference_state is None:
+            raise RuntimeError("No sequence loaded.")
+        if not text_prompt or not text_prompt.strip():
+            raise ValueError("Text prompt cannot be empty.")
+
+        self.load_text_grounding_model(progress_callback=progress_callback)
+
+        from PIL import Image
+        rgb = self.get_frame_rgb(frame_idx)
+        pil_img = Image.fromarray(rgb)
+        w_orig, h_orig = pil_img.size
+
+        clean_prompt = text_prompt.strip().rstrip(".").lower()
+        # Add background / negative contrast tokens so OwLV2 can properly separate foreground target
+        texts = [[clean_prompt, "background", "clutter"]]
+
+        inputs = self.owl_processor(text=texts, images=pil_img, return_tensors="pt").to(self.device)
+        with torch.inference_mode():
+            outputs = self.owl_model(**inputs)
+
+        target_sizes = torch.Tensor([[h_orig, w_orig]]).to(self.device)
+        results = self.owl_processor.post_process_grounded_object_detection(
+            outputs=outputs,
+            target_sizes=target_sizes,
+            threshold=threshold
+        )[0]
+
+        detections = []
+        for box, score, label in zip(results["boxes"], results["scores"], results["labels"]):
+            lbl_idx = label.item()
+            # Target is index 0
+            if lbl_idx == 0:
+                b = box.tolist()
+                x0 = max(0.0, min(float(w_orig - 1), b[0]))
+                y0 = max(0.0, min(float(h_orig - 1), b[1]))
+                x1 = max(0.0, min(float(w_orig - 1), b[2]))
+                y1 = max(0.0, min(float(h_orig - 1), b[3]))
+                detections.append({
+                    "box": [x0, y0, x1, y1],
+                    "score": float(score.item()),
+                    "label": clean_prompt
+                })
+
+        detections.sort(key=lambda d: d["score"], reverse=True)
+        return detections
+
+    def generate_mask_from_text(
+        self,
+        frame_idx: int,
+        text_prompt: str,
+        threshold: float = 0.10,
+        obj_id: int = 1,
+        progress_callback: Optional[Callable[[str], None]] = None
+    ) -> Tuple[Optional[np.ndarray], Optional[List[float]], float]:
+        """
+        Grounded-SAM 2 pipeline:
+        1. Predicts zero-shot bounding box from text description using OwLV2.
+        2. Injects bounding box as SAM 2 prompt on frame_idx.
+        3. Evaluates and returns (mask_np, best_box, confidence_score).
+        """
+        detections = self.detect_box_from_text(frame_idx, text_prompt, threshold=threshold, progress_callback=progress_callback)
+        if not detections:
+            return None, None, 0.0
+
+        best = detections[0]
+        box = best["box"]
+        score = best["score"]
+
+        # Apply bounding box to SAM 2
+        mask_np = self.add_box(frame_idx, box, obj_id=obj_id, clear_points=True)
+        return mask_np, box, score
 
     # -------------------------------------------------------------------------
     # Frame Sequence & Video Ingestion
@@ -693,11 +832,14 @@ class SAM2MaskingEngine:
         stroke_points: List[Tuple[float, float]],
         radius: int = 15,
         mode: str = "erase",
-        obj_id: int = 1
+        obj_id: int = 1,
+        sync_to_sam2: bool = False
     ) -> np.ndarray:
         """
         Directly paints or erases pixels on the current frame mask using interactive brush strokes.
         mode='erase' zeroes pixels; mode='paint' sets pixels to 255.
+        sync_to_sam2: when False (during mouse dragging), only updates the in-memory mask for zero-latency 120 FPS;
+        set to True on mouse button release to commit to SAM 2 memory.
         """
         if self.inference_state is None:
             raise RuntimeError("No sequence loaded.")
@@ -709,8 +851,7 @@ class SAM2MaskingEngine:
         mask = self.tracked_masks.get(frame_idx, None)
         if mask is None:
             mask = np.zeros((h_curr, w_curr), dtype=np.uint8)
-        else:
-            mask = mask.copy()
+            self.tracked_masks[frame_idx] = mask
 
         color = 0 if mode == "erase" else 255
         thickness = max(1, radius * 2)
@@ -729,11 +870,23 @@ class SAM2MaskingEngine:
             iy1 = int(round(max(0, min(h_curr - 1, p1[1]))))
             cv2.line(mask, (ix0, iy0), (ix1, iy1), color, thickness=thickness)
 
-        self.tracked_masks[frame_idx] = mask
-        self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
         self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
-        self._sync_mask_to_sam2(frame_idx, mask, obj_id)
+
+        if sync_to_sam2:
+            self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+            self._sync_mask_to_sam2(frame_idx, mask, obj_id)
         return mask
+
+    def sync_frame_mask_to_sam2(self, frame_idx: int, obj_id: int = 1, async_exec: bool = True):
+        """Commits the current tracked_masks[frame_idx] to SAM 2's memory predictor."""
+        mask = self.tracked_masks.get(frame_idx, None)
+        if mask is None:
+            return
+        self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        if async_exec:
+            threading.Thread(target=self._sync_mask_to_sam2, args=(frame_idx, mask, obj_id), daemon=True).start()
+        else:
+            self._sync_mask_to_sam2(frame_idx, mask, obj_id)
 
     def remove_last_prompt(self, frame_idx: int, obj_id: int = 1) -> Optional[np.ndarray]:
         """Undoes the most recent click on the frame."""
@@ -813,6 +966,10 @@ class SAM2MaskingEngine:
     def has_prompts(self, frame_idx: int) -> bool:
         """Returns True if user added clicks or box on this frame."""
         return frame_idx in self.prompts and (len(self.prompts[frame_idx]["points"]) > 0 or self.prompts[frame_idx]["box"] is not None)
+
+    def get_frame_mask(self, frame_idx: int) -> Optional[np.ndarray]:
+        """Returns the binary mask for the specified frame, or None if unannotated."""
+        return self.tracked_masks.get(frame_idx, None)
 
     def _autocast_context(self):
         """Returns PyTorch autocast context for bfloat16/float16 acceleration on CUDA."""

@@ -474,9 +474,69 @@ def test_export_stop_pause_and_revisions():
     print("=" * 70)
 
 
+def test_text_grounding_and_model_switching():
+    print("\n" + "=" * 70)
+    print("RUNNING GROUNDED-SAM 2 TEXT PROMPT & MODEL SWITCHING TEST SUITE")
+    print("=" * 70)
+
+    engine = SAM2MaskingEngine()
+    engine.load_model("tiny")
+
+    temp_dir = tempfile.mkdtemp(prefix="sam2_grounding_test_")
+    frames_dir = os.path.join(temp_dir, "test_images")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    # Frame with a white circle on dark background
+    img = np.zeros((400, 400, 3), dtype=np.uint8)
+    cv2.circle(img, (200, 200), 75, (255, 255, 255), -1)
+    cv2.imwrite(os.path.join(frames_dir, "frame_0000.png"), img)
+
+    engine.load_source(frames_dir)
+
+    # 1. Test Text-Prompted Grounding with OwLV2 + SAM 2.1
+    print("[1] Testing OwLV2 Zero-Shot Text Prompt Detection ('white disk')...")
+    mask_np, box, score = engine.generate_mask_from_text(0, "white disk", threshold=0.10)
+    print(f"    - Detection Box: {box}, Score: {score:.3f}")
+    assert box is not None, "Failed to detect bounding box for 'white disk'"
+    assert mask_np is not None, "Failed to generate mask from text prompt"
+    assert mask_np[200, 200] == 255, "Mask from text prompt should cover disk center"
+    print("    [PASS] OwLV2 + SAM 2.1 successfully detected and segmented 'white disk'.")
+
+    # 2. Test Model Switching with Feature Cache Flushing and Prompt Re-Evaluation
+    print("\n[2] Testing Dynamic Model Switching ('tiny' -> 'small')...")
+    prev_model = engine.model_name
+    engine.load_model("small")
+    assert engine.model_name == "small", f"Expected model 'small', got {engine.model_name}"
+    # Verify current frame mask was re-evaluated with the new model
+    mask_small = engine.get_frame_mask(0)
+    assert mask_small is not None and mask_small[200, 200] == 255, "Re-evaluated mask should preserve subject"
+    print(f"    [PASS] Switched from {prev_model} to {engine.model_name} with clean cache invalidation and prompt re-evaluation.")
+
+    # Switch back to tiny
+    engine.load_model("tiny")
+    assert engine.model_name == "tiny"
+    print("    [PASS] Switched back to tiny cleanly.")
+
+    # 3. Test Zero-Lag Brush Stroke with Decoupled SAM 2 Sync
+    print("\n[3] Testing Zero-Lag Brush Stroke and Async SAM 2 Sync...")
+    # Perform fast brush without immediate neural sync
+    m_fast = engine.brush_stroke_mask(0, [(200, 200)], radius=15, mode="erase", sync_to_sam2=False)
+    assert m_fast[200, 200] == 0, "Brush stroke should immediately erase in-memory pixel"
+    # Now sync to SAM 2
+    engine.sync_frame_mask_to_sam2(0, async_exec=False)
+    m_synced = engine.get_frame_mask(0)
+    assert m_synced[200, 200] == 0, "Synced mask should preserve erased pixel"
+    print("    [PASS] Zero-lag brush stroke and decoupled SAM 2 sync verified.")
+
+    print("\n" + "=" * 70)
+    print("ALL GROUNDED-SAM 2 & MODEL SWITCHING TESTS PASSED PERFECTLY!")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     test_sam2_all()
     test_mixed_orientations()
     test_selection_and_editing_tools()
     test_export_stop_pause_and_revisions()
+    test_text_grounding_and_model_switching()
 

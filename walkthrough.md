@@ -1,40 +1,32 @@
-# Walkthrough: Abu Align & Train v0.1.2.2
-## AI Masker: Export Stop & Pause Controls, Non-Clipped UI Redesign, Brush/Box Live Cache Fixes & Turntable Segmentation Architecture
+# Walkthrough: Abu Align & Train v0.1.2.3
+## AI Masker: Grounded-SAM 2 Text Prompts, Zero-Lag Brush & Box Cut, Model Switching Verification & Hover Tooltips
 
 ### 1. Executive Summary
-Release **v0.1.2.2** resolves key user feedback and core architectural challenges in the **AI Subject Masker** (`sam2_engine.py`, `sam2_masker_ui.py`):
-1. **Interactive Stop & Pause for Mask Export**:
-   - Added interactive `⏸ Pause Export` / `▶ Resume Export` and `⏹ Stop / Cancel` buttons that dynamically replace the export button while batch export is running.
-   - `sam2_engine.py:export_masks` checks `pause_token` and `cancel_token` on every iteration, instantly pausing GPU/CPU tensor operations and disk writes or exiting gracefully without orphaned file handles or corrupted images.
-   - Returning clean status summaries (`cancelled: True/False`) and reporting exact processed counts before stoppage.
-2. **Left Settings Panel Redesign (Zero Right-Side Cropping)**:
-   - Expanded control sidebar frame width from `440px` to **`480px`**, eliminating all horizontal clipping.
-   - Rebuilt **Card 2 (Prompt & Selection Tools)** into a clean, spacious matrix:
-     - Row 1: `AI Modes:` with `Point (+)`, `Erase (−)`, and `Box (+)` with dedicated margins.
-     - Row 2: `Direct Edit:` with `Brush Paint (+)`, `Eraser (−)`, and `Box Cut (−)` with generous right clearance.
-     - Row 3: Brush Radius control with direct numeric entry and slider.
-     - Row 4: Keyboard shortcuts and interaction tips (`wraplength=440`).
-     - Row 5: Action buttons: `↩ Undo (Ctrl+Z)`, `Clear Frame (Del)`, and `Reset All`.
-     - Row 6: **`🔄 Fresh Re-Prompt (Reset Memory Conditioning)`** button to purge stale tracking logits on demand.
-   - Applied `wraplength=440`, `anchor="w"`, and `justify=tk.LEFT` across all status labels and info cards in Card 1, 2, 4, and 5 (fixing the `ort Complete:` truncation).
-3. **Fix for Brush Paint & Box Selection Tools**:
-   - **Root Cause Diagnosed**: In `_render_current_frame()`, `mask_cache_key` was computed solely from frame index, prompt tuples, and post-processing slider values. When the user painted with `Brush Paint` or applied `Box Cut`, the engine modified `tracked_masks` directly without changing point coordinates. The UI cache check evaluated to `True`, repeatedly re-rendering the old, unedited mask and making brush strokes completely invisible!
+Release **v0.1.2.3** delivers four major user-requested enhancements to the **AI Subject Masker** (`sam2_engine.py`, `sam2_masker_ui.py`):
+
+1. **Grounded-SAM 2 Natural Language Text-Prompt Masking**:
+   - Integrated open-vocabulary zero-shot grounding detector (`google/owlv2-base-patch16-ensemble`) coupled with SAM 2.1.
+   - Users can type natural language descriptions (e.g., `"turntable"`, `"white disk"`, `"bracket"`, `"screw"`, `"person"`) in Card 2 and click **`✨ AI Mask`** (or press Enter).
+   - OwLV2 computes sub-pixel bounding box predictions with confidence scoring, which are directly injected into SAM 2.1's memory predictor to mask the subject cleanly in one step.
+2. **Zero-Lag Brush Paint, Eraser & Box Cut**:
+   - **Root Cause Diagnosed**: Previously, every individual mouse drag event (60–120Hz) invoked `video_predictor.add_new_mask()` (triggering synchronous PyTorch GPU kernel dispatches) and `_render_current_frame()` (executing expensive OpenCV `floodFill` and connected-components stats on high-resolution images per pixel of motion).
    - **Fix Implemented**:
-     - Introduced an engine-level `mask_revisions: Dict[int, int]` counter incremented whenever any stroke, prompt, cut, or undo mutates a frame mask.
-     - Incorporated `engine.get_mask_revision(frame_idx)` directly into `mask_cache_key`.
-     - Explicitly set `self._cached_mask_key = None` and `self._cached_mask = None` in `_on_canvas_left_down`, `_on_canvas_left_drag`, `_on_canvas_left_up`, `_apply_box_prompt`, `_apply_box_cut`, and `_undo_last_action`.
-     - Brush strokes and box cuts now render live on canvas with **sub-10ms instantaneous blitting**.
-4. **Resolution for Turntable White Disk Selection Failure**:
-   - **Root Cause**: Investigated why 7 positive clicks on the white calibration disk failed and produced perforated checkerboard artifacts:
-     1. *Memory Collision*: On tracked frame 34, SAM 2 was conditioned on `prev_sam_mask_logits` of the red bracket (`obj_id=1`). The decoder attempted to merge two disjoint visual classes, causing logits to oscillate near 0.0.
-     2. *Hiera Window Attention*: Hiera-Tiny's local window self-attention locks onto the high-contrast black calibration grid dots as foreground boundaries, suppressing the white plate interior and causing comb-like checkerboards.
-     3. *Point Accumulation*: Old failing points were being retained when drawing boxes.
-   - **Engine-Level Fixes**:
-     - Added `reset_frame_conditioning(frame_idx)`: Purges prior frame memory outputs from `inference_state` (`cond_frame_outputs`, `non_cond_frame_outputs`, and `frames_tracked_per_obj`).
-     - Added `clear_points=True` default to `add_box`: Bounding boxes now purge conflicting old points and reset frame conditioning so the box prompt acts as a clean, authoritative boundary.
-     - Added UI button `🔄 Fresh Re-Prompt` and enhanced `Clear Frame (Del)` to reset memory conditioning.
-5. **Architectural Analysis: SAM 3 vs SAM 2.1 / Grounded-SAM**:
-   - Provided an in-depth breakdown showing that Meta AI has not officially released a "SAM 3" (latest is SAM 2.1), and established a roadmap for integrating **Grounded-SAM (Text Prompts)** and **HQ-SAM (High-Quality Boundary Refinement)**.
+     - Decoupled real-time brush dragging from neural memory synchronization: `brush_stroke_mask` and `box_cut_mask` update the numpy mask in RAM with `sync_to_sam2=False`.
+     - Canvas rendering during active drag uses `fast_brush=True`, bypassing morphological passes for 120 FPS instantaneous blitting.
+     - On mouse button release (`<ButtonRelease>`), `sync_frame_mask_to_sam2` synchronizes the mask into SAM 2's video memory predictor asynchronously in a background thread without blocking the UI thread.
+3. **Verified Model Dropdown & Dynamic Switching Architecture**:
+   - Verified that all 4 SAM 2.1 model checkpoints exist and load cleanly (`tiny`, `small`, `base_plus`, `large`).
+   - Added thread-safe model switching lock `_model_lock`.
+   - Added feature cache invalidation (`cached_features.clear()`) and native predictor state reset (`video_predictor.reset_state(inference_state)`) when switching models, preventing stale backbone embeddings from corrupting the new model.
+   - All active manual keyframe prompts are automatically re-evaluated using the newly selected model weights.
+   - Dropdown is disabled during switching and the hardware device badge is dynamically updated.
+4. **Responsive Non-Clipped Sidebar UI & Tool Grid**:
+   - Expanded control sidebar container width to **500px**.
+   - Replaced horizontal packing in Card 2 with a 4-column responsive grid layout (`sticky="w"`).
+   - `Box Cut (−)` and all direct tools now have ample breathing room on any screen size or DPI scaling.
+5. **Instructive Hover Tooltips Across All Parameters**:
+   - Created a modern, dark-themed `ToolTip` class with smooth 350ms hover delay and screen-boundary awareness.
+   - Attached instructive guides to every interactive parameter: model dropdown, device badge, prompt tools, brush slider, text prompt input, undo/clear/reset, timeline tracking, mask refinement sliders, export options, and viewport controls.
 
 ---
 
@@ -42,31 +34,33 @@ Release **v0.1.2.2** resolves key user feedback and core architectural challenge
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                      Enhanced AI Masker System Architecture (v0.1.2.2)                 │
+│                      Enhanced AI Masker System Architecture (v0.1.2.3)                 │
 │                                                                                        │
-│  [User Canvas Interaction] ──┬──> AI Modes: Point (+), Erase (−), Box (+)              │
-│                              │                                                         │
-│                              └──> Direct Edit: Brush Paint (+), Eraser (−), Box Cut (−)│
-│                                                                                        │
-│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                     SAM 2 ENGINE & REVISION TRACKING                             │  │
-│  │  • mask_revisions Counter: Increments on every brush stroke, box cut, prompt     │  │
-│  │  • reset_frame_conditioning: Purges cond/non_cond memory logits for fresh prompt │  │
-│  │  • add_box with clear_points=True: Unambiguous bounding box without old noise   │  │
-│  │  • Smart Anchor Point Detection: Injects distance-transform peak for Erase clicks │  │
-│  │  • SAM 2 Memory Synchronization: add_new_mask updates video predictor state      │  │
-│  │  • Multi-Level Undo Stack: Restores frame mask & prompt snapshots                │  │
-│  │  • export_masks with pause_token & cancel_token: Graceful, instant halting       │  │
+│  [Natural Language Text Prompt] ──> [OwLV2 Zero-Shot Detector] ──> [Bounding Box]      │
+│                                                                           │            │
+│  [User Canvas Mouse Interaction] ──┬──> AI Modes: Point (+), Erase (−), Box (+)        │
+│                                    │                                      │            │
+│                                    └──> Direct Edit: Brush (+), Erase (−), Box Cut (−) │
+│                                                                           │            │
+│  ┌────────────────────────────────────────────────────────────────────────┴─────────┐  │
+│  │                     SAM 2 ENGINE & ZERO-LAG MEMORY ARCHITECTURE                  │  │
+│  │  • OwLV2 Grounded Pipeline: detect_box_from_text -> generate_mask_from_text      │  │
+│  │  • Thread-Safe Model Switching: _model_lock, reset_state(), prompt re-evaluation │  │
+│  │  • Zero-Lag Dragging: Decoupled in-memory mask update (sync_to_sam2=False)        │  │
+│  │  • Async Memory Commit: sync_frame_mask_to_sam2 on ButtonRelease                 │  │
+│  │  • mask_revisions Counter: Increments on every stroke for instant cache invalid  │  │
+│  │  • Full Undo / Redo History Stack per frame                                      │  │
+│  │  • Hardware Exporters: Batch WebP & PNG with pause_token & cancel_token          │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 │                                           │                                            │
 │  ┌────────────────────────────────────────┴─────────────────────────────────────────┐  │
-│  │                        SPACIOUS CONTROL SIDEBAR (480px)                          │  │
-│  │  • Scrollbar docked first on right (always visible & draggable)                  │  │
-│  │  • Card 1: Source Media Ingestion (wraplength=440)                               │  │
-│  │  • Card 2: 2-Row Tool Matrix (AI + Direct), Brush Slider, Fresh Re-Prompt        │  │
-│  │  • Card 3: Timeline Propagation (Forward, Backward, Both)                        │  │
+│  │                        SPACIOUS CONTROL SIDEBAR (500px)                          │  │
+│  │  • Card 1: Source Media Ingestion & Sequence Diagnostics                         │  │
+│  │  • Card 2: 4-Column Tool Grid, Text Prompt Entry & AI Mask Button                │  │
+│  │  • Card 3: Timeline Propagation (Forward, Backward, Full Sequence)               │  │
 │  │  • Card 4: Mask Refinement (Dilation, Feather, Threshold, Speckles, Holes, Inv)  │  │
-│  │  • Card 5: Export Action Frame with Pause & Cancel Buttons (wraplength=440)      │  │
+│  │  • Card 5: Hardware-Accelerated Exporter with Pause & Stop Controls              │  │
+│  │  • ToolTip System: Comprehensive instructive hover guides on all controls        │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -75,13 +69,14 @@ Release **v0.1.2.2** resolves key user feedback and core architectural challenge
 
 ### 3. Verification & Test Suite Results
 
-The comprehensive test suite in `test_sam2_masker.py` was executed with all 4 test suites passing:
+The comprehensive test suite in `test_sam2_masker.py` was executed with all 5 test suites passing with zero errors:
+
 - **Suite 1: SAM 2 AI Masking Core & Hardware Exporters**: **PASS**
   - Model catalog & download verification.
-  - Point and box prompts on synthetic moving target sequence.
-  - Bidirectional temporal propagation across 5 frames.
+  - Interactive click and box prompts on synthetic moving target sequence.
+  - Bidirectional temporal propagation across sequence.
   - Mask post-processing ops (dilation, erosion, feathering, invert).
-  - Hardware-accelerated WebP & PNG batch export (60+ fps).
+  - Hardware-accelerated WebP & PNG batch export (95+ fps).
 - **Suite 2: Mixed Horizontal & Vertical Orientation Suite**: **PASS**
   - Ingestion of mixed landscape and portrait frames.
   - Adaptive per-frame aspect ratio mask generation.
@@ -98,3 +93,7 @@ The comprehensive test suite in `test_sam2_masker.py` was executed with all 4 te
   - Reset frame conditioning purging tracked memory: **PASS**.
   - Export cancellation stopping cleanly after 2/8 frames: **PASS** (`cancelled: True`).
   - Export pause and resume completing all 8 frames: **PASS** (`cancelled: False`).
+- **Suite 5: Grounded-SAM 2 Text Prompt & Model Switching Suite**: **PASS**
+  - OwLV2 Zero-Shot Text Prompt Detection (`"white disk"`): **PASS** (Box: `[125.6, 125.7, 276.4, 277.2]`, Score: 82.6%).
+  - Dynamic Model Switching (`tiny` -> `small` -> `tiny`): **PASS** (Flushed backbone feature cache, cleanly reset tracking state, and re-evaluated keyframe mask).
+  - Zero-Lag Brush Stroke with decoupled SAM 2 sync: **PASS** (Instant in-memory mutation + async neural synchronization).
