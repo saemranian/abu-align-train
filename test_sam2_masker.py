@@ -364,7 +364,119 @@ def test_selection_and_editing_tools():
     print("=" * 70)
 
 
+def test_export_stop_pause_and_revisions():
+    print("\n" + "=" * 70)
+    print("RUNNING EXPORT STOP, PAUSE & MASK REVISION TEST SUITE")
+    print("=" * 70)
+
+    engine = SAM2MaskingEngine()
+    engine.load_model("tiny")
+
+    temp_dir = tempfile.mkdtemp(prefix="sam2_pause_test_")
+    frames_dir = os.path.join(temp_dir, "test_images")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    for i in range(8):
+        img = np.zeros((300, 300, 3), dtype=np.uint8)
+        cv2.circle(img, (150, 150), 50, (255, 255, 255), -1)
+        cv2.imwrite(os.path.join(frames_dir, f"frame_{i:04d}.png"), img)
+
+    engine.load_source(frames_dir)
+
+    # 1. Test Mask Revision Tracking
+    print("[1] Testing Mask Revision Tracking...")
+    rev0 = engine.get_mask_revision(0)
+    engine.add_box(0, [100, 100, 200, 200])
+    rev1 = engine.get_mask_revision(0)
+    assert rev1 > rev0, f"Revision should increment after add_box: {rev0} -> {rev1}"
+
+    engine.brush_stroke_mask(0, [(150, 150)], radius=10, mode="erase")
+    rev2 = engine.get_mask_revision(0)
+    assert rev2 > rev1, f"Revision should increment after brush stroke: {rev1} -> {rev2}"
+
+    engine.undo(0)
+    rev3 = engine.get_mask_revision(0)
+    assert rev3 > rev2, f"Revision should increment after undo: {rev2} -> {rev3}"
+    print(f"    [PASS] Mask revisions incremented properly: {rev0} -> {rev1} -> {rev2} -> {rev3}")
+
+    # 2. Test Reset Frame Conditioning
+    print("\n[2] Testing Reset Frame Conditioning...")
+    engine.reset_frame_conditioning(0)
+    obj_idx = 0
+    if "frames_tracked_per_obj" in engine.inference_state and obj_idx in engine.inference_state["frames_tracked_per_obj"]:
+        assert 0 not in engine.inference_state["frames_tracked_per_obj"][obj_idx], "Frame 0 should be purged from tracked memory"
+    print("    [PASS] Stale frame conditioning purged cleanly.")
+
+    # 3. Test Export Cancellation
+    print("\n[3] Testing Export Cancellation (Stop Action)...")
+    out_dir_cancel = os.path.join(temp_dir, "export_cancel")
+    cancel_flag = False
+
+    def check_cancel():
+        return cancel_flag
+
+    def cancel_prog(cur, tot, msg):
+        nonlocal cancel_flag
+        if cur >= 2:
+            cancel_flag = True
+
+    res_cancel = engine.export_masks(
+        output_dir=out_dir_cancel,
+        export_binary=True,
+        export_cutout=False,
+        scale_mode="original",
+        progress_callback=cancel_prog,
+        cancel_token=check_cancel
+    )
+    assert res_cancel.get("cancelled") is True, "Export should report cancelled=True"
+    assert res_cancel["binary"] < 8, f"Export should have stopped early, got {res_cancel['binary']} frames"
+    print(f"    [PASS] Export cancelled successfully after {res_cancel['binary']}/8 frames.")
+
+    # 4. Test Export Pause and Resume
+    print("\n[4] Testing Export Pause and Resume...")
+    out_dir_pause = os.path.join(temp_dir, "export_pause")
+    pause_flag = False
+    paused_once = False
+
+    def check_pause():
+        return pause_flag
+
+    def pause_prog(cur, tot, msg):
+        nonlocal pause_flag, paused_once
+        if cur == 2 and not paused_once:
+            pause_flag = True
+            paused_once = True
+
+            # Resume after brief pause
+            import threading
+            def resume_worker():
+                import time
+                time.sleep(0.2)
+                nonlocal pause_flag
+                pause_flag = False
+
+            threading.Thread(target=resume_worker, daemon=True).start()
+
+    res_pause = engine.export_masks(
+        output_dir=out_dir_pause,
+        export_binary=True,
+        export_cutout=False,
+        scale_mode="original",
+        progress_callback=pause_prog,
+        pause_token=check_pause
+    )
+    assert res_pause.get("cancelled") is False, "Export should complete fully after resume"
+    assert res_pause["binary"] == 8, f"Expected all 8 frames, got {res_pause['binary']}"
+    print(f"    [PASS] Export paused, resumed, and completed all 8 frames successfully.")
+
+    print("\n" + "=" * 70)
+    print("ALL EXPORT STOP, PAUSE & REVISION TESTS PASSED PERFECTLY!")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     test_sam2_all()
     test_mixed_orientations()
     test_selection_and_editing_tools()
+    test_export_stop_pause_and_revisions()
+

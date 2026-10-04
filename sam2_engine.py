@@ -152,7 +152,14 @@ class SAM2MaskingEngine:
         # Multi-level undo history stack: frame_idx -> list of {mask, prompt} snapshots
         self.undo_stacks: Dict[int, List[Dict[str, Any]]] = {}
 
+        # Mask revision tracking: frame_idx -> revision counter integer
+        self.mask_revisions: Dict[int, int] = {}
+
         self.log_callback: Optional[Callable[[str], None]] = None
+
+    def get_mask_revision(self, frame_idx: int) -> int:
+        """Returns monotonically increasing revision counter for cache invalidation."""
+        return self.mask_revisions.get(frame_idx, 0)
 
     def set_log_callback(self, cb: Optional[Callable[[str], None]]):
         """Sets external log sink (e.g. Abu Align main console)."""
@@ -523,9 +530,12 @@ class SAM2MaskingEngine:
                 del self.prompts[frame_idx]
 
             self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+            self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
             return self.tracked_masks.get(frame_idx, None)
         else:
-            return self.remove_last_prompt(frame_idx, obj_id)
+            res = self.remove_last_prompt(frame_idx, obj_id)
+            self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
+            return res
 
     def _sync_mask_to_sam2(self, frame_idx: int, mask_np: np.ndarray, obj_id: int = 1):
         """Feeds the edited binary mask into SAM 2's video memory predictor."""
@@ -602,12 +612,14 @@ class SAM2MaskingEngine:
             self.tracked_masks[frame_idx] = mask_np
             self._sync_mask_to_sam2(frame_idx, mask_np, obj_id)
 
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
         return mask_np
 
-    def add_box(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:
+    def add_box(self, frame_idx: int, box: List[float], obj_id: int = 1, clear_points: bool = True) -> np.ndarray:
         """
         Sets an AI bounding box prompt [x0, y0, x1, y1] on the specified frame.
-        Guarantees coordinates are clamped to frame dimensions, and purges contradictory out-of-box points.
+        Guarantees coordinates are clamped to frame dimensions, purges contradictory points,
+        and clears stale prior frame conditioning so the box prompt segments cleanly.
         """
         if self.inference_state is None:
             raise RuntimeError("No sequence loaded.")
@@ -623,21 +635,25 @@ class SAM2MaskingEngine:
         if (bx1 - bx0) < 5 or (by1 - by0) < 5:
             return self.tracked_masks.get(frame_idx, np.zeros((h_curr, w_curr), dtype=np.uint8))
 
-        if frame_idx not in self.prompts:
+        if clear_points or frame_idx not in self.prompts:
             self.prompts[frame_idx] = {"points": [], "labels": [], "box": None}
+            self.reset_frame_conditioning(frame_idx, obj_id)
+        else:
+            # Filter out points that are outside the newly drawn box
+            keep_pts = []
+            keep_lbls = []
+            for (px, py), pl in zip(self.prompts[frame_idx]["points"], self.prompts[frame_idx]["labels"]):
+                if (bx0 - 10 <= px <= bx1 + 10) and (by0 - 10 <= py <= by1 + 10):
+                    keep_pts.append([px, py])
+                    keep_lbls.append(pl)
+            self.prompts[frame_idx]["points"] = keep_pts
+            self.prompts[frame_idx]["labels"] = keep_lbls
 
-        # Filter out points that are outside the newly drawn box
-        keep_pts = []
-        keep_lbls = []
-        for (px, py), pl in zip(self.prompts[frame_idx]["points"], self.prompts[frame_idx]["labels"]):
-            if (bx0 - 10 <= px <= bx1 + 10) and (by0 - 10 <= py <= by1 + 10):
-                keep_pts.append([px, py])
-                keep_lbls.append(pl)
-        self.prompts[frame_idx]["points"] = keep_pts
-        self.prompts[frame_idx]["labels"] = keep_lbls
         self.prompts[frame_idx]["box"] = [bx0, by0, bx1, by1]
 
-        return self._evaluate_frame_prompts(frame_idx, obj_id)
+        mask = self._evaluate_frame_prompts(frame_idx, obj_id)
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
+        return mask
 
     def box_cut_mask(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:
         """
@@ -665,6 +681,7 @@ class SAM2MaskingEngine:
         mask[by0:by1 + 1, bx0:bx1 + 1] = 0
         self.tracked_masks[frame_idx] = mask
         self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
 
         # Sync modified mask to SAM 2
         self._sync_mask_to_sam2(frame_idx, mask, obj_id)
@@ -714,6 +731,7 @@ class SAM2MaskingEngine:
 
         self.tracked_masks[frame_idx] = mask
         self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
         self._sync_mask_to_sam2(frame_idx, mask, obj_id)
         return mask
 
@@ -734,25 +752,47 @@ class SAM2MaskingEngine:
         return self._evaluate_frame_prompts(frame_idx, obj_id)
 
     def clear_frame_prompts(self, frame_idx: int, obj_id: int = 1):
-        """Clears all manual prompts on the specified frame."""
+        """Clears all manual prompts and resets memory conditioning on the specified frame."""
         self.push_undo_state(frame_idx)
         if frame_idx in self.prompts:
             del self.prompts[frame_idx]
 
-        if self.inference_state is not None:
-            try:
-                self.video_predictor.clear_all_prompts_in_frame(self.inference_state, frame_idx, obj_id)
-            except Exception:
-                pass
-
         if frame_idx in self.tracked_masks:
             del self.tracked_masks[frame_idx]
+
+        self.reset_frame_conditioning(frame_idx, obj_id)
         self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
+
+    def reset_frame_conditioning(self, frame_idx: int, obj_id: int = 1):
+        """
+        Completely clears prior memory outputs and conditioning logits for a specific frame.
+        Allows subsequent prompt clicks or box to segment the frame without stale memory interference.
+        """
+        if self.inference_state is None:
+            return
+        try:
+            obj_idx = self.video_predictor._obj_id_to_idx(self.inference_state, obj_id) if self.video_predictor else 0
+            if "point_inputs_per_obj" in self.inference_state and obj_idx in self.inference_state["point_inputs_per_obj"]:
+                self.inference_state["point_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+            if "mask_inputs_per_obj" in self.inference_state and obj_idx in self.inference_state["mask_inputs_per_obj"]:
+                self.inference_state["mask_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+            if "temp_output_dict_per_obj" in self.inference_state and obj_idx in self.inference_state["temp_output_dict_per_obj"]:
+                self.inference_state["temp_output_dict_per_obj"][obj_idx]["cond_frame_outputs"].pop(frame_idx, None)
+                self.inference_state["temp_output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"].pop(frame_idx, None)
+            if "output_dict_per_obj" in self.inference_state and obj_idx in self.inference_state["output_dict_per_obj"]:
+                self.inference_state["output_dict_per_obj"][obj_idx]["cond_frame_outputs"].pop(frame_idx, None)
+                self.inference_state["output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"].pop(frame_idx, None)
+            if "frames_tracked_per_obj" in self.inference_state and obj_idx in self.inference_state["frames_tracked_per_obj"]:
+                self.inference_state["frames_tracked_per_obj"][obj_idx].pop(frame_idx, None)
+        except Exception as e:
+            self.log(f"Notice: reset frame conditioning: {e}")
 
     def clear_all(self):
         """Resets all prompts, tracking caches, undo stacks, and loaded frames."""
         self.prompts.clear()
         self.tracked_masks.clear()
+        self.mask_revisions.clear()
         self._base_mask_cache.clear()
         self.undo_stacks.clear()
         if self.video_cap is not None:
@@ -812,6 +852,7 @@ class SAM2MaskingEngine:
         mask_np = (mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
         self.tracked_masks[frame_idx] = mask_np
         self._base_mask_cache = {k: v for k, v in self._base_mask_cache.items() if k[0] != frame_idx}
+        self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
         return mask_np
 
     # -------------------------------------------------------------------------
@@ -872,6 +913,7 @@ class SAM2MaskingEngine:
                         break
                     mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
                     self.tracked_masks[out_frame_idx] = mask_np
+                    self.mask_revisions[out_frame_idx] = self.mask_revisions.get(out_frame_idx, 0) + 1
                     current_step += 1
                     if progress_callback:
                         pct = min(100, int(current_step * 100 / total_steps))
@@ -898,6 +940,7 @@ class SAM2MaskingEngine:
                             break
                         mask_np = (out_mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
                         self.tracked_masks[out_frame_idx] = mask_np
+                        self.mask_revisions[out_frame_idx] = self.mask_revisions.get(out_frame_idx, 0) + 1
                         current_step += 1
                         if progress_callback:
                             pct = min(100, int(current_step * 100 / total_steps))
@@ -1084,7 +1127,8 @@ class SAM2MaskingEngine:
         cutout_dir: Optional[str] = None,
         postprocess_params: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        cancel_token: Optional[Callable[[], bool]] = None
+        cancel_token: Optional[Callable[[], bool]] = None,
+        pause_token: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """
         Ultra-high-performance GPU-accelerated (CUDA PyTorch) and multi-threaded batch export
@@ -1199,7 +1243,14 @@ class SAM2MaskingEngine:
 
         with ThreadPoolExecutor(max_workers=max_workers) as writer_pool:
             for idx in range(total_frames):
+                # Handle user pause
+                while pause_token and pause_token():
+                    if cancel_token and cancel_token():
+                        break
+                    time.sleep(0.08)
+
                 if cancel_token and cancel_token():
+                    self.log("Batch export cancelled by user.")
                     break
 
                 frame_name = self.frame_names[idx]
@@ -1382,8 +1433,9 @@ class SAM2MaskingEngine:
                         f"Finalizing {st} ({completed_tasks}/{total_frames} - {pct}%, {cur_fps:.1f} fps) [{accel_tag}]"
                     )
 
+        is_cancelled = bool(cancel_token and cancel_token())
         dt = max(0.001, time.time() - t_start)
-        fps = total_frames / dt
+        fps = completed_tasks / dt if completed_tasks > 0 else 0.0
         total_mb = total_bytes_written / (1024 * 1024)
         avg_cutout_mb = (total_mb / max(1, exported_counts["cutout"])) if exported_counts["cutout"] > 0 else 0.0
 
@@ -1391,13 +1443,17 @@ class SAM2MaskingEngine:
         est_old_png_mb = exported_counts["cutout"] * 70.0
         saved_mb = max(0.0, est_old_png_mb - total_mb)
 
-        summary_msg = (
-            f"Export Complete: {exported_counts['binary']} masks + {exported_counts['cutout']} cutouts in {dt:.2f}s "
-            f"({fps:.1f} fps) via {accel_tag}. Total: {total_mb:.1f} MB (Avg cutout: {avg_cutout_mb:.2f} MB, saved ~{saved_mb:.1f} MB vs 70MB PNG)"
-        )
+        if is_cancelled:
+            summary_msg = f"Export Cancelled: {completed_tasks}/{total_frames} frames processed before stop."
+        else:
+            summary_msg = (
+                f"Export Complete: {exported_counts['binary']} masks + {exported_counts['cutout']} cutouts in {dt:.2f}s "
+                f"({fps:.1f} fps) via {accel_tag}. Total: {total_mb:.1f} MB (Avg cutout: {avg_cutout_mb:.2f} MB, saved ~{saved_mb:.1f} MB vs 70MB PNG)"
+            )
         self.log(summary_msg)
 
         return {
+            "cancelled": is_cancelled,
             "binary": exported_counts["binary"],
             "cutout": exported_counts["cutout"],
             "total_mb": total_mb,

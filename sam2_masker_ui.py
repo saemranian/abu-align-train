@@ -141,6 +141,11 @@ class SAM2MaskerDialog:
         # Precompute checkerboard pattern for alpha cutout
         self._checkerboard_cache: Optional[np.ndarray] = None
 
+        # Export state tracking (Pause / Cancel support)
+        self.is_export_running: bool = False
+        self.is_export_paused: bool = False
+        self.export_cancel_requested: bool = False
+
         # Setup GUI Components
         self._build_ui()
         self._bind_events()
@@ -199,8 +204,8 @@ class SAM2MaskerDialog:
         main_body = tk.Frame(self.dialog, bg=BG)
         main_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        # Left Column: Control Sidebar (Spacious 440px to eliminate horizontal and vertical cropping)
-        sidebar_frame = tk.Frame(main_body, bg=SURFACE, width=440)
+        # Left Column: Control Sidebar (Generous 480px to eliminate horizontal and vertical cropping)
+        sidebar_frame = tk.Frame(main_body, bg=SURFACE, width=480)
         sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         sidebar_frame.pack_propagate(False)
 
@@ -253,7 +258,7 @@ class SAM2MaskerDialog:
         btn_video.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.source_info_lbl = tk.Label(c1, text="No source loaded (open folder or video)",
-                                        font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=410)
+                                        font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=440)
         self.source_info_lbl.pack(anchor="w", pady=(0, 4))
 
         # CARD 2: Prompt Mode & Precision Interactive Tools
@@ -261,18 +266,18 @@ class SAM2MaskerDialog:
 
         # Row 1: AI Prompt Modes
         r_prompts_1 = tk.Frame(c2, bg=SURFACE)
-        r_prompts_1.pack(fill=tk.X, pady=(1, 3))
-        tk.Label(r_prompts_1, text="AI Modes:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=11, anchor="w").pack(side=tk.LEFT)
+        r_prompts_1.pack(fill=tk.X, pady=(2, 3))
+        tk.Label(r_prompts_1, text="AI Modes:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=10, anchor="w").pack(side=tk.LEFT)
 
         rb_ai_pt = tk.Radiobutton(r_prompts_1, text="Point (+)", variable=self.tool_mode, value="AI Point",
                                   font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
                                   activebackground=SURFACE, activeforeground=SUCCESS)
-        rb_ai_pt.pack(side=tk.LEFT, padx=(0, 10))
+        rb_ai_pt.pack(side=tk.LEFT, padx=(0, 8))
 
         rb_ai_er = tk.Radiobutton(r_prompts_1, text="Erase (−)", variable=self.tool_mode, value="AI Erase",
                                   font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
                                   activebackground=SURFACE, activeforeground=DANGER)
-        rb_ai_er.pack(side=tk.LEFT, padx=(0, 10))
+        rb_ai_er.pack(side=tk.LEFT, padx=(0, 8))
 
         rb_ai_bx = tk.Radiobutton(r_prompts_1, text="Box (+)", variable=self.tool_mode, value="AI Box",
                                   font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE, selectcolor=FIELD,
@@ -281,28 +286,28 @@ class SAM2MaskerDialog:
 
         # Row 2: Precision Direct Modification Tools (Guaranteed 100% Reliable Override)
         r_prompts_2 = tk.Frame(c2, bg=SURFACE)
-        r_prompts_2.pack(fill=tk.X, pady=(1, 4))
-        tk.Label(r_prompts_2, text="Direct Edit:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=11, anchor="w").pack(side=tk.LEFT)
-
-        rb_bx_cut = tk.Radiobutton(r_prompts_2, text="Box Cut (−)", variable=self.tool_mode, value="Box Cut",
-                                   font=("Segoe UI", 8, "bold"), fg=WARNING, bg=SURFACE, selectcolor=FIELD,
-                                   activebackground=SURFACE, activeforeground=WARNING)
-        rb_bx_cut.pack(side=tk.LEFT, padx=(0, 6))
+        r_prompts_2.pack(fill=tk.X, pady=(2, 4))
+        tk.Label(r_prompts_2, text="Direct Edit:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE, width=10, anchor="w").pack(side=tk.LEFT)
 
         rb_br_pt = tk.Radiobutton(r_prompts_2, text="Brush Paint (+)", variable=self.tool_mode, value="Brush Paint",
                                   font=("Segoe UI", 8, "bold"), fg=SUCCESS, bg=SURFACE, selectcolor=FIELD,
                                   activebackground=SURFACE, activeforeground=SUCCESS)
-        rb_br_pt.pack(side=tk.LEFT, padx=(0, 6))
+        rb_br_pt.pack(side=tk.LEFT, padx=(0, 8))
 
         rb_br_er = tk.Radiobutton(r_prompts_2, text="Eraser (−)", variable=self.tool_mode, value="Brush Erase",
                                   font=("Segoe UI", 8, "bold"), fg=DANGER, bg=SURFACE, selectcolor=FIELD,
                                   activebackground=SURFACE, activeforeground=DANGER)
-        rb_br_er.pack(side=tk.LEFT)
+        rb_br_er.pack(side=tk.LEFT, padx=(0, 8))
+
+        rb_bx_cut = tk.Radiobutton(r_prompts_2, text="Box Cut (−)", variable=self.tool_mode, value="Box Cut",
+                                   font=("Segoe UI", 8, "bold"), fg=WARNING, bg=SURFACE, selectcolor=FIELD,
+                                   activebackground=SURFACE, activeforeground=WARNING)
+        rb_bx_cut.pack(side=tk.LEFT)
 
         # Row 3: Brush Radius Control
         r_b_size = tk.Frame(c2, bg=SURFACE)
         r_b_size.pack(fill=tk.X, pady=(2, 4))
-        tk.Label(r_b_size, text="Brush Radius (px):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=16, anchor="w").pack(side=tk.LEFT)
+        tk.Label(r_b_size, text="Brush Radius (px):", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=15, anchor="w").pack(side=tk.LEFT)
         self.brush_size_entry = tk.Entry(r_b_size, width=5, font=("Segoe UI", 8, "bold"), bg=FIELD, fg=ACCENT,
                                          insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.brush_size_entry.pack(side=tk.RIGHT)
@@ -314,13 +319,13 @@ class SAM2MaskerDialog:
         s_bs.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         # Row 4: Shortcuts and Guidance
-        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Left-Click paints/prompts · Alt+Click or Right-Click erases · [ / ] adjusts brush size",
-                                   font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, wraplength=410, justify=tk.LEFT)
+        lbl_prompt_hint = tk.Label(c2, text="💡 Tip: Click/Box to prompt · Alt+Click erases · Brush overrides any neural blind spot",
+                                   font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, wraplength=440, justify=tk.LEFT)
         lbl_prompt_hint.pack(anchor="w", pady=(1, 4))
 
         # Row 5: Action Buttons (Undo, Clear, Reset)
         r_pbtns = tk.Frame(c2, bg=SURFACE)
-        r_pbtns.pack(fill=tk.X, pady=(2, 4))
+        r_pbtns.pack(fill=tk.X, pady=(2, 3))
 
         btn_undo = tk.Button(r_pbtns, text="↩ Undo (Ctrl+Z)", command=self._undo_last_action,
                              font=("Segoe UI", 8, "bold"), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
@@ -334,9 +339,15 @@ class SAM2MaskerDialog:
                                 font=("Segoe UI", 8), bg=FIELD, fg=DANGER, relief=tk.FLAT, padx=6, pady=5, cursor="hand2")
         btn_clr_all.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Row 6: Fresh Re-Prompt / Clear Conditioning Button
+        btn_fresh = tk.Button(c2, text="🔄 Fresh Re-Prompt (Reset Memory Conditioning)",
+                              command=self._reset_current_frame_conditioning,
+                              font=("Segoe UI", 8), bg=FIELD, fg=ACCENT, relief=tk.FLAT, padx=6, pady=4, cursor="hand2")
+        btn_fresh.pack(fill=tk.X, pady=(1, 3))
+
         self.keyframe_info_lbl = tk.Label(c2, text="Keyframes: 0 | Current Frame: Unprompted",
-                                          font=("Segoe UI", 8), fg=MUTED, bg=SURFACE)
-        self.keyframe_info_lbl.pack(anchor="w", pady=(4, 0))
+                                          font=("Segoe UI", 8), fg=MUTED, bg=SURFACE, wraplength=440, justify=tk.LEFT)
+        self.keyframe_info_lbl.pack(anchor="w", pady=(2, 0))
 
         # CARD 3: Temporal Tracking / Propagation
         c3 = self._create_card(self.scrollable_frame, "⚡ TIMELINE PROPAGATION")
@@ -514,21 +525,41 @@ class SAM2MaskerDialog:
         chk_hw.pack(side=tk.LEFT)
 
         lbl_hint = tk.Label(c5, text="💡 Tip: WebP at 2K reduces cutout file size from ~70MB down to ~1.5MB with zero visual loss!",
-                            font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=410)
+                            font=("Segoe UI", 8, "italic"), fg=MUTED, bg=SURFACE, justify=tk.LEFT, wraplength=440)
         lbl_hint.pack(anchor="w", pady=(0, 6))
 
-        # Big Export Button (Wrapped & Centered to guarantee zero horizontal or vertical cutoff)
-        self.btn_export = tk.Button(c5, text="🚀 EXPORT REALITYSCAN MASKS (BINARY ONLY)", command=self._export_masks_action,
+        # Export Action Frame with Pause & Stop / Cancel controls
+        self.export_action_frame = tk.Frame(c5, bg=SURFACE)
+        self.export_action_frame.pack(fill=tk.X, pady=(2, 4))
+
+        self.btn_export = tk.Button(self.export_action_frame, text="🚀 EXPORT REALITYSCAN MASKS (BINARY ONLY)",
+                                    command=self._export_masks_action,
                                     font=("Segoe UI", 9, "bold"), bg=SUCCESS, fg="#ffffff",
                                     activebackground="#059669", relief=tk.FLAT, padx=10, pady=8, cursor="hand2",
-                                    wraplength=390, justify=tk.CENTER)
-        self.btn_export.pack(fill=tk.X, pady=(2, 4))
+                                    wraplength=420, justify=tk.CENTER)
+        self.btn_export.pack(fill=tk.X)
+
+        # Active Pause & Cancel buttons (visible while export is running)
+        self.export_active_bar = tk.Frame(self.export_action_frame, bg=SURFACE)
+
+        self.btn_pause_export = tk.Button(self.export_active_bar, text="⏸ Pause Export",
+                                          command=self._toggle_export_pause,
+                                          font=("Segoe UI", 8, "bold"), bg=WARNING, fg="#ffffff",
+                                          activebackground="#d97706", relief=tk.FLAT, padx=8, pady=7, cursor="hand2")
+        self.btn_pause_export.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.btn_stop_export = tk.Button(self.export_active_bar, text="⏹ Stop / Cancel",
+                                         command=self._cancel_export_action,
+                                         font=("Segoe UI", 8, "bold"), bg=DANGER, fg="#ffffff",
+                                         activebackground="#dc2626", relief=tk.FLAT, padx=8, pady=7, cursor="hand2")
+        self.btn_stop_export.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.export_progress = ttk.Progressbar(c5, orient="horizontal", mode="determinate")
         self.export_progress.pack(fill=tk.X, pady=(2, 4))
 
-        self.export_status_lbl = tk.Label(c5, text="", font=("Segoe UI", 8), fg=MUTED, bg=SURFACE)
-        self.export_status_lbl.pack(anchor="w")
+        self.export_status_lbl = tk.Label(c5, text="", font=("Segoe UI", 8), fg=MUTED, bg=SURFACE,
+                                          wraplength=440, justify=tk.LEFT, anchor="w")
+        self.export_status_lbl.pack(fill=tk.X)
 
     def _create_card(self, parent: tk.Widget, title: str) -> tk.Frame:
         card = tk.Frame(parent, bg=SURFACE, bd=1, relief=tk.SOLID, padx=8, pady=6)
@@ -1049,6 +1080,8 @@ class SAM2MaskerDialog:
                     radius=self.brush_size_var.get(),
                     mode=self.brush_active_mode
                 )
+                self._cached_mask_key = None
+                self._cached_mask = None
                 self._composite_cache_key = None
                 self._render_current_frame()
             return
@@ -1086,6 +1119,8 @@ class SAM2MaskerDialog:
                     radius=self.brush_size_var.get(),
                     mode=self.brush_active_mode
                 )
+                self._cached_mask_key = None
+                self._cached_mask = None
                 self._composite_cache_key = None
                 self._render_current_frame()
 
@@ -1122,6 +1157,8 @@ class SAM2MaskerDialog:
             self.is_brushing = False
             self.current_stroke = None
             self.status_lbl.configure(text=f"Brush {self.brush_active_mode} applied to frame {self.current_frame_idx + 1}", fg=SUCCESS)
+            self._cached_mask_key = None
+            self._cached_mask = None
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
 
@@ -1146,6 +1183,8 @@ class SAM2MaskerDialog:
                     radius=self.brush_size_var.get(),
                     mode="erase"
                 )
+                self._cached_mask_key = None
+                self._cached_mask = None
                 self._composite_cache_key = None
                 self._render_current_frame()
             elif mode in ("AI Box", "Box Cut"):
@@ -1174,6 +1213,8 @@ class SAM2MaskerDialog:
                         radius=self.brush_size_var.get(),
                         mode="erase"
                     )
+                    self._cached_mask_key = None
+                    self._cached_mask = None
                     self._composite_cache_key = None
                     self._render_current_frame()
             elif mode in ("AI Box", "Box Cut"):
@@ -1186,6 +1227,9 @@ class SAM2MaskerDialog:
             mode = self.tool_mode.get()
             if mode in ("Brush Paint", "Brush Erase"):
                 self.current_stroke = None
+                self._cached_mask_key = None
+                self._cached_mask = None
+                self._composite_cache_key = None
                 self._set_frame(self.current_frame_idx)
             elif mode in ("AI Box", "Box Cut"):
                 self._on_canvas_left_up(event)
@@ -1216,6 +1260,8 @@ class SAM2MaskerDialog:
                                   fg=DANGER if label == 0 else ACCENT)
         try:
             self.engine.add_point(self.current_frame_idx, x, y, label=label)
+            self._cached_mask_key = None
+            self._cached_mask = None
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
             self.status_lbl.configure(text=f"{lbl_text} evaluated successfully on frame {self.current_frame_idx + 1}", fg=SUCCESS)
@@ -1225,7 +1271,9 @@ class SAM2MaskerDialog:
     def _apply_box_prompt(self, box: List[float]):
         self.status_lbl.configure(text=f"Evaluating AI Box on frame {self.current_frame_idx + 1}...", fg=ACCENT)
         try:
-            self.engine.add_box(self.current_frame_idx, box)
+            self.engine.add_box(self.current_frame_idx, box, clear_points=True)
+            self._cached_mask_key = None
+            self._cached_mask = None
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
             self.status_lbl.configure(text=f"AI Box evaluated successfully on frame {self.current_frame_idx + 1}", fg=SUCCESS)
@@ -1236,6 +1284,8 @@ class SAM2MaskerDialog:
         self.status_lbl.configure(text=f"Applying Box Cut on frame {self.current_frame_idx + 1}...", fg=DANGER)
         try:
             self.engine.box_cut_mask(self.current_frame_idx, box)
+            self._cached_mask_key = None
+            self._cached_mask = None
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
             self.status_lbl.configure(text=f"Box Cut applied on frame {self.current_frame_idx + 1}", fg=SUCCESS)
@@ -1244,6 +1294,8 @@ class SAM2MaskerDialog:
 
     def _undo_last_action(self):
         res = self.engine.undo(self.current_frame_idx)
+        self._cached_mask_key = None
+        self._cached_mask = None
         self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
         self.status_lbl.configure(text=f"Reverted last edit on frame {self.current_frame_idx + 1}", fg=WARNING)
@@ -1253,14 +1305,28 @@ class SAM2MaskerDialog:
 
     def _clear_current_frame_prompts(self):
         self.engine.clear_frame_prompts(self.current_frame_idx)
+        self._cached_mask_key = None
+        self._cached_mask = None
         self._composite_cache_key = None
         self._set_frame(self.current_frame_idx)
         self.status_lbl.configure(text=f"Cleared prompts & mask on frame {self.current_frame_idx + 1}", fg=WARNING)
+
+    def _reset_current_frame_conditioning(self):
+        if self.engine.num_frames == 0:
+            return
+        self.engine.reset_frame_conditioning(self.current_frame_idx)
+        self._cached_mask_key = None
+        self._cached_mask = None
+        self._composite_cache_key = None
+        self._set_frame(self.current_frame_idx)
+        self.status_lbl.configure(text=f"Reset frame {self.current_frame_idx + 1} memory conditioning: ready for clean prompt!", fg=SUCCESS)
 
     def _clear_all_prompts(self):
         if messagebox.askyesno("Reset All Prompts", "Are you sure you want to clear all prompts and tracked masks across all frames?", parent=self.dialog):
             self.engine.prompts.clear()
             self.engine.tracked_masks.clear()
+            self._cached_mask_key = None
+            self._cached_mask = None
             self._composite_cache_key = None
             self._set_frame(self.current_frame_idx)
 
@@ -1421,9 +1487,11 @@ class SAM2MaskerDialog:
         lbls_tuple = tuple(p_data.get("labels", []))
         box_tuple = tuple(p_data["box"]) if p_data.get("box") is not None else None
         has_tracked = self.current_frame_idx in self.engine.tracked_masks
+        mask_rev = self.engine.get_mask_revision(self.current_frame_idx)
 
         mask_cache_key = (
             self.current_frame_idx,
+            mask_rev,
             self.dilation_var.get(),
             self.feather_var.get(),
             self.threshold_var.get(),
@@ -1577,6 +1645,33 @@ class SAM2MaskerDialog:
         if f:
             self.export_dir_var.set(f)
 
+    def _toggle_export_pause(self):
+        if not self.is_export_running:
+            return
+        self.is_export_paused = not self.is_export_paused
+        if self.is_export_paused:
+            self.btn_pause_export.configure(text="▶ Resume Export", bg=SUCCESS)
+            self.export_status_lbl.configure(text="Export paused by user. Click Resume to continue.", fg=WARNING)
+        else:
+            self.btn_pause_export.configure(text="⏸ Pause Export", bg=WARNING)
+            self.export_status_lbl.configure(text="Resuming export...", fg=ACCENT)
+
+    def _cancel_export_action(self):
+        if not self.is_export_running:
+            return
+        self.export_cancel_requested = True
+        self.btn_stop_export.configure(text="Stopping...", state=tk.DISABLED)
+        self.export_status_lbl.configure(text="Cancelling export, finishing pending disk writes...", fg=DANGER)
+
+    def _restore_export_ui(self):
+        self.is_export_running = False
+        self.is_export_paused = False
+        self.export_cancel_requested = False
+        self.export_active_bar.pack_forget()
+        self.btn_export.pack(fill=tk.X)
+        self.btn_export.configure(state=tk.NORMAL)
+        self.btn_stop_export.configure(state=tk.NORMAL, text="⏹ Stop / Cancel")
+
     def _export_masks_action(self):
         out_dir = self.export_dir_var.get().strip()
         if not out_dir:
@@ -1587,7 +1682,15 @@ class SAM2MaskerDialog:
             messagebox.showwarning("No Format Selected", "Please enable either Binary Masks or Alpha Cutouts to export.", parent=self.dialog)
             return
 
-        self.btn_export.configure(state=tk.DISABLED)
+        self.is_export_running = True
+        self.is_export_paused = False
+        self.export_cancel_requested = False
+
+        self.btn_export.pack_forget()
+        self.export_active_bar.pack(fill=tk.X)
+        self.btn_pause_export.configure(text="⏸ Pause Export", bg=WARNING)
+        self.btn_stop_export.configure(state=tk.NORMAL, text="⏹ Stop / Cancel")
+
         self.export_progress["value"] = 0
         self.export_status_lbl.configure(text="Exporting masks...", fg=ACCENT)
 
@@ -1622,12 +1725,14 @@ class SAM2MaskerDialog:
                     png_compression=self.export_png_comp_var.get(),
                     use_hardware_accel=self.export_hw_accel_var.get(),
                     postprocess_params=params,
-                    progress_callback=_prog
+                    progress_callback=_prog,
+                    cancel_token=lambda: self.export_cancel_requested,
+                    pause_token=lambda: self.is_export_paused
                 )
-                self.dialog.after(0, lambda: self._on_export_success(out_dir, counts))
+                self.dialog.after(0, lambda: self._on_export_finished(out_dir, counts))
             except Exception as e:
                 self.dialog.after(0, lambda: messagebox.showerror("Export Failed", str(e), parent=self.dialog))
-                self.dialog.after(0, lambda: self.btn_export.configure(state=tk.NORMAL))
+                self.dialog.after(0, self._restore_export_ui)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1635,8 +1740,26 @@ class SAM2MaskerDialog:
         self.export_progress["value"] = pct
         self.export_status_lbl.configure(text=msg)
 
+    def _on_export_finished(self, out_dir: str, counts: Dict[str, Any]):
+        self._restore_export_ui()
+        if counts.get("cancelled", False):
+            self.export_status_lbl.configure(
+                text=f"Export cancelled: {counts.get('binary', 0)} masks saved before stop.",
+                fg=WARNING
+            )
+            messagebox.showinfo(
+                "Export Cancelled",
+                f"Export process was stopped by user.\n\n"
+                f"• Processed masks: {counts.get('binary', 0)}\n"
+                f"• Processed cutouts: {counts.get('cutout', 0)}\n"
+                f"Output location:\n{out_dir}",
+                parent=self.dialog
+            )
+            return
+
+        self._on_export_success(out_dir, counts)
+
     def _on_export_success(self, out_dir: str, counts: Dict[str, Any]):
-        self.btn_export.configure(state=tk.NORMAL)
         total_mb = counts.get('total_mb', 0.0)
         elapsed = counts.get('elapsed_sec', 0.0)
         fps = counts.get('fps', 0.0)
@@ -1667,6 +1790,7 @@ class SAM2MaskerDialog:
         """Cleanly releases background threads, model buffers, and window resources."""
         self.is_playing = False
         self.cancel_requested = True
+        self.export_cancel_requested = True
         try:
             if hasattr(self, "engine") and self.engine is not None:
                 self.engine.clear_all()
