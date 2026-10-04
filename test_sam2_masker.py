@@ -10,6 +10,7 @@ import tempfile
 import numpy as np
 import cv2
 import torch
+import time
 
 from sam2_engine import SAM2MaskingEngine, SAM2_MODELS
 
@@ -533,10 +534,97 @@ def test_text_grounding_and_model_switching():
     print("=" * 70)
 
 
+def test_accelerated_frame_ingestion_and_ui_shortcuts():
+    print("\n" + "=" * 70)
+    print("RUNNING HARDWARE-ACCELERATED INGESTION & UI SHORTCUT TEST SUITE")
+    print("=" * 70)
+
+    import tempfile
+    import tkinter as tk
+    from sam2_masker_ui import SAM2MaskerDialog
+
+    # 1. Test Accelerated Frame Loading & Ingestion Pipeline
+    print("[1] Testing Hardware-Accelerated Multi-Thread & GPU Ingestion Pipeline...")
+    engine = SAM2MaskingEngine()
+    engine.load_model("tiny")
+
+    temp_dir = tempfile.mkdtemp(prefix="sam2_accel_test_")
+    frames_dir = os.path.join(temp_dir, "test_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    H, W = 1500, 2000
+    for i in range(8):
+        img = np.full((H, W, 3), 30 + i * 10, dtype=np.uint8)
+        cv2.circle(img, (1000, 750), 300, (0, 200, 100), -1)
+        cv2.imwrite(os.path.join(frames_dir, f"frame_{i:04d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+    prog_msgs = []
+    t0 = time.perf_counter()
+    n_loaded = engine.load_source(frames_dir, progress_callback=lambda cur, tot, msg: prog_msgs.append(msg))
+    elapsed = time.perf_counter() - t0
+
+    print(f"    - Ingested {n_loaded} high-res ({W}x{H}) frames in {elapsed:.3f}s ({n_loaded / elapsed:.1f} fps)")
+    assert n_loaded == 8, f"Expected 8 frames, got {n_loaded}"
+    assert engine.inference_state["images"].shape == (8, 3, 1024, 1024), "Image tensor shape mismatch"
+    assert len(engine.frame_dims) == 8 and engine.frame_dims[0] == (W, H), "Frame dimensions mismatch"
+    assert len(prog_msgs) > 0, "Expected progress callback messages"
+    print("    [PASS] Hardware-accelerated multi-threaded & GPU ingestion pipeline verified.")
+
+    # 2. Test LRU Frame Cache
+    print("\n[2] Testing LRU Frame Cache...")
+    assert 0 in engine._frame_rgb_cache, "Frame 0 should be pre-cached on load"
+    rgb0 = engine.get_frame_rgb(0)
+    assert rgb0.shape == (H, W, 3), f"Frame 0 shape mismatch: {rgb0.shape}"
+    # Access frame 1 (populates cache)
+    rgb1 = engine.get_frame_rgb(1)
+    assert 1 in engine._frame_rgb_cache, "Frame 1 should be cached after retrieval"
+    print(f"    [PASS] LRU frame cache verified (Cached items: {list(engine._frame_rgb_cache.keys())}).")
+
+    # 3. Test Keyboard Typing Focus Isolation
+    print("\n[3] Testing Text Prompt Typing Focus Isolation in UI...")
+    root = tk.Tk()
+    dlg = SAM2MaskerDialog(root)
+    root.update()
+
+    dlg.current_frame_idx = 0
+    dlg.is_playing = False
+
+    # Focus on Text Prompt Entry
+    dlg.text_prompt_entry.focus_set()
+    root.update()
+
+    assert dlg._is_typing_focused() == True, "Should detect text prompt entry as typing focused"
+
+    # Simulate Space key while typing: must NOT toggle playback
+    dlg.dialog.event_generate("<space>")
+    root.update()
+    assert dlg.is_playing == False, "Spacebar must NOT trigger playback while focused in text entry!"
+
+    # Simulate Arrow keys while typing: must NOT change frame
+    dlg.dialog.event_generate("<Left>")
+    dlg.dialog.event_generate("<Right>")
+    root.update()
+    assert dlg.current_frame_idx == 0, "Arrow keys must NOT navigate frames while typing in text entry!"
+
+    # Focus on Canvas: shortcuts should be active
+    dlg.canvas.focus_set()
+    root.update()
+    assert dlg._is_typing_focused() == False, "Canvas must not be classified as typing focused"
+
+    dlg.dialog.destroy()
+    root.destroy()
+    print("    [PASS] Text entry typing focus isolation verified successfully.")
+
+    print("\n" + "=" * 70)
+    print("ALL ACCELERATED INGESTION & UI SHORTCUT TESTS PASSED PERFECTLY!")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     test_sam2_all()
     test_mixed_orientations()
     test_selection_and_editing_tools()
     test_export_stop_pause_and_revisions()
     test_text_grounding_and_model_switching()
+    test_accelerated_frame_ingestion_and_ui_shortcuts()
 

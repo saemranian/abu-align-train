@@ -844,6 +844,33 @@ class SAM2MaskerDialog:
     # Event Bindings (Canvas, Mouse, Keyboard)
     # -------------------------------------------------------------------------
 
+    def _is_typing_focused(self, event=None) -> bool:
+        """
+        Returns True if keyboard focus is currently inside any editable text widget
+        (such as the Text Prompt entry, Brush radius entry, refinement entries, or export path).
+        Prevents global viewport shortcuts (Spacebar, Arrows, Delete, F, etc.) from interfering
+        with text input.
+        """
+        try:
+            focused = self.dialog.focus_get()
+            if focused is not None:
+                w_class = focused.winfo_class()
+                if w_class in ("Entry", "TEntry", "Text", "Combobox", "TCombobox"):
+                    return True
+                if isinstance(focused, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
+                    return True
+
+            if event is not None and hasattr(event, "widget") and event.widget is not None:
+                w = event.widget
+                w_class = getattr(w, "winfo_class", lambda: "")()
+                if w_class in ("Entry", "TEntry", "Text", "Combobox", "TCombobox"):
+                    return True
+                if isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _bind_events(self):
         # Canvas mouse interactions
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_left_down)
@@ -919,17 +946,65 @@ class SAM2MaskerDialog:
         self.dialog.bind("<FocusIn>", lambda e: self._on_alt_up())
         self.canvas.bind("<Alt-ButtonPress-1>", self._on_canvas_alt_down)
 
-        # Keyboard shortcuts
-        self.dialog.bind("<space>", lambda e: self._toggle_playback())
-        self.dialog.bind("<Left>", lambda e: self._set_frame(self.current_frame_idx - 1))
-        self.dialog.bind("<Right>", lambda e: self._set_frame(self.current_frame_idx + 1))
-        self.dialog.bind("<Control-z>", lambda e: self._undo_last_action())
-        self.dialog.bind("<Control-Z>", lambda e: self._undo_last_action())
-        self.dialog.bind("<Delete>", lambda e: self._clear_current_frame_prompts())
-        self.dialog.bind("<f>", lambda e: self._zoom_to_fit())
-        self.dialog.bind("<F>", lambda e: self._zoom_to_fit())
-        self.dialog.bind("[", lambda e: self._adjust_brush_size(-5))
-        self.dialog.bind("]", lambda e: self._adjust_brush_size(5))
+        # Keyboard shortcuts (Guarded against active text entry focus)
+        def _on_key_space(e):
+            if self._is_typing_focused(e):
+                return
+            self._toggle_playback()
+            return "break"
+
+        def _on_key_left(e):
+            if self._is_typing_focused(e):
+                return
+            self._set_frame(self.current_frame_idx - 1)
+            return "break"
+
+        def _on_key_right(e):
+            if self._is_typing_focused(e):
+                return
+            self._set_frame(self.current_frame_idx + 1)
+            return "break"
+
+        def _on_key_undo(e):
+            if self._is_typing_focused(e):
+                return
+            self._undo_last_action()
+            return "break"
+
+        def _on_key_delete(e):
+            if self._is_typing_focused(e):
+                return
+            self._clear_current_frame_prompts()
+            return "break"
+
+        def _on_key_fit(e):
+            if self._is_typing_focused(e):
+                return
+            self._zoom_to_fit()
+            return "break"
+
+        def _on_key_brush_dec(e):
+            if self._is_typing_focused(e):
+                return
+            self._adjust_brush_size(-5)
+            return "break"
+
+        def _on_key_brush_inc(e):
+            if self._is_typing_focused(e):
+                return
+            self._adjust_brush_size(5)
+            return "break"
+
+        self.dialog.bind("<space>", _on_key_space)
+        self.dialog.bind("<Left>", _on_key_left)
+        self.dialog.bind("<Right>", _on_key_right)
+        self.dialog.bind("<Control-z>", _on_key_undo)
+        self.dialog.bind("<Control-Z>", _on_key_undo)
+        self.dialog.bind("<Delete>", _on_key_delete)
+        self.dialog.bind("<f>", _on_key_fit)
+        self.dialog.bind("<F>", _on_key_fit)
+        self.dialog.bind("[", _on_key_brush_dec)
+        self.dialog.bind("]", _on_key_brush_inc)
 
     # -------------------------------------------------------------------------
     # Model Loading (Asynchronous)
@@ -1242,6 +1317,8 @@ class SAM2MaskerDialog:
     # -------------------------------------------------------------------------
 
     def _on_alt_down(self, event=None):
+        if self._is_typing_focused(event):
+            return
         self.is_alt_pressed = True
         self.canvas.configure(cursor="circle")
         mode = self.tool_mode.get()

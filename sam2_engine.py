@@ -150,6 +150,10 @@ class SAM2MaskingEngine:
         # Base cleaned mask cache for zero-latency parameter scrubbing
         self._base_mask_cache: Dict[Tuple[int, bool, int], np.ndarray] = {}
 
+        # Decoded RGB frame cache (LRU) for instant playback and scrub
+        self._frame_rgb_cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._frame_cache_max_size: int = 32
+
         # Multi-level undo history stack: frame_idx -> list of {mask, prompt} snapshots
         self.undo_stacks: Dict[int, List[Dict[str, Any]]] = {}
 
@@ -538,42 +542,132 @@ class SAM2MaskingEngine:
         if self.num_frames == 0:
             raise ValueError("No frames loaded from source.")
 
-        # Determine dimensions from first frame
-        first_frame = self.get_frame_rgb(0)
-        self.orig_height, self.orig_width = first_frame.shape[:2]
-        self.frame_dims = []
-
-        # Automatic offloading policy: if num_frames > 80, offload to CPU to preserve GPU memory
+        # Determine dimensions and prepare tensor
         if offload_to_cpu is None:
             offload_to_cpu = (self.num_frames > 80)
 
-        # Build tensor for SAM 2 video predictor
         device_for_tensor = torch.device("cpu") if offload_to_cpu else torch.device(self.device)
-        img_mean = torch.tensor(self.img_mean, dtype=torch.float32, device=device_for_tensor)[:, None, None]
-        img_std = torch.tensor(self.img_std, dtype=torch.float32, device=device_for_tensor)[:, None, None]
+        gpu_device = torch.device(self.device) if torch.cuda.is_available() and self.device == "cuda" else None
+
+        img_mean_gpu = torch.tensor(self.img_mean, dtype=torch.float32, device=gpu_device)[:, None, None] if gpu_device else None
+        img_std_gpu = torch.tensor(self.img_std, dtype=torch.float32, device=gpu_device)[:, None, None] if gpu_device else None
+
+        img_mean_cpu = torch.tensor(self.img_mean, dtype=torch.float32)[:, None, None]
+        img_std_cpu = torch.tensor(self.img_std, dtype=torch.float32)[:, None, None]
 
         images_tensor = torch.zeros(self.num_frames, 3, model_image_size, model_image_size,
                                     dtype=torch.float32, device=device_for_tensor)
 
-        for i in range(self.num_frames):
-            rgb = self.get_frame_rgb(i)
-            h_i, w_i = rgb.shape[:2]
-            self.frame_dims.append((w_i, h_i))
-            # Resize with aspect ratio preserved or stretched to model_image_size
-            resized = cv2.resize(rgb, (model_image_size, model_image_size), interpolation=cv2.INTER_AREA)
-            # Normalization: (RGB / 255.0 - mean) / std
-            t = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
-            if offload_to_cpu:
-                t = t.to("cpu")
-            else:
-                t = t.to(device_for_tensor)
-            t -= img_mean
-            t /= img_std
-            images_tensor[i] = t
+        self.frame_dims = []
+        load_start = time.perf_counter()
 
-            if progress_callback and (i % 10 == 0 or i == self.num_frames - 1):
-                pct = int((i + 1) * 100 / self.num_frames)
-                progress_callback(i + 1, self.num_frames, f"Loaded frame {i + 1}/{self.num_frames} ({pct}%)")
+        if self.source_type in ("directory", "file_list"):
+            # Multi-threaded parallel file read & decode pool
+            def _decode_file(idx_and_path):
+                idx, p = idx_and_path
+                with open(p, "rb") as f:
+                    data = np.frombuffer(f.read(), np.uint8)
+                bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+                if bgr is None:
+                    raise IOError(f"Failed to read image: {p}")
+                h, w = bgr.shape[:2]
+                return idx, bgr, (w, h)
+
+            self.frame_dims = [None] * self.num_frames
+            workers = min(16, os.cpu_count() or 4)
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for idx, bgr, dims in executor.map(_decode_file, enumerate(self.frame_paths)):
+                    self.frame_dims[idx] = dims
+                    if idx == 0:
+                        self.orig_width, self.orig_height = dims
+                        self._frame_rgb_cache[0] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+                    if gpu_device is not None:
+                        # Hardware-accelerated CUDA pipeline:
+                        # 1. Direct GPU memory transfer
+                        # 2. In-VRAM BGR -> RGB channel reordering
+                        # 3. GPU bilinear resize
+                        # 4. Vectorized SIMD normalization
+                        t_gpu = torch.from_numpy(bgr).to(gpu_device, non_blocking=True).permute(2, 0, 1).float()
+                        t_rgb = t_gpu[[2, 1, 0], :, :]
+                        t_resized = torch.nn.functional.interpolate(
+                            t_rgb.unsqueeze(0),
+                            size=(model_image_size, model_image_size),
+                            mode="bilinear",
+                            align_corners=False
+                        ).squeeze(0)
+                        t_norm = (t_resized / 255.0 - img_mean_gpu) / img_std_gpu
+                        if offload_to_cpu:
+                            images_tensor[idx] = t_norm.cpu()
+                        else:
+                            images_tensor[idx] = t_norm
+                    else:
+                        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                        resized = cv2.resize(rgb, (model_image_size, model_image_size), interpolation=cv2.INTER_LINEAR)
+                        t = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+                        t -= img_mean_cpu
+                        t /= img_std_cpu
+                        images_tensor[idx] = t
+
+                    if progress_callback and (idx % 5 == 0 or idx == self.num_frames - 1):
+                        elapsed = max(0.001, time.perf_counter() - load_start)
+                        fps = (idx + 1) / elapsed
+                        pct = int((idx + 1) * 100 / self.num_frames)
+                        hw_label = "CUDA GPU" if gpu_device is not None else "CPU Multi-Thread"
+                        progress_callback(idx + 1, self.num_frames, f"Loaded {idx + 1}/{self.num_frames} frames ({pct}%, {fps:.1f} fps) [{hw_label}]")
+
+            if gpu_device is not None:
+                torch.cuda.synchronize()
+
+        elif self.source_type == "video":
+            cap = cv2.VideoCapture(self.source_path)
+            if not cap.isOpened():
+                raise ValueError(f"Cannot open video file: {self.source_path}")
+            self.video_cap = cap
+            self.frame_dims = []
+
+            for idx in range(self.num_frames):
+                ret, bgr = cap.read()
+                if not ret or bgr is None:
+                    break
+                h, w = bgr.shape[:2]
+                self.frame_dims.append((w, h))
+                if idx == 0:
+                    self.orig_width, self.orig_height = w, h
+                    self._frame_rgb_cache[0] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+                if gpu_device is not None:
+                    t_gpu = torch.from_numpy(bgr).to(gpu_device, non_blocking=True).permute(2, 0, 1).float()
+                    t_rgb = t_gpu[[2, 1, 0], :, :]
+                    t_resized = torch.nn.functional.interpolate(
+                        t_rgb.unsqueeze(0),
+                        size=(model_image_size, model_image_size),
+                        mode="bilinear",
+                        align_corners=False
+                    ).squeeze(0)
+                    t_norm = (t_resized / 255.0 - img_mean_gpu) / img_std_gpu
+                    if offload_to_cpu:
+                        images_tensor[idx] = t_norm.cpu()
+                    else:
+                        images_tensor[idx] = t_norm
+                else:
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    resized = cv2.resize(rgb, (model_image_size, model_image_size), interpolation=cv2.INTER_LINEAR)
+                    t = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+                    t -= img_mean_cpu
+                    t /= img_std_cpu
+                    images_tensor[idx] = t
+
+                if progress_callback and (idx % 10 == 0 or idx == self.num_frames - 1):
+                    elapsed = max(0.001, time.perf_counter() - load_start)
+                    fps = (idx + 1) / elapsed
+                    pct = int((idx + 1) * 100 / self.num_frames)
+                    hw_label = "CUDA GPU" if gpu_device is not None else "CPU"
+                    progress_callback(idx + 1, self.num_frames, f"Decoded video {idx + 1}/{self.num_frames} frames ({pct}%, {fps:.1f} fps) [{hw_label}]")
+
+            if gpu_device is not None:
+                torch.cuda.synchronize()
 
         # Initialize SAM2 Inference State
         compute_device = torch.device(self.device)
@@ -601,12 +695,19 @@ class SAM2MaskingEngine:
 
         # Warm up feature extractor on frame 0
         self.video_predictor._get_image_feature(self.inference_state, frame_idx=0, batch_size=1)
+        total_time = max(0.001, time.perf_counter() - load_start)
+        hw_desc = "CUDA GPU + Multi-Thread I/O" if gpu_device else "Multi-Thread CPU"
+        self.log(f"Ingested {self.num_frames} frames in {total_time:.2f}s ({self.num_frames / total_time:.1f} fps) via {hw_desc}")
         return self.num_frames
 
     def get_frame_rgb(self, frame_idx: int) -> np.ndarray:
-        """Returns RGB uint8 image of the requested frame in original resolution."""
+        """Returns RGB uint8 image of the requested frame in original resolution (with LRU caching)."""
         if frame_idx < 0 or frame_idx >= self.num_frames:
             raise IndexError(f"Frame index {frame_idx} out of range [0, {self.num_frames - 1}]")
+
+        if frame_idx in self._frame_rgb_cache:
+            self._frame_rgb_cache.move_to_end(frame_idx)
+            return self._frame_rgb_cache[frame_idx]
 
         if self.source_type in ("directory", "file_list"):
             path = self.frame_paths[frame_idx]
@@ -616,7 +717,7 @@ class SAM2MaskingEngine:
             bgr = cv2.imdecode(bytes_data, cv2.IMREAD_COLOR)
             if bgr is None:
                 raise IOError(f"Failed to read image: {path}")
-            return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
         elif self.source_type == "video":
             if self.video_cap is None:
@@ -625,9 +726,15 @@ class SAM2MaskingEngine:
             ret, bgr = self.video_cap.read()
             if not ret or bgr is None:
                 raise IOError(f"Failed to read video frame {frame_idx} from {self.source_path}")
-            return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
-        raise RuntimeError("Source is not loaded.")
+        else:
+            raise RuntimeError("Source is not loaded.")
+
+        self._frame_rgb_cache[frame_idx] = rgb
+        if len(self._frame_rgb_cache) > self._frame_cache_max_size:
+            self._frame_rgb_cache.popitem(last=False)
+        return rgb
 
     # -------------------------------------------------------------------------
     # Interactive Prompt System (Points & Bounding Boxes)
@@ -947,6 +1054,7 @@ class SAM2MaskingEngine:
         self.tracked_masks.clear()
         self.mask_revisions.clear()
         self._base_mask_cache.clear()
+        self._frame_rgb_cache.clear()
         self.undo_stacks.clear()
         if self.video_cap is not None:
             self.video_cap.release()
