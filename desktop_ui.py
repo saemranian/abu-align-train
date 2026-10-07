@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.2.5", 9, muted=True)
+    app.version_label = label(header, "v0.1.2.6", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -531,6 +531,7 @@ def build_workspace(app, tooltip):
     prepare_menu.add_command(label="360° rig designer", command=app._open_panoramic_splitter_dialog)
     prepare_menu.add_command(label="Video frames", command=app._open_video_extractor_dialog)
     prepare_menu.add_command(label="AI Masker (SAM 2)", command=app._open_sam2_masker_dialog)
+    prepare_menu.add_command(label="💧 BlurDrop (Filter Blurry Images)", command=app._open_blur_drop_dialog)
     prepare.configure(menu=prepare_menu)
     prepare.pack(side="right", padx=8)
 
@@ -629,6 +630,7 @@ def build_workspace(app, tooltip):
     app.path_entry = tk.Entry(row, textvariable=app.dataset_var, font=("Segoe UI", 10))
     app.path_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 10))
     button(row, "Browse folder", app._browse_dataset).pack(side="left")
+    button(row, "💧 BlurDrop...", app._open_blur_drop_dialog).pack(side="left", padx=(8, 0))
     app.profile_panel = tk.Frame(project, bg=SURFACE)
     def toggle_profiles():
         shown = bool(app.profile_panel.winfo_manager())

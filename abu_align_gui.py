@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.2.5
+Abu Align & Train Version 0.1.2.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.2.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.2.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -587,6 +587,7 @@ class AbuAlignApp:
         tools_menu.add_command(label="🎬 Video to Frame Sequence Extractor...", command=self._open_video_extractor_dialog)
         tools_menu.add_command(label="🌐 360° Multi-Camera Rig Projector / Splitter...", command=self._open_panoramic_splitter_dialog)
         tools_menu.add_command(label="🎭 AI Subject Masker (SAM 2.1)...", command=self._open_sam2_masker_dialog)
+        tools_menu.add_command(label="💧 BlurDrop: Image Sharpness & Blur Filter...", command=self._open_blur_drop_dialog)
         tools_menu.add_command(label="📐 Open Native 3D Workspace", accelerator="Alt+4", command=self._show_3d_workspace)
         tools_menu.add_command(label="📋 View Reconstruction Report...", command=self._view_training_run_report)
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
@@ -2120,6 +2121,22 @@ class AbuAlignApp:
         except Exception as e:
             messagebox.showerror("SAM 2 Masker Error", f"Failed to open SAM 2 Masking Studio:\n{e}")
 
+    def _open_blur_drop_dialog(self, initial_path=None):
+        """
+        Launches the BlurDrop Hardware-Accelerated Blur & Sharpness Curation Studio.
+        Filters blurry, motion-blurred, and out-of-focus images with real-time tuning,
+        dynamic thresholding, and safe cut/move to keep the main dataset folder 100% clean.
+        """
+        try:
+            from blur_drop_ui import open_blur_drop_dialog
+            init_p = initial_path
+            if not init_p and hasattr(self, "dataset_var"):
+                init_p = self.dataset_var.get().strip() or None
+            log_cb = self._log if hasattr(self, "_log") else None
+            open_blur_drop_dialog(self.root, initial_folder=init_p, log_callback=log_cb)
+        except Exception as e:
+            messagebox.showerror("BlurDrop Error", f"Failed to open BlurDrop Studio:\n{e}")
+
     def _open_panoramic_splitter_dialog(self):
         """
         Launches the Advanced 360° Multi-Camera Rig Projector & Panoramic Splitter dialog.
@@ -2427,7 +2444,8 @@ class AbuAlignApp:
 
         tk.Button(r4, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#db2777", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
         tk.Button(r4, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(r4, text="🎭 AI Masker (SAM 2)...", font=("Segoe UI", 8, "bold"), bg=self.accent_color, fg=self.bg_dark, relief=tk.FLAT, padx=6, command=lambda: self._open_sam2_masker_dialog(in_var.get())).pack(side=tk.LEFT)
+        tk.Button(r4, text="🎭 AI Masker (SAM 2)...", font=("Segoe UI", 8, "bold"), bg=self.accent_color, fg=self.bg_dark, relief=tk.FLAT, padx=6, command=lambda: self._open_sam2_masker_dialog(in_var.get())).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(r4, text="💧 BlurDrop...", font=("Segoe UI", 8, "bold"), bg="#0284c7", fg="#ffffff", relief=tk.FLAT, padx=6, command=lambda: self._open_blur_drop_dialog(in_var.get())).pack(side=tk.LEFT)
 
         # Mask Telemetry Badge
         mask_badge_lbl = tk.Label(
@@ -4536,7 +4554,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.2.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.2.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5095,7 +5113,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.2.5 - {title}")
+        doc_win.title(f"Abu Align v0.1.2.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5722,7 +5740,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.2.5\n"
+            "Abu Align & Train - Version 0.1.2.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
