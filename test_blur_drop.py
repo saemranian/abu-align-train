@@ -212,7 +212,7 @@ def test_blur_drop_all():
         # ---------------------------------------------------------------------
         print("\n[8] Testing BlurDrop Studio Dialog GUI Initialization...")
         import tkinter as tk
-        from blur_drop_ui import BlurDropStudioDialog
+        from blur_drop_ui import BlurDropStudioDialog, open_blur_drop_dialog
 
         root = tk.Tk()
         root.withdraw()
@@ -224,8 +224,14 @@ def test_blur_drop_all():
         assert dlg.btn_move is not None, "Action button must be present"
 
         dlg.dialog.destroy()
+
+        # Test helper function open_blur_drop_dialog with log_callback
+        dlg2 = open_blur_drop_dialog(root, initial_folder=temp_dir, log_callback=lambda msg: None)
+        root.update()
+        assert dlg2.log_callback is not None, "log_callback should be passed and bound"
+        dlg2.dialog.destroy()
         root.destroy()
-        print("    [PASS] BlurDrop Studio Dialog instantiated cleanly without errors.")
+        print("    [PASS] BlurDrop Studio Dialog instantiated cleanly with log_callback without errors.")
 
         print("\n" + "=" * 70)
         print("ALL BLURDROP ENGINE & CURATION TESTS PASSED PERFECTLY!")

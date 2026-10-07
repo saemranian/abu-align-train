@@ -12,7 +12,7 @@ import math
 import shutil
 import threading
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Callable
 
 import torch
 import tkinter as tk
@@ -44,8 +44,16 @@ class BlurDropStudioDialog:
     thumbnail gallery preview, detail inspector loupe, and safe atomic move with undo.
     """
 
-    def __init__(self, parent: tk.Tk, initial_folder: Optional[str] = None):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        initial_folder: Optional[str] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        *args,
+        **kwargs
+    ):
         self.parent = parent
+        self.log_callback = log_callback
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("💧 BlurDrop Studio · Hardware-Accelerated Blur & Sharpness Curation")
         self.dialog.geometry("1340x880")
@@ -795,9 +803,15 @@ class BlurDropStudioDialog:
         messagebox.showerror("Undo Error", f"Failed to restore images:\n{err}", parent=self.dialog)
 
 
-def open_blur_drop_dialog(parent: tk.Tk, initial_folder: Optional[str] = None) -> BlurDropStudioDialog:
+def open_blur_drop_dialog(
+    parent: tk.Tk,
+    initial_folder: Optional[str] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
+    *args,
+    **kwargs
+) -> BlurDropStudioDialog:
     """Helper function to instantiate and display the BlurDrop Studio."""
-    return BlurDropStudioDialog(parent, initial_folder=initial_folder)
+    return BlurDropStudioDialog(parent, initial_folder=initial_folder, log_callback=log_callback, *args, **kwargs)
 
 
 if __name__ == "__main__":
