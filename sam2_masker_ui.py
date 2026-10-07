@@ -187,7 +187,7 @@ class SAM2MaskerDialog:
         self.export_rs_naming_var = tk.BooleanVar(value=True)
         self.mask_fmt_var = tk.StringVar(value="png")
         self.cutout_fmt_var = tk.StringVar(value="WebP (RGBA - ~1.5MB)")
-        self.export_scale_var = tk.StringVar(value="2K QHD (2048px - Auto Aspect)")
+        self.export_scale_var = tk.StringVar(value="Original (100% Native)")
         self.export_quality_var = tk.IntVar(value=92)
         self.export_png_comp_var = tk.IntVar(value=1)
         self.export_hw_accel_var = tk.BooleanVar(value=True)
@@ -387,7 +387,8 @@ class SAM2MaskerDialog:
                                          insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.brush_size_entry.pack(side=tk.RIGHT)
         self.brush_size_entry.insert(0, str(self.brush_size_var.get()))
-        self.brush_size_entry.bind("<Return>", lambda e: self._on_brush_size_commit())
+        self.brush_size_entry.bind("<Return>", lambda e: (self._on_brush_size_commit(), self.canvas.focus_set()))
+        self.brush_size_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.brush_size_entry.bind("<FocusOut>", lambda e: self._on_brush_size_commit())
         self.s_bs = ttk.Scale(r_b_size, from_=2, to=120, variable=self.brush_size_var,
                               command=lambda v: self._on_brush_scale_moved(v))
@@ -401,7 +402,8 @@ class SAM2MaskerDialog:
         self.text_prompt_entry = tk.Entry(r_txt, textvariable=self.text_prompt_var, font=("Segoe UI", 9),
                                           bg=FIELD, fg=TEXT, insertbackground=TEXT, relief=tk.FLAT)
         self.text_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
-        self.text_prompt_entry.bind("<Return>", lambda e: self._on_generate_from_text())
+        self.text_prompt_entry.bind("<Return>", lambda e: (self._on_generate_from_text(), self.canvas.focus_set()))
+        self.text_prompt_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
 
         self.btn_text_prompt = tk.Button(r_txt, text="✨ AI Mask", command=self._on_generate_from_text,
                                          font=("Segoe UI", 8, "bold"), bg=ACCENT, fg=BG, activebackground=ACCENT_HOVER,
@@ -475,7 +477,8 @@ class SAM2MaskerDialog:
                                        insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.dilation_entry.pack(side=tk.RIGHT)
         self.dilation_entry.insert(0, str(self.dilation_var.get()))
-        self.dilation_entry.bind("<Return>", lambda e: self._on_entry_param_commit("dilation"))
+        self.dilation_entry.bind("<Return>", lambda e: (self._on_entry_param_commit("dilation"), self.canvas.focus_set()))
+        self.dilation_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.dilation_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("dilation"))
         self.s_dil = ttk.Scale(r_dil, from_=-25, to=25, variable=self.dilation_var,
                                command=lambda v: self._on_refine_slider_moved("dilation", v))
@@ -490,7 +493,8 @@ class SAM2MaskerDialog:
                                       insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.feather_entry.pack(side=tk.RIGHT)
         self.feather_entry.insert(0, str(self.feather_var.get()))
-        self.feather_entry.bind("<Return>", lambda e: self._on_entry_param_commit("feather"))
+        self.feather_entry.bind("<Return>", lambda e: (self._on_entry_param_commit("feather"), self.canvas.focus_set()))
+        self.feather_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.feather_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("feather"))
         self.s_fea = ttk.Scale(r_fea, from_=0, to=20, variable=self.feather_var,
                                command=lambda v: self._on_refine_slider_moved("feather", v))
@@ -505,7 +509,8 @@ class SAM2MaskerDialog:
                                         insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.threshold_entry.pack(side=tk.RIGHT)
         self.threshold_entry.insert(0, str(self.threshold_var.get()))
-        self.threshold_entry.bind("<Return>", lambda e: self._on_entry_param_commit("threshold"))
+        self.threshold_entry.bind("<Return>", lambda e: (self._on_entry_param_commit("threshold"), self.canvas.focus_set()))
+        self.threshold_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.threshold_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("threshold"))
         self.s_thr = ttk.Scale(r_thr, from_=1, to=254, variable=self.threshold_var,
                                command=lambda v: self._on_refine_slider_moved("threshold", v))
@@ -520,7 +525,8 @@ class SAM2MaskerDialog:
                                       insertbackground=TEXT, justify="center", relief=tk.FLAT)
         self.speckle_entry.pack(side=tk.RIGHT)
         self.speckle_entry.insert(0, str(self.min_speckle_var.get()))
-        self.speckle_entry.bind("<Return>", lambda e: self._on_entry_param_commit("speckle"))
+        self.speckle_entry.bind("<Return>", lambda e: (self._on_entry_param_commit("speckle"), self.canvas.focus_set()))
+        self.speckle_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.speckle_entry.bind("<FocusOut>", lambda e: self._on_entry_param_commit("speckle"))
         self.s_spk = ttk.Scale(r_spk, from_=0, to=150, variable=self.min_speckle_var,
                                command=lambda v: self._on_refine_slider_moved("speckle", v))
@@ -550,6 +556,8 @@ class SAM2MaskerDialog:
         self.out_entry = tk.Entry(r_out, textvariable=self.export_dir_var, font=("Segoe UI", 8),
                                   bg=FIELD, fg=TEXT, insertbackground=TEXT, relief=tk.FLAT)
         self.out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.out_entry.bind("<Return>", lambda e: self.canvas.focus_set())
+        self.out_entry.bind("<Escape>", lambda e: self.canvas.focus_set())
         self.btn_browse_out = tk.Button(r_out, text="Browse", command=self._browse_output_dir,
                                         font=("Segoe UI", 8), bg=FIELD, fg=TEXT, relief=tk.FLAT, padx=6, cursor="hand2")
         self.btn_browse_out.pack(side=tk.LEFT)
@@ -592,7 +600,7 @@ class SAM2MaskerDialog:
         r_res.pack(fill=tk.X, pady=(2, 4))
         tk.Label(r_res, text="Export Size:", font=("Segoe UI", 8), fg=TEXT, bg=SURFACE, width=12, anchor="w").pack(side=tk.LEFT)
         self.cb_scale = ttk.Combobox(r_res, textvariable=self.export_scale_var,
-                                     values=["2K QHD (2048px - Auto Aspect)", "Original (100% Native)", "50% Half Res (Auto Aspect)", "4K UHD (3840px - Auto Aspect)", "1K HD (1024px - Auto Aspect)"],
+                                     values=["Original (100% Native)", "2K QHD (2048px - Auto Aspect)", "50% Half Res (Auto Aspect)", "4K UHD (3840px - Auto Aspect)", "1K HD (1024px - Auto Aspect)"],
                                      state="readonly", width=18, font=("Segoe UI", 8))
         self.cb_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -701,7 +709,7 @@ class SAM2MaskerDialog:
         self.canvas_frame = tk.Frame(parent, bg="#0d1117")
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(self.canvas_frame, bg="#0d1117", highlightthickness=0, cursor="crosshair")
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#0d1117", highlightthickness=0, cursor="crosshair", takefocus=True)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # 3. Bottom Timeline Scrubber
@@ -846,27 +854,35 @@ class SAM2MaskerDialog:
 
     def _is_typing_focused(self, event=None) -> bool:
         """
-        Returns True if keyboard focus is currently inside any editable text widget
+        Returns True if keyboard focus is currently inside an editable text entry widget
         (such as the Text Prompt entry, Brush radius entry, refinement entries, or export path).
         Prevents global viewport shortcuts (Spacebar, Arrows, Delete, F, etc.) from interfering
-        with text input.
+        with text input. Comboboxes and readonly widgets do NOT block shortcuts.
         """
         try:
             focused = self.dialog.focus_get()
             if focused is not None:
                 w_class = focused.winfo_class()
-                if w_class in ("Entry", "TEntry", "Text", "Combobox", "TCombobox"):
-                    return True
-                if isinstance(focused, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
-                    return True
+                if w_class in ("Entry", "TEntry", "Text"):
+                    state = str(focused.cget("state")) if hasattr(focused, "cget") else "normal"
+                    if state not in ("readonly", "disabled"):
+                        return True
+                if isinstance(focused, (tk.Entry, ttk.Entry, tk.Text)):
+                    state = str(focused.cget("state")) if hasattr(focused, "cget") else "normal"
+                    if state not in ("readonly", "disabled"):
+                        return True
 
             if event is not None and hasattr(event, "widget") and event.widget is not None:
                 w = event.widget
                 w_class = getattr(w, "winfo_class", lambda: "")()
-                if w_class in ("Entry", "TEntry", "Text", "Combobox", "TCombobox"):
-                    return True
-                if isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox)):
-                    return True
+                if w_class in ("Entry", "TEntry", "Text"):
+                    state = str(w.cget("state")) if hasattr(w, "cget") else "normal"
+                    if state not in ("readonly", "disabled"):
+                        return True
+                if isinstance(w, (tk.Entry, ttk.Entry, tk.Text)):
+                    state = str(w.cget("state")) if hasattr(w, "cget") else "normal"
+                    if state not in ("readonly", "disabled"):
+                        return True
         except Exception:
             pass
         return False
@@ -926,6 +942,8 @@ class SAM2MaskerDialog:
 
         def _on_canvas_enter(event):
             self._sync_alt_state(event)
+            if not self._is_typing_focused():
+                self.canvas.focus_set()
 
         def _on_canvas_leave(event):
             if self.brush_cursor_id:
@@ -1006,6 +1024,10 @@ class SAM2MaskerDialog:
         self.dialog.bind("[", _on_key_brush_dec)
         self.dialog.bind("]", _on_key_brush_inc)
 
+        # Return focus to canvas whenever any combobox item is selected
+        for combo in (self.model_combo, self.cb_cut, self.cb_mask, self.cb_scale, self.color_combo):
+            combo.bind("<<ComboboxSelected>>", lambda e: self.canvas.focus_set(), add="+")
+
     # -------------------------------------------------------------------------
     # Model Loading (Asynchronous)
     # -------------------------------------------------------------------------
@@ -1043,6 +1065,7 @@ class SAM2MaskerDialog:
     def _on_model_changed(self, event=None):
         model_key = self.model_combo_var.get()
         self._init_model_async(model_key)
+        self.canvas.focus_set()
 
     # -------------------------------------------------------------------------
     # Text-Prompt AI Masking Callbacks (Grounded-SAM 2)
@@ -1089,14 +1112,17 @@ class SAM2MaskerDialog:
         self._set_frame(self.current_frame_idx)
         score_pct = int(round(score * 100))
         self.status_lbl.configure(text=f"✨ AI Mask created for '{prompt_text}' ({score_pct}% confidence)", fg=SUCCESS)
+        self.canvas.focus_set()
 
     def _on_text_mask_not_found(self, prompt_text: str):
         self.btn_text_prompt.configure(state=tk.NORMAL)
         self.status_lbl.configure(text=f"No matching '{prompt_text}' detected. Try different phrasing.", fg=WARNING)
+        self.canvas.focus_set()
 
     def _on_text_mask_error(self, prompt_text: str, err: str):
         self.btn_text_prompt.configure(state=tk.NORMAL)
         self.status_lbl.configure(text=f"Text Prompt Error: {err}", fg=DANGER)
+        self.canvas.focus_set()
 
     # -------------------------------------------------------------------------
     # Source Media Ingestion
@@ -1289,6 +1315,7 @@ class SAM2MaskerDialog:
         self._render_current_frame()
 
     def _on_canvas_pan_start(self, event):
+        self.canvas.focus_set()
         self.is_panning = True
         self.drag_start_x = event.x - self.pan_x
         self.drag_start_y = event.y - self.pan_y
@@ -1342,6 +1369,7 @@ class SAM2MaskerDialog:
 
     def _on_canvas_alt_down(self, event):
         """Dedicated handler for Alt+Left Click directly erasing mask at clicked point."""
+        self.canvas.focus_set()
         if self.engine.num_frames == 0:
             return
         cur_w, cur_h = self.engine.get_frame_dims(self.current_frame_idx)
@@ -1371,6 +1399,7 @@ class SAM2MaskerDialog:
                 self.brush_cursor_id = None
 
     def _on_canvas_left_down(self, event):
+        self.canvas.focus_set()
         if self.engine.num_frames == 0:
             return
 
@@ -1479,6 +1508,7 @@ class SAM2MaskerDialog:
             self._set_frame(self.current_frame_idx)
 
     def _on_canvas_right_down(self, event):
+        self.canvas.focus_set()
         if self.engine.num_frames == 0:
             return
 

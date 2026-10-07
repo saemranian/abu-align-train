@@ -1,63 +1,74 @@
-# Walkthrough: Abu Align & Train v0.1.2.4
-## AI Masker: Hardware-Accelerated Frame Ingestion Pipeline (Zero Upstream Changes), LRU Viewport Cache & Text Entry Typing Isolation
+# Walkthrough: Abu Align & Train v0.1.2.5
+## AI Masker: Native Resolution Export Default, Box Cut `sync_to_sam2` Decoupling & Canvas Keyboard Focus Routing
 
 ### 1. Executive Summary
-Release **v0.1.2.4** directly addresses two critical user-reported issues in the **AI Subject Masker** (`sam2_engine.py`, `sam2_masker_ui.py`):
+Release **v0.1.2.5** addresses three critical user requests in the **AI Subject Masker** (`sam2_engine.py`, `sam2_masker_ui.py`):
 
-1. **Hardware-Accelerated Multi-Thread & GPU Frame Ingestion (Zero Upstream Changes)**:
-   - **Root Cause Diagnosed**: Previously, `load_source()` ran sequentially in a single Python thread: for every frame, it read the file from disk, decoded it with `cv2.imdecode`, converted color spaces on the CPU, and executed CPU `cv2.resize(..., interpolation=cv2.INTER_AREA)` followed by CPU normalization. For 50–100 high-resolution photogrammetry images (12–60MP), this created a 25–60 second bottleneck.
-   - **Hardware-Accelerated Solution**:
-     - Multi-threaded file I/O & CPU decoding pool using `ThreadPoolExecutor(min(16, os.cpu_count() or 4))` to overlap disk reading and image decompression across all CPU cores.
-     - PyTorch CUDA GPU pipeline: raw image buffers are uploaded to GPU VRAM, converted from BGR to RGB in-place, resized using CUDA hardware bilinear interpolation (`torch.nn.functional.interpolate`), and normalized with fused SIMD floating-point operations in **~0.1ms per frame**.
-     - Video ingestion streamlined into sequential streaming reads without destructive `cap.set()` seeking.
-     - Ingestion throughput boosted from **6.8 fps to 70–120+ fps** (a **7x to 15x speedup**), loading large sequences in 1–2 seconds.
-     - **Zero changes to upstream Meta SAM 2 repository**: All acceleration is cleanly encapsulated inside our engine layer.
-2. **LRU Frame Cache for Ultra-Fast Viewport Navigation**:
-   - Added a 32-frame `OrderedDict` LRU cache in `SAM2MaskerEngine`.
-   - Frame 0 is automatically primed during ingestion for instantaneous first display.
-   - Scrubbing, playing, and zooming between frames now operates with **0.0ms disk latency**.
-3. **Text Entry Typing Focus Isolation & Keyboard Routing**:
-   - **Root Cause Diagnosed**: Viewport shortcuts (`<space>` for playback, `<Left>`/`<Right>` for frame stepping, `<Delete>` for prompt clearing, `<f>` for fit view, `[`/`]` for brush size) were bound directly to the toplevel window without checking active widget focus. Typing `"white disk"` in the text prompt triggered playback on the spacebar, while Left/Right arrow keys scrubbed frames instead of moving the text cursor.
+1. **Default Resolution for Mask Export as Native**:
+   - **User Request**: *"Make the default resolution for mask export as native."*
+   - **Implementation**:
+     - `self.export_scale_var` is now initialized to `"Original (100% Native)"` by default.
+     - `"Original (100% Native)"` is placed as the first entry in the export resolution combobox (`self.cb_scale`).
+     - Preserves 100% native photogrammetry pixel resolution across individual landscape and portrait images without auto-downsampling to 2K.
+2. **Fixed Box Cut Selection Tool Error**:
+   - **User Request**: *"The 'box cut' selection too is not working. 2nd screenshot."*
+   - **Root Cause Diagnosed**:
+     - `sam2_masker_ui.py:1599` called `self.engine.box_cut_mask(self.current_frame_idx, box, sync_to_sam2=False)` to decouple the instant raster cutout from the background SAM 2 neural memory sync.
+     - `sam2_engine.py:904` defined `def box_cut_mask(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:`, which lacked the `sync_to_sam2` keyword parameter, raising: `TypeError: SAM2MaskingEngine.box_cut_mask() got an unexpected keyword argument 'sync_to_sam2'`.
    - **Fix Implemented**:
-     - Introduced `_is_typing_focused(event)` to detect active focus on any `tk.Entry`, `ttk.Entry`, `tk.Text`, or editable combobox.
-     - Wrapped all global keyboard shortcuts so they gracefully pass through whenever the user is typing into an entry field.
-     - Users can type natural language prompts with spaces and edit with arrow keys without triggering playback or frame jumps.
+     - Updated `box_cut_mask` in `sam2_engine.py` to accept `sync_to_sam2: bool = True`.
+     - When `sync_to_sam2=False`, the bounding box pixels are zeroed immediately in memory with zero UI latency, and `self.engine.sync_frame_mask_to_sam2` is asynchronously dispatched to commit the changes to SAM 2 memory.
+3. **Keyboard Focus Routing Fix (Shortcuts Unblocked Outside Text Entry)**:
+   - **User Request**: *"in the 2nd screenshot, now I'm not typing but the keyboard buttons do not work!"*
+   - **Root Cause Diagnosed**:
+     - In `sam2_masker_ui.py`, `_is_typing_focused()` previously checked `w_class in ("Entry", "TEntry", "Text", "Combobox", "TCombobox")`.
+     - Whenever any dropdown in the UI (e.g. Model selection, Overlay color, Export resolution, Cutout format) was clicked or selected, Tkinter maintained focus on that readonly `ttk.Combobox`.
+     - Because `Combobox` was classified as typing focused, `_is_typing_focused()` continuously returned `True` even when the user was no longer typing. Consequently, all global viewport shortcuts (Spacebar for playback, Left/Right for stepping, Delete for clearing frame, F for fit to view, `[`/`]` for brush size) were permanently suppressed.
+     - Additionally, clicking on `self.canvas` did not automatically transfer keyboard focus (`self.canvas.focus_set()`).
+   - **Fix Implemented**:
+     - Removed `Combobox` and `TCombobox` from `_is_typing_focused()`. Verified that only editable `Entry` and `Text` widgets with `state not in ("readonly", "disabled")` are treated as typing focused.
+     - Added `takefocus=True` to `self.canvas`.
+     - Bound `<<ComboboxSelected>>` on all comboboxes (`model_combo`, `cb_scale`, `cb_mask`, `cb_cut`, `color_combo`) to automatically yield focus to `self.canvas` as soon as an item is selected.
+     - Added `self.canvas.focus_set()` across canvas mouse events (`_on_canvas_left_down`, `_on_canvas_right_down`, `_on_canvas_alt_down`, `_on_canvas_pan_start`, and `_on_canvas_enter`).
+     - Added `<Return>` and `<Escape>` bindings on `text_prompt_entry`, `brush_size_entry`, and all refinement parameter entries to immediately release focus to `self.canvas`.
 
 ---
 
-### 2. Architecture & Pipeline Diagram
+### 2. Focus Routing & Event Handling Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                   Hardware-Accelerated Ingestion & UI Architecture (v0.1.2.4)          │
+│                   Keyboard Focus & Tool Event Architecture (v0.1.2.5)                  │
 │                                                                                        │
-│  [Source Images on Disk]                                                               │
+│  [User Keyboard Event] (Space, Left/Right, Delete, F, [, ])                            │
 │          │                                                                             │
 │          ▼                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │               MULTI-THREADED CPU PARALLEL I/O & DECODING POOL                    │  │
-│  │   • ThreadPoolExecutor(16 workers) overlaps NVMe reads & cv2.imdecode             │  │
-│  │   • Native resolution & aspect ratio extraction: (W_i, H_i) per frame            │  │
-│  │   • Primes Frame 0 into LRU Cache for instant viewport blitting                  │  │
-│  └────────────────────────────────────────┬─────────────────────────────────────────┘  │
-│                                           │                                            │
-│                                           ▼                                            │
-│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                    CUDA GPU HARDWARE PIPELINE (PyTorch)                          │  │
-│  │   • Fast non-blocking DMA transfer: HWC uint8 -> GPU VRAM                        │  │
-│  │   • In-VRAM BGR -> RGB permute (channels 2, 1, 0)                                │  │
-│  │   • Hardware Bilinear Interpolation: torch.nn.functional.interpolate (~0.1ms)     │  │
-│  │   • Vectorized Fused SIMD ImageNet Normalization: (T / 255.0 - mean) / std       │  │
-│  │   • Pipelined direct assignment into inference_state["images"]                   │  │
-│  │   • 70 - 140+ FPS ingestion throughput (Zero Upstream SAM 2 modification)         │  │
+│  │                     _is_typing_focused(event) EVALUATION                         │  │
+│  │                                                                                  │  │
+│  │   Focused widget in (Entry, TEntry, Text) AND state not in (readonly, disabled)? │  │
+│  │                                                                                  │  │
+│  │      ├── YES ──> [Text Input Mode]                                               │  │
+│  │      │           • Space types ' ' into Text Prompt / numeric input              │  │
+│  │      │           • Left/Right moves cursor within text field                     │  │
+│  │      │           • Viewport hotkeys pass through untouched                       │  │
+│  │      │                                                                           │  │
+│  │      └── NO  ──> [Global Viewport Shortcuts Active]                              │  │
+│  │                  • Readonly Comboboxes (Model, Color, Export Scale) NEVER block  │  │
+│  │                  • Spacebar ──> Toggles playback                                 │  │
+│  │                  • Left/Right ──> Steps frames                                   │  │
+│  │                  • Delete ──> Clears current frame prompt                        │  │
+│  │                  • 'F' ──> Fits view to canvas                                   │  │
+│  │                  • '[' / ']' ──> Adjusts brush radius                            │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                   INTELLIGENT UI KEYBOARD FOCUS ROUTER                           │  │
+│  │                     AUTOMATIC FOCUS RECOVERY TO CANVAS                           │  │
 │  │                                                                                  │  │
-│  │   [Key Press] ──> _is_typing_focused() ?                                         │  │
-│  │                     ├── TRUE  ──> Allow normal text typing (Space, Arrows, Del)  │  │
-│  │                     └── FALSE ──> Execute global shortcuts (Play, Scrub, Fit)    │  │
+│  │   • Canvas Click / Pan / Drag / Hover ──> self.canvas.focus_set()                │  │
+│  │   • Combobox Item Selected (<<ComboboxSelected>>) ──> self.canvas.focus_set()    │  │
+│  │   • Text Prompt <Return> (Submit) or <Escape> ──> self.canvas.focus_set()        │  │
+│  │   • Slider/Entry Commit (Dilation, Feather, Threshold) ──> self.canvas.focus_set│  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -75,26 +86,29 @@ The comprehensive test suite in `test_sam2_masker.py` was executed with all 6 te
   - Mask post-processing ops (dilation, erosion, feathering, invert).
   - Hardware-accelerated WebP & PNG batch export (95+ fps).
 - **Suite 2: Mixed Horizontal & Vertical Orientation Suite**: **PASS**
-  - Ingestion of mixed landscape and portrait frames via hardware pipeline (79.2 fps).
+  - Ingestion of mixed landscape and portrait frames via hardware pipeline.
   - Adaptive per-frame aspect ratio mask generation.
   - Native resolution export preserving independent orientation ratios.
 - **Suite 3: Advanced Selection, Erase, Box Cut & Brush Tools**: **PASS**
   - AI Bounding Box Marquee with coordinate clamping: **PASS**.
-  - Direct Manual Brush Eraser stroke: **PASS** (erased subject center to 0).
-  - Multi-level Undo of Brush Eraser: **PASS** (restored pixel to 255).
-  - Box Cut / Marquee Deselect: **PASS** (zeroed out rectangular region).
+  - Direct Manual Brush Eraser stroke: **PASS**.
+  - Multi-level Undo of Brush Eraser: **PASS**.
+  - **Box Cut / Marquee Deselect with `sync_to_sam2=False` & Async Sync**: **PASS** (zeroed marquee region without crashing).
   - Multi-level Undo of Box Cut: **PASS** (restored marquee region to 255).
-  - Smart Anchor Positive Point on Tracked Frame Erase: **PASS** (prevented mask collapse).
+  - Smart Anchor Positive Point on Tracked Frame Erase: **PASS**.
 - **Suite 4: Export Stop, Pause & Mask Revision Suite**: **PASS**
   - Mask revision tracking across box, brush, and undo (`0 -> 2 -> 3 -> 4`): **PASS**.
   - Reset frame conditioning purging tracked memory: **PASS**.
-  - Export cancellation stopping cleanly after 2/8 frames: **PASS** (`cancelled: True`).
-  - Export pause and resume completing all 8 frames: **PASS** (`cancelled: False`).
+  - Export cancellation stopping cleanly after 2/8 frames: **PASS**.
+  - Export pause and resume completing all 8 frames: **PASS**.
 - **Suite 5: Grounded-SAM 2 Text Prompt & Model Switching Suite**: **PASS**
   - OwLV2 Zero-Shot Text Prompt Detection (`"white disk"`): **PASS** (Box: `[125.6, 125.7, 276.4, 277.2]`, Score: 82.6%).
-  - Dynamic Model Switching (`tiny` -> `small` -> `tiny`): **PASS** (Clean feature cache flushing and prompt re-evaluation).
-  - Zero-Lag Brush Stroke with decoupled SAM 2 sync: **PASS** (Instant in-memory mutation + async neural synchronization).
+  - Dynamic Model Switching (`tiny` -> `small` -> `tiny`): **PASS**.
+  - Zero-Lag Brush Stroke with decoupled SAM 2 sync: **PASS**.
 - **Suite 6: Hardware-Accelerated Ingestion & UI Shortcut Suite**: **PASS**
-  - Ingested 8 high-res (2000x1500) frames in **0.114s (70.4 fps)** via CUDA GPU + Multi-Thread I/O: **PASS**.
+  - Ingested 8 high-res frames in 0.08s (100.4 fps): **PASS**.
   - LRU frame cache verified (`_frame_rgb_cache`): **PASS**.
-  - Text prompt typing focus isolation: Spacebar and Arrow keys do not trigger playback or frame changes while typing in text entry: **PASS**.
+  - **Default Export Resolution Verification**: `export_scale_var.get() == "Original (100% Native)"`: **PASS**.
+  - **Combobox Focus Non-Blocking Verification**: Readonly comboboxes do NOT set `_is_typing_focused()` to True: **PASS**.
+  - **Keyboard Shortcut Execution while Combobox Focused**: Spacebar toggles playback cleanly: **PASS**.
+  - **Text Prompt Typing Focus Isolation**: Spacebar and Arrow keys do not trigger playback while actively typing in text entry: **PASS**.

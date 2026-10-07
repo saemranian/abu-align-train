@@ -901,7 +901,7 @@ class SAM2MaskingEngine:
         self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
         return mask
 
-    def box_cut_mask(self, frame_idx: int, box: List[float], obj_id: int = 1) -> np.ndarray:
+    def box_cut_mask(self, frame_idx: int, box: List[float], obj_id: int = 1, sync_to_sam2: bool = True) -> np.ndarray:
         """
         Instantly zeroes out all mask pixels inside the bounding box rectangle [x0, y0, x1, y1].
         Synchronizes the cut directly with SAM 2 memory so subsequent video tracking respects the erasure.
@@ -930,7 +930,8 @@ class SAM2MaskingEngine:
         self.mask_revisions[frame_idx] = self.mask_revisions.get(frame_idx, 0) + 1
 
         # Sync modified mask to SAM 2
-        self._sync_mask_to_sam2(frame_idx, mask, obj_id)
+        if sync_to_sam2:
+            self._sync_mask_to_sam2(frame_idx, mask, obj_id)
         return mask
 
     def brush_stroke_mask(

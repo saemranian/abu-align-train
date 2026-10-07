@@ -339,9 +339,10 @@ def test_selection_and_editing_tools():
     assert m_undone is not None and m_undone[200, 200] == 255, "Undo should restore erased pixel to 255"
     print("    [PASS] Undo restored erased pixel back to 255.")
 
-    # 4. Test Box Cut / Marquee Deselect
+    # 4. Test Box Cut / Marquee Deselect (with async/deferred sync_to_sam2=False)
     print("\n[4] Testing Box Cut / Marquee Deselect...")
-    m_cut = engine.box_cut_mask(0, [180, 180, 220, 220])
+    m_cut = engine.box_cut_mask(0, [180, 180, 220, 220], sync_to_sam2=False)
+    engine.sync_frame_mask_to_sam2(0, async_exec=False)
     assert m_cut[200, 200] == 0, "Box cut should zero out center region"
     print("    [PASS] Box Cut successfully zeroed out marquee region.")
 
@@ -580,12 +581,18 @@ def test_accelerated_frame_ingestion_and_ui_shortcuts():
     assert 1 in engine._frame_rgb_cache, "Frame 1 should be cached after retrieval"
     print(f"    [PASS] LRU frame cache verified (Cached items: {list(engine._frame_rgb_cache.keys())}).")
 
-    # 3. Test Keyboard Typing Focus Isolation
-    print("\n[3] Testing Text Prompt Typing Focus Isolation in UI...")
+    # 3. Test Keyboard Typing Focus Isolation & Default Export Resolution
+    print("\n[3] Testing Text Prompt Typing Focus Isolation, Comboboxes & Native Resolution in UI...")
     root = tk.Tk()
     dlg = SAM2MaskerDialog(root)
     root.update()
 
+    # Verify default export resolution is Native
+    assert dlg.export_scale_var.get() == "Original (100% Native)", f"Expected default 'Original (100% Native)', got {dlg.export_scale_var.get()}"
+    assert dlg.cb_scale['values'][0] == "Original (100% Native)", "Original (100% Native) should be first in dropdown"
+    print("    [PASS] Default export resolution verified as 'Original (100% Native)'.")
+
+    dlg.engine.num_frames = 5
     dlg.current_frame_idx = 0
     dlg.is_playing = False
 
@@ -606,6 +613,21 @@ def test_accelerated_frame_ingestion_and_ui_shortcuts():
     root.update()
     assert dlg.current_frame_idx == 0, "Arrow keys must NOT navigate frames while typing in text entry!"
 
+    # Test Focus on Comboboxes: Readonly comboboxes must NEVER block shortcuts
+    dlg.cb_scale.focus_set()
+    root.update()
+    assert dlg._is_typing_focused() == False, "Readonly combobox must NOT be classified as typing focused"
+    dlg.dialog.event_generate("<space>")
+    root.update()
+    assert dlg.is_playing == True, "Spacebar MUST trigger playback even if combobox was clicked/focused!"
+    dlg.dialog.event_generate("<space>")
+    root.update()
+    assert dlg.is_playing == False, "Spacebar must toggle playback back off"
+
+    dlg.model_combo.focus_set()
+    root.update()
+    assert dlg._is_typing_focused() == False, "Model combobox must NOT be classified as typing focused"
+
     # Focus on Canvas: shortcuts should be active
     dlg.canvas.focus_set()
     root.update()
@@ -613,7 +635,7 @@ def test_accelerated_frame_ingestion_and_ui_shortcuts():
 
     dlg.dialog.destroy()
     root.destroy()
-    print("    [PASS] Text entry typing focus isolation verified successfully.")
+    print("    [PASS] Text entry typing focus isolation and combobox unblocking verified successfully.")
 
     print("\n" + "=" * 70)
     print("ALL ACCELERATED INGESTION & UI SHORTCUT TESTS PASSED PERFECTLY!")
