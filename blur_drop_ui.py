@@ -312,14 +312,32 @@ class BlurDropStudioDialog:
         self.gallery_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.gallery_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Mouse wheel support
+        # Mouse wheel support across entire gallery, frame, and child cards
         def _on_mousewheel(e):
             delta = e.delta if hasattr(e, "delta") and e.delta else (120 if getattr(e, "num", None) == 4 else -120)
             self.gallery_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
 
+        self._on_mousewheel_func = _on_mousewheel
+
+        def _bind_to_mousewheel(event=None):
+            self.dialog.bind_all("<MouseWheel>", _on_mousewheel)
+            self.dialog.bind_all("<Button-4>", _on_mousewheel)
+            self.dialog.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_from_mousewheel(event=None):
+            self.dialog.unbind_all("<MouseWheel>")
+            self.dialog.unbind_all("<Button-4>")
+            self.dialog.unbind_all("<Button-5>")
+
         self.gallery_canvas.bind("<MouseWheel>", _on_mousewheel)
         self.gallery_canvas.bind("<Button-4>", _on_mousewheel)
         self.gallery_canvas.bind("<Button-5>", _on_mousewheel)
+        self.gallery_canvas.bind("<Enter>", _bind_to_mousewheel)
+        self.gallery_canvas.bind("<Leave>", _unbind_from_mousewheel)
+        self.gallery_scroll_frame.bind("<Enter>", _bind_to_mousewheel)
+        self.gallery_scroll_frame.bind("<Leave>", _unbind_from_mousewheel)
+        canvas_container.bind("<Enter>", _bind_to_mousewheel)
+        canvas_container.bind("<Leave>", _unbind_from_mousewheel)
 
         self.gallery_canvas.bind("<Configure>", lambda e: self.gallery_canvas.itemconfig(self.gallery_window_id, width=e.width))
 
@@ -355,10 +373,10 @@ class BlurDropStudioDialog:
             bar.pack(side=tk.RIGHT, padx=4)
             return val_lbl, bar
 
-        self.lbl_gauge_defocus, self.bar_gauge_defocus = _make_metric_row("Re-Blur Sharpness:", ACCENT)
-        self.lbl_gauge_peak, self.bar_gauge_peak = _make_metric_row("Edge Peakiness:", SUCCESS)
+        self.lbl_gauge_defocus, self.bar_gauge_defocus = _make_metric_row("Border Sharpness:", ACCENT)
+        self.lbl_gauge_peak, self.bar_gauge_peak = _make_metric_row("FAST Keypoints/MP:", SUCCESS)
         self.lbl_gauge_motion, self.bar_gauge_motion = _make_metric_row("Motion Resistance:", WARNING)
-        self.lbl_gauge_uniformity, self.bar_gauge_uniformity = _make_metric_row("Canvas Uniformity:", TEXT)
+        self.lbl_gauge_uniformity, self.bar_gauge_uniformity = _make_metric_row("Corner Uniformity:", TEXT)
         self.lbl_gauge_subject, self.bar_gauge_subject = _make_metric_row("Peak Subject Focus:", "#38bdf8")
 
         # 100% Crop Loupe
@@ -637,6 +655,13 @@ class BlurDropStudioDialog:
         img_lbl.bind("<Button-1>", _on_click)
         lbl_info.bind("<Button-1>", _on_click)
 
+        # Ensure mouse wheel scrolls canvas even when cursor is over thumbnail card
+        if hasattr(self, "_on_mousewheel_func"):
+            for w in (card, card_top, chk, img_lbl, lbl_info):
+                w.bind("<MouseWheel>", self._on_mousewheel_func, add="+")
+                w.bind("<Button-4>", self._on_mousewheel_func, add="+")
+                w.bind("<Button-5>", self._on_mousewheel_func, add="+")
+
     def _get_thumbnail(self, path: str, size: Tuple[int, int] = (140, 105)) -> ImageTk.PhotoImage:
         """Retrieves or creates a cached PIL thumbnail for smooth scrolling."""
         if path in self.thumbnail_cache:
@@ -662,19 +687,19 @@ class BlurDropStudioDialog:
         self.insp_score_lbl.configure(text=status_text, fg=DANGER if is_drop else SUCCESS)
 
         # Update Gauges
-        self.lbl_gauge_defocus.configure(text=f"{r.defocus_score:.1f}")
+        self.lbl_gauge_defocus.configure(text=f"{r.defocus_score:.1f}%")
         self.bar_gauge_defocus["value"] = r.defocus_score
 
-        self.lbl_gauge_peak.configure(text=f"{r.edge_spread:.2f}x")
-        self.bar_gauge_peak["value"] = min(100.0, max(0.0, (r.edge_spread - 1.0) / 2.5 * 100.0))
+        self.lbl_gauge_peak.configure(text=f"{int(r.edge_spread)}")
+        self.bar_gauge_peak["value"] = min(100.0, max(0.0, r.edge_spread / 20.0))
 
-        self.lbl_gauge_motion.configure(text=f"{r.motion_score:.1f}")
+        self.lbl_gauge_motion.configure(text=f"{r.motion_score:.1f}%")
         self.bar_gauge_motion["value"] = r.motion_score
 
         self.lbl_gauge_uniformity.configure(text=f"{r.uniformity:.1f}%")
         self.bar_gauge_uniformity["value"] = r.uniformity
 
-        self.lbl_gauge_subject.configure(text=f"{r.subject_patch_score:.1f}")
+        self.lbl_gauge_subject.configure(text=f"{r.subject_patch_score:.1f}%")
         self.bar_gauge_subject["value"] = r.subject_patch_score
 
         # Render Large Preview
