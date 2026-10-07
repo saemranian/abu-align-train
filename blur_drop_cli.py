@@ -10,6 +10,12 @@ import argparse
 import time
 from pathlib import Path
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from blur_drop_engine import BlurDropEngine
 
 
@@ -20,6 +26,8 @@ def main():
     parser.add_argument("--threshold", "-t", type=float, default=40.0, help="Sharpness cutoff threshold (0-100, default: 40.0)")
     parser.add_argument("--preset", "-p", choices=["balanced", "strict", "permissive", "custom"], default="balanced", help="Blur detection preset")
     parser.add_argument("--motion-sens", type=float, default=1.0, help="Motion blur streak sensitivity (default: 1.0)")
+    parser.add_argument("--mode", choices=["uniform", "subject"], default="uniform", help="Inspection mode: uniform (photogrammetry) or subject (bokeh invariant)")
+    parser.add_argument("--canvas-res", type=int, default=None, help="Canvas resolution (default: None for 100% native full-canvas)")
     parser.add_argument("--subject-aware", action="store_true", default=True, help="Enable subject-aware depth-of-field preservation")
     parser.add_argument("--move", action="store_true", help="Execute moving of flagged blurry images to destination folder")
     parser.add_argument("--device", choices=["cuda", "cpu"], default=None, help="Compute device (default: auto cuda/cpu)")
@@ -34,15 +42,17 @@ def main():
     dest_dir = os.path.abspath(args.dest) if args.dest else os.path.join(input_dir, "blurred_images")
 
     print("=" * 70)
-    print("BLURDROP · HARDWARE-ACCELERATED SHARPNESS & BLUR CURATION")
+    print("BLURDROP - HARDWARE-ACCELERATED SHARPNESS & BLUR CURATION")
     print(f"Input Directory  : {input_dir}")
     print(f"Cutoff Threshold : {args.threshold}%")
     print(f"Preset Mode      : {args.preset.upper()}")
+    print(f"Inspection Mode  : {args.mode.upper()}")
+    print(f"Canvas Scale     : {'100% Native Full-Canvas' if args.canvas_res is None else f'{args.canvas_res}px'}")
     print(f"Motion Sens      : {args.motion_sens}x")
     print(f"Move Enabled     : {args.move} (Dest: {dest_dir})")
     print("=" * 70)
 
-    engine = BlurDropEngine(device=args.device)
+    engine = BlurDropEngine(device=args.device, analysis_res=args.canvas_res)
 
     def _prog(cur, tot, msg):
         pct = int(cur * 100 / tot)
@@ -54,7 +64,9 @@ def main():
         threshold=args.threshold,
         preset=args.preset,
         motion_sensitivity=args.motion_sens,
-        subject_aware=args.subject_aware,
+        subject_aware=(args.mode == "subject" or args.subject_aware),
+        inspection_mode=args.mode,
+        canvas_res=args.canvas_res,
         progress_callback=_prog
     )
     print()
@@ -65,9 +77,9 @@ def main():
 
     print("\n" + "-" * 70)
     print(f"ANALYSIS SUMMARY ({time.time() - t0:.2f}s total):")
-    print(f"  • Total Images Scanned : {total}")
-    print(f"  • Sharp Images (Keep)  : {len(sharp)} ({len(sharp) * 100 / max(1, total):.1f}%)")
-    print(f"  • Blurry Images (Drop) : {len(blurry)} ({len(blurry) * 100 / max(1, total):.1f}%)")
+    print(f"  * Total Images Scanned : {total}")
+    print(f"  * Sharp Images (Keep)  : {len(sharp)} ({len(sharp) * 100 / max(1, total):.1f}%)")
+    print(f"  * Blurry Images (Drop) : {len(blurry)} ({len(blurry) * 100 / max(1, total):.1f}%)")
     print("-" * 70)
 
     if blurry:

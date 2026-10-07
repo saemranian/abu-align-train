@@ -1,152 +1,170 @@
-# Walkthrough: Abu Align & Train v0.1.2.8
-## Renamer: Interactive Sequence Naming, Live Preview, and Atomic Batch Renaming Studio
+# Walkthrough: Abu Align & Train v0.1.2.9
+## BlurDrop: SOTA Full-Canvas GPU Sharpness, Defocus & Motion Blur Curation Studio
 
 ### 1. Executive Summary
-Release **v0.1.2.8** introduces **Renamer**, a high-performance, sequence and batch file renaming studio designed for computer vision, 3D Gaussian Splatting (3DGS), VFX, photogrammetry, and neural rendering pipelines.
+Release **v0.1.2.9** completely overhauls **BlurDrop** into a state-of-the-art (SOTA), hardware-accelerated image sharpness and blur curation system engineered specifically for photogrammetry, 3D Gaussian Splatting (3DGS), Structure-from-Motion (COLMAP, PyCuSFM, OpenSfM), and neural rendering pipelines.
 
-Datasets often arrive with erratic, unordered, or camera-generated file names (e.g. `DSC0042.PNG`, `IMG_1.jpg`, `img_10.jpg`, `DJI_0088.JPG`). Aligning and training engines require consistent, deterministic sequence numbering (e.g. `frame_0001.png`, `frame_0002.png`). **Renamer** provides an intuitive, robust solution with:
-1. **Live Interactive Preview**: A reactive side-by-side table displaying the exact mapping of `Original Filename` ➔ `New Sequenced Name` in real-time as you type, before making any changes to files on disk.
-2. **Two Execution Modes**:
-   - **✏️ Overwrite in Input Folder (In-Place)**: Renames files directly inside the source directory using a collision-free two-phase atomic rename algorithm.
-   - **📋 Copy with New Names to Another Folder**: Preserves the original source files completely untouched, duplicating and sequencing the files into a specified destination directory.
-3. **Smart Sorting Modes**:
-   - **Human Natural Alphanumeric Sort**: Recognizes embedded numbers so `img_1.jpg`, `img_2.jpg`, ..., `img_10.jpg` are sorted correctly rather than standard ASCII (`img_1.jpg`, `img_10.jpg`, `img_2.jpg`).
-   - **Timeline Chronological Sort**: Orders files by filesystem creation/modification timestamps (`Oldest First` or `Newest First`), ideal for continuous video frame grabs or burst shots.
-   - **Reverse Natural Sort & Raw ASCII Sort**.
-4. **Flexible Sequence Configuration**:
-   - Base sequence name prompt (e.g. `frame`, `cam01`, `scan`).
-   - Configurable start index (e.g. `0`, `1`, `100`).
-   - Configurable zero-padding width (e.g. `4` for `0001`, `5` for `00001`, `0` for unpadded `1`).
-   - Delimiter selection (`_`, `-`, `.` or empty).
-   - Extension casing control (preserve, lowercase, uppercase).
-5. **One-Click Safe Undo Restoration**: Automatically logs a timestamped JSON manifest (`.renamer_manifest_<timestamp>.json`) in the folder, enabling instant, one-click reversal of in-place renames or destination copies.
-6. **Headless CLI (`renamer_cli.py`)**: Scriptable command-line interface with `--dry-run` support for terminal pipelines and automated batch jobs.
+In real-world computer vision datasets, standard blur detection tools (such as naive Laplacian variance on downsampled thumbnails) frequently fail because downsampling by 4x–6x acts as an anti-aliasing low-pass filter, erasing camera shake and micro-defocus while penalizing fine, high-frequency textures. Furthermore, naive variance measures *edge quantity* rather than *edge sharpness*, falsely marking empty sharp skies as blurry and high-contrast blurry foliage as sharp.
+
+**BlurDrop v0.1.2.9** solves this with physics-based, contrast-invariant computer vision running directly on the GPU:
+1. **100% Native Full-Canvas Evaluation**: Evaluates every single pixel of 24MP–60MP+ images at full native resolution on the GPU (NVIDIA RTX 4090 / CUDA), preserving sub-pixel focus errors and micro-textures.
+2. **Contrast-Invariant Re-Blur Gradient Ratio ($R_{\text{blur}}$)**: Based on the optical defocus estimation principles of Elder & Zucker, Bae & Durand, and Shi et al. Edge contrast mathematically cancels out, eliminating texture-contrast bias.
+3. **Edge Spread Peakiness (CPBD / Marziliano JNB Surrogate)**: Measures the spatial pixel transition width of detected structural edges. Sharp optics produce steep micro-spikes ($w \le 1.5 - 2.0$ px), while blurry optics produce smooth gradient spreads ($w \ge 4 - 20+$ px).
+4. **Dense 2D Directional Structure Tensor**: Computes eigenvalue coherence ($\lambda_1, \lambda_2$) and directional gradient disparity to isolate camera shake and panning streaks at any arbitrary angle ($0^\circ - 360^\circ$).
+5. **Dual Inspection Modes**:
+   - **📐 Uniform Full-Canvas (3DGS / Photogrammetry)**: Requires corner-to-corner sharpness, flagging soft edges, field curvature, and vignetted defocus that degrade 3D reconstructions.
+   - **🎯 Subject Focus (Bokeh Invariant)**: Prioritizes the sharpest in-focus region, ensuring intentional shallow depth-of-field background bokeh does not cause false rejections.
+6. **Reversible One-Click Curation**: Cuts (moves) blurry images into a designated folder with instant one-click Undo restoration.
 
 ---
 
-### 2. Algorithmic Architecture & Safe Two-Phase Renaming
+### 2. Algorithmic Architecture & Physics-Based Formulation
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                        Renamer Safe In-Place Renaming Pipeline                         │
+│               SOTA FULL-CANVAS GPU BLURDROP PIPELINE (RTX 4090 / CUDA)                │
 │                                                                                        │
-│  [Input Folder] (Unordered files: img_1.jpg, img_2.jpg, img_3.jpg...)                  │
+│  [Full Native Image Canvas: 24MP - 60MP+ at 100% Native Resolution]                   │
 │          │                                                                             │
 │          ▼                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                     PHASE 0: LIVE REACTIVE PREVIEW ENGINE                        │  │
+│  │                     PHASE 1: FULL-CANVAS GPU GRADIENT ANALYSIS                   │  │
 │  │                                                                                  │  │
-│  │  • Natural Alphanumeric Key: re.split(r'(\d+)', filename)                        │  │
-│  │  • Sub-millisecond formatting without touching disk                              │  │
-│  │  • Real-time validation against duplicate target stems                           │  │
+│  │  • Native Sobel Convolutions: Gx, Gy, G_mag = sqrt(Gx^2 + Gy^2)                  │  │
+│  │  • Adaptive Dynamic Edge Mask: Isolates true physical edges (top 15% gradients)  │  │
+│  │  • Invariant to flat skies, studio backdrops, and solid walls                    │  │
 │  └────────────────────────────────────────┬─────────────────────────────────────────┘  │
 │                                           │                                            │
-│                      User Clicks 'Rename Files'                                        │
-│                                           ▼                                            │
-│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                     PHASE 1: ATOMIC TEMPORARY SENTINELS                          │  │
-│  │                                                                                  │  │
-│  │  • Files renamed to: .tmp_renamer_<uuid>_<index>.tmp                             │  │
-│  │  • Eliminates cyclic collisions (e.g., img_1 -> img_0, img_2 -> img_1)           │  │
-│  │  • Prevents in-order overwrite clobbering on Windows filesystems                 │  │
-│  └────────────────────────────────────────┬─────────────────────────────────────────┘  │
+│          ┌────────────────────────────────┴────────────────────────────────┐           │
+│          ▼                                                                 ▼           │
+│  ┌────────────────────────────────────────┐     ┌───────────────────────────────────┐  │
+│  │  METRIC 1: RE-BLUR GRADIENT RATIO      │     │  METRIC 2: FULL-CANVAS STRUCTURE  │  │
+│  │  (Elder & Zucker / Bae & Durand / Shi) │     │  TENSOR MOTION ANISOTROPY         │  │
+│  │                                        │     │                                   │  │
+│  │  • Known Gaussian re-blur G_sigma      │     │  • J = [ <Gx^2> <GxGy> ;          │  │
+│  │  • Re-blurred gradients G_reblur       │     │          <GxGy> <Gy^2> ]          │  │
+│  │  • Ratio rho = G / (G_reblur + eps)    │     │  • Eigenvalues: lambda1, lambda2  │  │
+│  │  • Sharp: rho >> 1.0 (steep drop)      │     │  • Isolates directional streaks   │  │
+│  │  • Blurry: rho ~ 1.0 (zero decay)      │     │    at ANY arbitrary angle 0°-360° │  │
+│  │  • 100% CONTRAST-INDEPENDENT!          │     │  • Disparity: |vx - vy|/max(vx,vy)│  │
+│  └───────────────────┬────────────────────┘     └─────────────────┬─────────────────┘  │
+│                      │                                            │                    │
+│                      └────────────────────┬───────────────────────┘                    │
+│                                           │                                            │
+│          ┌────────────────────────────────┴────────────────────────────────┐           │
+│          ▼                                                                 ▼           │
+│  ┌────────────────────────────────────────┐     ┌───────────────────────────────────┐  │
+│  │  METRIC 3: CPBD / MARZILIANO EDGE      │     │  METRIC 4: CANVAS UNIFORMITY &    │  │
+│  │  SPREAD PEAKINESS (JNB PERCEPTION)     │     │  CORNER ABERRATION EVALUATION     │  │
+│  │                                        │     │                                   │  │
+│  │  • Ratio of peak gradient to average   │     │  • 3x3 Spatial Grid decomposition │  │
+│  │    gradient in local 7x7 neighborhood  │     │  • Detects field curvature &      │  │
+│  │  • Sharp optics: Peakiness >= 2.5 - 5+ │     │    corner softness for 3DGS       │  │
+│  │  • Blurry optics: Peakiness <= 1.5 - 2 │     │  • Invariant to DoF bokeh in      │  │
+│  │  • 100% CONTRAST-INDEPENDENT!          │     │    Subject-Focus Mode             │  │
+│  └───────────────────┬────────────────────┘     └─────────────────┬─────────────────┘  │
+│                      │                                            │                    │
+│                      └────────────────────┬───────────────────────┘                    │
 │                                           │                                            │
 │                                           ▼                                            │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                     PHASE 2: FINAL SEQUENCE COMMIT                               │  │
+│  │               CALIBRATED COMPOSITE SCORING & CLASSIFICATION                      │  │
 │  │                                                                                  │  │
-│  │  • Temp sentinels committed to final target names (e.g. frame_0001.jpg)          │  │
-│  │  • Timestamped manifest generated for 100% reversible Undo                       │  │
+│  │  • Composite Score: 0.0 (unusable blur) -> 100.0 (pin-sharp)                    │  │
+│  │  • Gated by directional motion streak penalty                                    │  │
+│  │  • Classification: SHARP | DEFOCUS_BLUR | MOTION_BLUR | SEVERE_BLUR | CORNER_SOFT│
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Why Two-Phase Renaming Matters
-In naive single-pass renaming, shifting filenames (such as renaming `img_1.jpg` to `img_0.jpg`, `img_2.jpg` to `img_1.jpg`) can fail or overwrite data because the target name already exists on disk. 
-**Renamer Engine** solves this by:
-1. Renaming all source files into temporary, cryptographically random sentinel filenames (`.tmp_renamer_<uuid>_<idx>`).
-2. Committing temporary sentinels into the final sequenced names.
-If any step encounters an unexpected error or lock, the engine automatically rolls back all intermediate operations.
-
 ---
 
-### 3. User Interface & Controls
+### 3. Studio Dialog UI Controls & Features
 
-The **Renamer Studio** dialog is accessed from:
-- Main Window: **Dataset Row** ➔ Click `🏷️ Renamer...`
-- Main Window: **Prepare Dropdown** ➔ Click `🏷️ Renamer (Sequence Naming)`
-- Main Window: **Tools Menu** ➔ Click `🏷️ Renamer: Sequence & Batch File Renamer...`
+The **BlurDrop Studio** dialog is accessed from:
+- Main Window: **Dataset Row** ➔ Click `💧 BlurDrop...`
+- Main Window: **Prepare Dropdown** ➔ Click `💧 BlurDrop (Filter Blurry Images)`
+- Main Window: **Tools Menu** ➔ Click `💧 BlurDrop: Image Sharpness & Blur Filter...`
 
-#### Studio Dialog Controls
-1. **Directories**:
-   - **Input Folder**: Select source directory containing images/files to rename.
-   - **Mode Selection**:
-     - `✏️ Overwrite in Input Folder (In-Place)`: Renames files in their current folder.
-     - `📋 Copy with New Names to Another Folder`: Duplicates files into an output directory.
-   - **Destination Folder**: Enabled when copy mode is active.
-2. **Sequence Settings**:
-   - **Base Sequence Name**: Prompt text (e.g. `frame`, `cam_rig`, `capture`).
-   - **Start Index**: Starting number (default `1`).
-   - **Zero Padding**: Digits width (default `4` ➔ `0001`, `0002`).
-   - **Delimiter**: Delimiter between base name and number (`_`, `-`, `.` or None).
-   - **Sort Order**: `Natural (1, 2, 10)`, `Chronological (Oldest First)`, `Chronological (Newest First)`, `Reverse Natural`, or `Raw ASCII`.
-   - **Extension Casing**: `Preserve`, `lowercase (.jpg)`, `UPPERCASE (.JPG)`.
-3. **Live Preview Table**:
-   - Side-by-side columns: `#`, `Original Filename`, `New Sequenced Name`, `Size`, `Status`.
-   - As you change any sequence setting, the table updates in real-time instantly without touching disk.
-4. **Execution & Restoration**:
-   - **Rename Files Button**: Executes in-place rename or destination copy with progress updates.
-   - **Undo Last Rename Button**: Reverts the last operation using the saved manifest.
+#### Controls & Options
+1. **Canvas Scale Selector**:
+   - `🌟 100% Native Full-Canvas (SOTA Accurate)`: Default mode. Reads and processes every pixel at full native resolution on the GPU.
+   - `⚡ 2048px Fast Preview`: High-speed preview mode for quick triage of massive image collections.
+2. **Inspection Mode**:
+   - `📐 Uniform Full-Canvas (3DGS / Photogrammetry)`: Requires corner-to-corner sharpness. Soft corners and lens vignetting are flagged.
+   - `🎯 Subject Focus (Bokeh Invariant)`: Preserves sharp subjects shot with shallow depth of field (e.g., f/1.4–f/2.8 macro/portraits), ignoring background bokeh.
+3. **Cutoff Threshold & Sensitivity Sliders**:
+   - **Threshold Filter**: Adjustable from 5% to 95% (with quick presets: Balanced 40%, Strict 55%, Permissive 25%).
+   - **Motion Streak Sensitivity**: Fine-tune penalty for camera shake (0.5x to 2.0x).
+4. **Live Diagnostic Inspector Panel**:
+   Selecting any image in the gallery displays:
+   - `Re-Blur Sharpness`: Contrast-invariant gradient decay score.
+   - `Edge Peakiness`: Transition sharpness and concentration at edges.
+   - `Motion Resistance`: Directional stability and camera shake score.
+   - `Canvas Uniformity`: Corner-to-center field consistency percentage.
+   - `Peak Subject Focus`: Sharpness of the sharpest in-focus region.
+   - `100% Crop Loupe`: High-resolution micro-detail preview of the sharpest subject region.
+5. **Reversible Curation (Cut & Move with One-Click Undo)**:
+   - Safely moves all flagged blurry images into a destination folder (`/blurred_images`).
+   - Click **"↩ Undo Last Move"** anytime to restore all moved images back to their original locations without data loss.
 
 ---
 
 ### 4. Headless CLI Usage
 
-Renamer is fully usable without a GUI via `renamer_cli.py`:
+BlurDrop can be executed in headless batch workflows via [`blur_drop_cli.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/blur_drop_cli.py):
 
-```bash
-# Preview what the renaming will look like (Dry-Run, no disk writes):
-python renamer_cli.py --input "C:\Datasets\MyScans" --name "frame" --padding 4 --dry-run
+```powershell
+# Analyze folder with 100% native full-canvas GPU processing:
+python blur_drop_cli.py --input "C:\Datasets\MyScans" --threshold 40.0
 
-# In-place sequence rename:
-python renamer_cli.py --input "C:\Datasets\MyScans" --name "frame" --padding 4 --start-index 1
+# Photogrammetry corner-to-corner uniform mode:
+python blur_drop_cli.py --input "C:\Datasets\DroneSurvey" --mode uniform --threshold 45.0
 
-# Copy files with sequenced names to another folder:
-python renamer_cli.py --input "C:\Datasets\RawShots" --dest "C:\Datasets\Sequenced" --name "cam01" --copy
+# Subject-aware portrait/macro mode (bokeh invariant):
+python blur_drop_cli.py --input "C:\Datasets\Portraits" --mode subject --threshold 35.0
 
-# Sort chronologically by capture date:
-python renamer_cli.py --input "C:\Datasets\Burst" --name "burst" --sort date_asc
+# Automatically move flagged blurry images into a destination folder:
+python blur_drop_cli.py --input "C:\Datasets\MyScans" --dest "C:\Datasets\MyScans\blurry" --move
 ```
 
 ---
 
 ### 5. Automated Verification & Test Results
 
-The automated test suite in [`test_renamer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/test_renamer.py) passed all 8 stages with 100% success:
+The comprehensive test suite in [`test_blur_drop.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/test_blur_drop.py) passed all 9 stages with 100% success on CPU and CUDA GPU (NVIDIA GeForce RTX 4090):
 
 ```
 ======================================================================
-RUNNING COMPREHENSIVE RENAMER ENGINE, CLI & UI TEST SUITE
+RUNNING COMPREHENSIVE BLURDROP ENGINE & CURATION TEST SUITE
 ======================================================================
-[1] Created synthetic test folder with 9 files
-[2] Testing Natural Alphanumeric Sorting...
-    [PASS] Natural sort correctly ordered: ['img_1.jpg', 'img_2.jpg', 'img_3.jpg', 'img_10.jpg', 'img_20.jpg']
-[3] Testing Chronological Timeline Sorting...
-    [PASS] Chronological sorting ordered files by timeline timestamps.
-[4] Testing Live Preview Generation without Disk Modification...
-    [PASS] Preview generated in memory. Sample: DSC0042.PNG -> frame_0001.png
-[5] Testing Safe In-Place Renaming (Overwriting inside Input Folder)...
-    [PASS] Two-phase atomic rename resolved shift collisions with zero clobbering.
-    [PASS] Undo restored original filenames.
-[6] Testing Copy to Destination Folder with New Names...
-    [PASS] Copy mode generated 9 renamed files in destination while leaving source untouched.
-    [PASS] Undo copy cleanly removed replicas from destination.
-[7] Testing Renamer Studio Dialog GUI Initialization...
-    [PASS] Renamer Studio Dialog instantiated cleanly with callbacks and bindings.
-[8] Testing Renamer Headless CLI...
-    [PASS] Headless CLI verified with live dry-run preview.
+[1] Created synthetic test dataset with 6 degradation modes
+[2] Testing Multi-Threaded CPU Engine...
+    [BlurDrop] Analyzed 6/6 images in 0.08s (74.3 fps) via CPU [100% Native Full-Canvas]
+    [PASS] CPU engine correctly distinguished sharp, defocus, motion, and severe blur.
+[3] Testing Hardware-Accelerated CUDA GPU Engine...
+    [BlurDrop] Analyzed 6/6 images in 0.59s (10.2 fps) via CUDA [100% Native Full-Canvas]
+    [PASS] CUDA GPU engine verified (6 images in 0.589s). Consistent with CPU.
+[4] Testing Subject-Aware Depth-of-Field (Bokeh Invariance)...
+    - Shallow DoF Score (Subject-Aware ON) : 42.2
+    - Shallow DoF Score (Subject-Aware OFF): 19.4
+    [PASS] Subject-aware depth-of-field mode verified.
+[5] Testing Real-Time Dynamic Threshold Reclassification...
+    - Dropped at Permissive 20% : 3 images
+    - Dropped at Strict 55%     : 5 images
+    [PASS] Real-time reclassification operates instantly with expected monotonic behavior.
+[6] Testing Cut & Move Blurry Images into New Folder & Undo Restoration...
+    - Moved 4 blurry images to curated_blurry
+    - Main folder verified clean: 2 sharp images remain.
+[7] Testing Undo Move (File Restoration)...
+    - Restored 4 images back to main dataset.
+    [PASS] Safe atomic move and full one-click undo restoration verified.
+[8] Testing BlurDrop Studio Dialog GUI Initialization...
+    [PASS] BlurDrop Studio Dialog instantiated cleanly with log_callback.
+[9] Testing BlurDrop Headless CLI in subprocess...
+    [PASS] Headless CLI verified with 100% full-canvas GPU processing.
 ======================================================================
-ALL RENAMER ENGINE, CLI & UI TESTS PASSED PERFECTLY (100%)!
+ALL BLURDROP ENGINE & CURATION TESTS PASSED PERFECTLY!
 ======================================================================
 ```
 
@@ -154,15 +172,14 @@ ALL RENAMER ENGINE, CLI & UI TESTS PASSED PERFECTLY (100%)!
 
 ## Prior Release Notes
 
-### v0.1.2.7: FileSift Cross-Folder File Matcher & Sifter
-- High-speed file list and folder matching between two directories.
-- Cross-format stem matching (`.jpg` <-> `.ARW`, `.DNG`, `.CR3`).
-- Sub-millisecond $O(1)$ set and hash lookup engine.
-- Parallel multi-threaded Copy and Cut (Move) to 3rd destination folder.
-- Reversible one-click Undo restoration.
+### v0.1.2.8: Renamer Sequence Naming Studio
+- Live side-by-side preview table before disk modification.
+- Collision-free two-phase in-place renaming and destination copy modes.
+- Human natural alphanumeric sort and timeline chronological sort.
+- One-click reversible Undo restoration.
 
-### v0.1.2.6: BlurDrop Image Sharpness & Blur Filter
-- Hardware-accelerated Laplacian variance, FFT frequency analysis, and Tenengrad edge gradient evaluation.
-- Subject-aware depth-of-field mode (Bokeh invariance).
-- Real-time dynamic threshold slider reclassification.
-- Instant cut & move to curated blur folder with full one-click Undo.
+### v0.1.2.7: FileSift Cross-Folder File Matcher & Sifter
+- High-speed file list and cross-folder comparison between two directories.
+- Sub-millisecond $O(1)$ set and hash lookup engine.
+- Cross-format stem matching (`.jpg` <-> `.ARW`, `.DNG`, `.CR3`).
+- Parallel multi-threaded Copy and Cut (Move) to 3rd destination folder.

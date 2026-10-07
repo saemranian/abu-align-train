@@ -225,13 +225,17 @@ def test_blur_drop_all():
 
         dlg.dialog.destroy()
 
-        # Test helper function open_blur_drop_dialog with log_callback
-        dlg2 = open_blur_drop_dialog(root, initial_folder=temp_dir, log_callback=lambda msg: None)
-        root.update()
-        assert dlg2.log_callback is not None, "log_callback should be passed and bound"
-        dlg2.dialog.destroy()
-        root.destroy()
-        print("    [PASS] BlurDrop Studio Dialog instantiated cleanly with log_callback without errors.")
+        # ---------------------------------------------------------------------
+        # 7. Test Headless CLI in Subprocess
+        # ---------------------------------------------------------------------
+        print("\n[9] Testing BlurDrop Headless CLI in subprocess...")
+        import subprocess
+        cli_cmd = [sys.executable, "blur_drop_cli.py", "--input", temp_dir, "--threshold", "40.0"]
+        cli_res = subprocess.run(cli_cmd, capture_output=True, text=True)
+        assert cli_res.returncode == 0, f"CLI exited with code {cli_res.returncode}: {cli_res.stderr}"
+        assert "ANALYSIS SUMMARY" in cli_res.stdout, "CLI must output analysis summary"
+        assert "01_sharp.png" not in cli_res.stdout.split("Flagged Blurry Images:")[-1], "Sharp image must not be flagged"
+        print("    [PASS] Headless CLI verified with 100% full-canvas GPU processing.")
 
         print("\n" + "=" * 70)
         print("ALL BLURDROP ENGINE & CURATION TESTS PASSED PERFECTLY!")

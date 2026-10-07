@@ -76,7 +76,9 @@ class BlurDropStudioDialog:
         self.threshold_var = tk.DoubleVar(value=40.0)
         self.preset_var = tk.StringVar(value="balanced")
         self.motion_sens_var = tk.DoubleVar(value=1.0)
-        self.subject_aware_var = tk.BooleanVar(value=True)
+        self.subject_aware_var = tk.BooleanVar(value=False)
+        self.canvas_res_var = tk.StringVar(value="🌟 100% Native Full-Canvas (SOTA Accurate)")
+        self.inspection_mode_var = tk.StringVar(value="📐 Uniform Full-Canvas (3DGS / Photogrammetry)")
         self.filter_tab_var = tk.StringVar(value="blurry")  # "blurry", "sharp", "all"
 
         # Selection state tracking (path -> bool checked for drop)
@@ -209,21 +211,52 @@ class BlurDropStudioDialog:
                                       command=self._on_threshold_slider_moved)
         self.thresh_scale.pack(fill=tk.X, expand=True)
 
-        # Row 3: Fine Tuning Parameters (Motion Sensitivity & Subject-Aware Depth of Field)
+        # Row 3: Canvas Scale & Inspection Mode
         r3 = tk.Frame(card, bg=SURFACE)
-        r3.pack(fill=tk.X, pady=(2, 2))
+        r3.pack(fill=tk.X, pady=(2, 4))
 
-        # Motion Blur Sensitivity
-        tk.Label(r3, text="Motion Streak Sensitivity:", font=("Segoe UI", 8), fg=MUTED, bg=SURFACE).pack(side=tk.LEFT, padx=(0, 4))
-        self.s_motion = ttk.Scale(r3, from_=0.5, to=2.0, variable=self.motion_sens_var, length=120,
+        tk.Label(r3, text="Canvas Scale:", font=("Segoe UI", 8, "bold"), fg=TEXT, bg=SURFACE).pack(side=tk.LEFT, padx=(0, 4))
+        self.canvas_res_combo = ttk.Combobox(
+            r3, textvariable=self.canvas_res_var,
+            values=["🌟 100% Native Full-Canvas (SOTA Accurate)", "⚡ 2048px Fast Preview"],
+            state="readonly", width=34
+        )
+        self.canvas_res_combo.pack(side=tk.LEFT, padx=(0, 14))
+
+        tk.Label(r3, text="Mode:", font=("Segoe UI", 8, "bold"), fg=TEXT, bg=SURFACE).pack(side=tk.LEFT, padx=(0, 4))
+        def _on_inspection_mode_changed(*_):
+            is_subj = "Subject" in self.inspection_mode_var.get()
+            self.subject_aware_var.set(is_subj)
+            self._trigger_debounced_reclassify()
+
+        self.inspection_mode_combo = ttk.Combobox(
+            r3, textvariable=self.inspection_mode_var,
+            values=["📐 Uniform Full-Canvas (3DGS / Photogrammetry)", "🎯 Subject Focus (Bokeh Invariant)"],
+            state="readonly", width=42
+        )
+        self.inspection_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.inspection_mode_combo.bind("<<ComboboxSelected>>", _on_inspection_mode_changed)
+
+        # Row 4: Motion Streak Sensitivity & Subject Checkbox
+        r4 = tk.Frame(card, bg=SURFACE)
+        r4.pack(fill=tk.X, pady=(2, 2))
+
+        tk.Label(r4, text="Motion Streak Sensitivity:", font=("Segoe UI", 8), fg=MUTED, bg=SURFACE).pack(side=tk.LEFT, padx=(0, 4))
+        self.s_motion = ttk.Scale(r4, from_=0.5, to=2.0, variable=self.motion_sens_var, length=120,
                                   command=lambda v: self._trigger_debounced_reclassify())
         self.s_motion.pack(side=tk.LEFT, padx=(0, 16))
 
-        # Subject-Aware Depth-of-Field Checkbox
+        def _on_chk_dof_toggled():
+            if self.subject_aware_var.get():
+                self.inspection_mode_var.set("🎯 Subject Focus (Bokeh Invariant)")
+            else:
+                self.inspection_mode_var.set("📐 Uniform Full-Canvas (3DGS / Photogrammetry)")
+            self._trigger_debounced_reclassify()
+
         self.chk_dof = tk.Checkbutton(
-            r3, text="🎯 Subject-Aware Focus (Don't drop sharp subject with blurred background)",
-            variable=self.subject_aware_var, font=("Segoe UI", 8, "bold"), fg=ACCENT, bg=SURFACE,
-            selectcolor=FIELD, command=lambda: self._trigger_debounced_reclassify()
+            r4, text="Bokeh Invariant Focus (Preserve sharp subject with blurred background)",
+            variable=self.subject_aware_var, font=("Segoe UI", 8), fg=ACCENT, bg=SURFACE,
+            selectcolor=FIELD, command=_on_chk_dof_toggled
         )
         self.chk_dof.pack(side=tk.LEFT)
 
@@ -322,10 +355,11 @@ class BlurDropStudioDialog:
             bar.pack(side=tk.RIGHT, padx=4)
             return val_lbl, bar
 
-        self.lbl_gauge_defocus, self.bar_gauge_defocus = _make_metric_row("Micro-Edge Defocus:", ACCENT)
+        self.lbl_gauge_defocus, self.bar_gauge_defocus = _make_metric_row("Re-Blur Sharpness:", ACCENT)
+        self.lbl_gauge_peak, self.bar_gauge_peak = _make_metric_row("Edge Peakiness:", SUCCESS)
         self.lbl_gauge_motion, self.bar_gauge_motion = _make_metric_row("Motion Resistance:", WARNING)
-        self.lbl_gauge_fft, self.bar_gauge_fft = _make_metric_row("High-Freq Spectral:", SUCCESS)
-        self.lbl_gauge_subject, self.bar_gauge_subject = _make_metric_row("Peak Subject Patch:", TEXT)
+        self.lbl_gauge_uniformity, self.bar_gauge_uniformity = _make_metric_row("Canvas Uniformity:", TEXT)
+        self.lbl_gauge_subject, self.bar_gauge_subject = _make_metric_row("Peak Subject Focus:", "#38bdf8")
 
         # 100% Crop Loupe
         tk.Label(parent, text="🔬 Sharpest 100% Region Crop:", font=("Segoe UI", 8, "bold"), fg=MUTED, bg=SURFACE).pack(anchor="w", padx=10, pady=(10, 2))
@@ -405,7 +439,9 @@ class BlurDropStudioDialog:
         thresh = self.threshold_var.get()
         preset = self.preset_var.get()
         motion_sens = self.motion_sens_var.get()
-        subj_aware = self.subject_aware_var.get()
+        subj_aware = self.subject_aware_var.get() or ("Subject" in self.inspection_mode_var.get())
+        insp_mode = "subject" if subj_aware else "uniform"
+        canvas_res = None if ("100%" in self.canvas_res_var.get() or self.canvas_res_var.get() == "native") else 2048
 
         def _prog(cur, tot, msg):
             pct = int(cur * 100 / tot)
@@ -419,6 +455,8 @@ class BlurDropStudioDialog:
                     preset=preset,
                     motion_sensitivity=motion_sens,
                     subject_aware=subj_aware,
+                    inspection_mode=insp_mode,
+                    canvas_res=canvas_res,
                     progress_callback=_prog,
                     cancel_token=lambda: self.cancel_scan_requested
                 )
@@ -474,13 +512,15 @@ class BlurDropStudioDialog:
         thresh = self.threshold_var.get()
         preset = self.preset_var.get()
         motion_sens = self.motion_sens_var.get()
-        subj_aware = self.subject_aware_var.get()
+        subj_aware = self.subject_aware_var.get() or ("Subject" in self.inspection_mode_var.get())
+        insp_mode = "subject" if subj_aware else "uniform"
 
         self.engine.reclassify_all(
             threshold=thresh,
             preset=preset,
             motion_sensitivity=motion_sens,
-            subject_aware=subj_aware
+            subject_aware=subj_aware,
+            inspection_mode=insp_mode
         )
         self._refresh_gallery()
 
@@ -625,11 +665,14 @@ class BlurDropStudioDialog:
         self.lbl_gauge_defocus.configure(text=f"{r.defocus_score:.1f}")
         self.bar_gauge_defocus["value"] = r.defocus_score
 
+        self.lbl_gauge_peak.configure(text=f"{r.edge_spread:.2f}x")
+        self.bar_gauge_peak["value"] = min(100.0, max(0.0, (r.edge_spread - 1.0) / 2.5 * 100.0))
+
         self.lbl_gauge_motion.configure(text=f"{r.motion_score:.1f}")
         self.bar_gauge_motion["value"] = r.motion_score
 
-        self.lbl_gauge_fft.configure(text=f"{r.fft_score:.1f}")
-        self.bar_gauge_fft["value"] = r.fft_score
+        self.lbl_gauge_uniformity.configure(text=f"{r.uniformity:.1f}%")
+        self.bar_gauge_uniformity["value"] = r.uniformity
 
         self.lbl_gauge_subject.configure(text=f"{r.subject_patch_score:.1f}")
         self.bar_gauge_subject["value"] = r.subject_patch_score

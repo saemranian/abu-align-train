@@ -1,36 +1,30 @@
 """
-Abu Align & Train - BlurDrop Engine (Hardware-Accelerated Blur & Sharpness Curation)
-=====================================================================================
+Abu Align & Train - BlurDrop Engine (SOTA Hardware-Accelerated Blur & Sharpness Curation)
+========================================================================================
 State-of-the-Art Multi-Metric Image Sharpness, Defocus & Motion Blur Analyzer.
-
 Engineered specifically for Photogrammetry, 3D Gaussian Splatting (3DGS),
 Structure-from-Motion (COLMAP, PyCuSFM, OpenSfM), and Nerfstudio pipelines.
 
-Key Mathematical & Algorithmic Capabilities:
-1. Micro-Edge Defocus Detection (Tenengrad & Modified Laplacian Operator):
-   Measures high-frequency micro-contrast across image gradients. Detects uniform
-   isotropic edge softening caused by out-of-focus optics or shallow depth-of-field.
-2. Directional Structure Tensor Coherence (Motion Blur Detection):
-   Computes the 2D gradient structure tensor J = [ <Gx^2> <GxGy> ; <GxGy> <Gy^2> ]
-   and its eigenvalues (lambda1, lambda2). Isolates linear streaks and camera shake
-   anisotropy regardless of direction (horizontal, vertical, diagonal).
-3. 2D Spectral FFT High-Frequency Attenuation:
-   Analyzes radial frequency roll-off using 2D Fast Fourier Transforms (torch.fft.rfft2).
-   Detects attenuation of fine textures and spatial details.
-4. Subject-Aware Grid Patch Aggregation (Depth-of-Field / Bokeh Invariance):
-   Decomposes images into an NxM grid of local patches. Analyzes the 75th percentile /
-   top-k sharpest regions so macro and portrait shots with intentional background bokeh
-   are not falsely classified as blurry when the main subject is sharp.
-5. Dynamic Range & Local Contrast Normalization:
-   Normalizes gradient variance against luminance dynamic range (I95 - I5) to ensure
-   low-key, night, or moody photogrammetry frames are never unfairly penalized.
-6. Lightspeed Hardware Acceleration:
-   - Primary: PyTorch CUDA batched tensor pipeline (150-350+ images/sec on RTX 4090).
-   - Multi-threaded CPU I/O reader pool with parallel decoding.
-   - CPU SIMD fallback using OpenCV + NumPy for non-CUDA platforms.
-7. Atomic Move & Undo Curation:
-   Safely cuts (moves) flagged blurry images into a designated target directory,
-   leaving the main dataset clean and sharp, with full one-click undo restoration.
+Key Algorithmic Capabilities:
+1. 100% Full Native Canvas Processing (No Downsampling Distortion):
+   Reads and evaluates every single pixel on the native image canvas at full resolution.
+   Preserves micro-edges, sub-pixel focus errors, and fine textures that downsampling erases.
+2. Contrast-Invariant Re-Blur Gradient Ratio (Elder & Zucker / Bae & Durand / Shi et al.):
+   Measures gradient response before and after applying a calibrated Gaussian re-blur.
+   Contrast completely cancels out, eliminating bias from high-contrast blurry textures or low-contrast sharp walls.
+3. Edge Spread Width & Peakiness (CPBD / Marziliano JNB Surrogate):
+   Evaluates spatial transition width and gradient concentration at true detected structural edges.
+4. Full-Canvas 2D Directional Structure Tensor:
+   Computes dense structure tensor J = [ <Gx^2> <GxGy> ; <GxGy> <Gy^2> ] with eigenvalue analysis.
+   Detects camera shake, panning streaks, and directional motion blur at arbitrary angles (0°–360°).
+5. Dual Inspection Modes:
+   - Uniform Full-Canvas Mode (3DGS / Photogrammetry): Requires corner-to-corner sharpness, flagging soft edges.
+   - Subject Focus Mode (Bokeh Invariant): Prioritizes the sharpest in-focus region for macro/portraits.
+6. Lightning Hardware Acceleration:
+   - Native PyTorch CUDA GPU tensor pipeline (accelerated on NVIDIA RTX 4090 / CUDA devices).
+   - Multi-threaded CPU SIMD fallback using OpenCV.
+7. Reversible One-Click Curation:
+   - Cuts (moves) blurry images into a designated target directory, with full one-click Undo restoration.
 """
 
 import os
@@ -39,7 +33,7 @@ import time
 import math
 import shutil
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Callable, Any
 from concurrent.futures import ThreadPoolExecutor
 
@@ -68,32 +62,37 @@ class ImageQualityResult:
     composite_score: float       # 0.0 (unusable blur) to 100.0 (pristine sharpness)
     coherence: float             # Structure tensor eigenvalue coherence (0.0=isotropic, 1.0=streak)
     dynamic_range: float         # Image contrast dynamic range (I95 - I5)
-    classification: str          # "SHARP", "DEFOCUS_BLUR", "MOTION_BLUR", "SEVERE_BLUR"
+    reblur_ratio: float          # Raw contrast-invariant re-blur ratio (e.g. 1.0 to 3.5+)
+    edge_spread: float           # Raw edge peakiness / transition width (e.g. 1.0 to 6.0+)
+    uniformity: float            # Corner-to-corner uniformity index (0.0 to 100.0)
+    classification: str          # "SHARP", "DEFOCUS_BLUR", "MOTION_BLUR", "SEVERE_BLUR", "CORNER_SOFT"
     is_blurry: bool              # True if marked for dropping under current threshold
-    top_patch_coords: Optional[Tuple[int, int, int, int]] = None  # (x0, y0, x1, y1) in resized space
+    top_patch_coords: Optional[Tuple[int, int, int, int]] = None  # (x0, y0, x1, y1) in image space
 
 
 class BlurDropEngine:
     """
-    Hardware-Accelerated Blur & Sharpness Curation Engine.
-    Processes folders of images at high throughput using PyTorch CUDA GPU batching
-    or multi-threaded CPU fallback.
+    Hardware-Accelerated Full-Canvas Blur & Sharpness Curation Engine.
+    Processes image folders at high throughput using PyTorch CUDA GPU tensor ops
+    or multi-threaded CPU SIMD fallback.
     """
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, analysis_res: Optional[int] = None):
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
 
-        self.analysis_res = 1024  # Standard inspection scale for optimal speed & Nyquist preservation
-        self.patch_grid = (4, 4)  # 16 patches for subject-aware depth-of-field inspection
+        # None means 100% Full Native Canvas (reading all pixels without downsampling).
+        # An integer (e.g. 2048) sets a maximum bounding dimension for ultra-fast previews.
+        self.analysis_res = analysis_res
+        self.patch_grid = (3, 3)  # 3x3 grid (9 regions: 4 corners, 4 edges, 1 center)
         self.cached_results: List[ImageQualityResult] = []
         self.last_move_manifest: List[Dict[str, str]] = []  # For one-click Undo restoration
         self._init_gpu_kernels()
 
     def _init_gpu_kernels(self):
-        """Initializes constant convolution kernels on GPU for fast batch processing."""
+        """Initializes constant convolution kernels on GPU for rapid tensor processing."""
         if self.device.startswith("cuda"):
             try:
                 # 3x3 Sobel kernels
@@ -103,19 +102,18 @@ class BlurDropEngine:
                 ky = torch.tensor([[-1., -2., -1.],
                                    [0.,  0.,  0.],
                                    [1.,  2.,  1.]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)
-                # 3x3 Laplacian kernel (matching OpenCV ksize=3 Sobel d2x + d2y)
-                klap = torch.tensor([[2.,  0., 2.],
-                                     [0., -8., 0.],
-                                     [2.,  0., 2.]], dtype=torch.float32, device=self.device).view(1, 1, 3, 3)
-                # 11x11 Gaussian smoothing kernel for structure tensor windowing
-                gauss_1d = cv2.getGaussianKernel(11, 2.5)
-                gauss_2d = np.outer(gauss_1d, gauss_1d).astype(np.float32)
-                kgauss = torch.tensor(gauss_2d, dtype=torch.float32, device=self.device).view(1, 1, 11, 11)
+                
+                # 5x5 Calibrated Gaussian Re-blur kernel (sigma=1.5)
+                k_size = 5
+                sig = 1.5
+                coord = torch.arange(-k_size // 2 + 1, k_size // 2 + 1, device=self.device).float()
+                g1 = torch.exp(-coord**2 / (2 * sig**2))
+                g2 = torch.outer(g1, g1).view(1, 1, k_size, k_size)
+                k_reblur = g2 / (g1.sum()**2)
 
                 self._gpu_kx = kx
                 self._gpu_ky = ky
-                self._gpu_klap = klap
-                self._gpu_kgauss = kgauss
+                self._gpu_kreblur = k_reblur
                 self.has_gpu_kernels = True
             except Exception as e:
                 print(f"[BlurDrop Warning] Failed to initialize GPU kernels: {e}")
@@ -133,7 +131,6 @@ class BlurDropEngine:
         for p in folder.iterdir():
             if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
                 files.append(str(p.resolve()))
-        # Sort naturally (so frame_001 comes before frame_002)
         try:
             import re
             def natural_key(text):
@@ -150,12 +147,14 @@ class BlurDropEngine:
         preset: str = "balanced",
         motion_sensitivity: float = 1.0,
         subject_aware: bool = True,
-        batch_size: int = 16,
+        inspection_mode: str = "uniform",
+        canvas_res: Optional[int] = None,
+        batch_size: int = 4,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         cancel_token: Optional[Callable[[], bool]] = None
     ) -> List[ImageQualityResult]:
         """
-        Scans and analyzes all images in the folder with hardware acceleration.
+        Scans and analyzes all images in the folder with full-canvas hardware acceleration.
         Returns a list of ImageQualityResult objects.
         """
         image_paths = self.scan_image_files(folder_path)
@@ -163,43 +162,47 @@ class BlurDropEngine:
             self.cached_results = []
             return []
 
+        effective_res = self.analysis_res if canvas_res is None else canvas_res
         total_images = len(image_paths)
         results: List[ImageQualityResult] = []
         t_start = time.time()
 
         if self.device.startswith("cuda") and self.has_gpu_kernels:
-            # GPU Batched Pipeline
             results = self._analyze_folder_gpu(
                 image_paths,
                 threshold=threshold,
                 preset=preset,
                 motion_sensitivity=motion_sensitivity,
                 subject_aware=subject_aware,
+                inspection_mode=inspection_mode,
+                analysis_res=effective_res,
                 batch_size=batch_size,
                 progress_callback=progress_callback,
                 cancel_token=cancel_token
             )
         else:
-            # Multi-Threaded CPU Pipeline
             results = self._analyze_folder_cpu(
                 image_paths,
                 threshold=threshold,
                 preset=preset,
                 motion_sensitivity=motion_sensitivity,
                 subject_aware=subject_aware,
+                inspection_mode=inspection_mode,
+                analysis_res=effective_res,
                 progress_callback=progress_callback,
                 cancel_token=cancel_token
             )
 
         elapsed = time.time() - t_start
         fps = total_images / max(0.001, elapsed)
-        print(f"[BlurDrop] Analyzed {len(results)}/{total_images} images in {elapsed:.2f}s ({fps:.1f} fps) via {self.device.upper()}")
+        mode_desc = "100% Native Full-Canvas" if effective_res is None else f"{effective_res}px Canvas"
+        print(f"[BlurDrop] Analyzed {len(results)}/{total_images} images in {elapsed:.2f}s ({fps:.1f} fps) via {self.device.upper()} [{mode_desc}]")
 
         self.cached_results = results
         return results
 
     # -------------------------------------------------------------------------
-    # GPU Accelerated Batch Analysis Pipeline
+    # GPU Accelerated Full-Canvas Batch Analysis Pipeline
     # -------------------------------------------------------------------------
 
     def _analyze_folder_gpu(
@@ -209,169 +212,226 @@ class BlurDropEngine:
         preset: str,
         motion_sensitivity: float,
         subject_aware: bool,
+        inspection_mode: str,
+        analysis_res: Optional[int],
         batch_size: int,
         progress_callback: Optional[Callable[[int, int, str], None]],
         cancel_token: Optional[Callable[[], bool]]
     ) -> List[ImageQualityResult]:
-        """Batched GPU processing using multi-threaded I/O prefetch."""
+        """Batched GPU processing reading the entire image canvas."""
         total = len(image_paths)
         results: List[ImageQualityResult] = []
+        worker_threads = min(12, os.cpu_count() or 4)
 
-        def _read_and_downscale(path: str) -> Optional[Tuple[str, np.ndarray, int, int, float]]:
+        def _read_and_prep(path: str) -> Optional[Tuple[str, np.ndarray, int, int, float]]:
             try:
                 sz_mb = os.path.getsize(path) / (1024 * 1024)
-                # Fast imread in grayscale
                 img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
                 if img is None:
                     return None
                 orig_h, orig_w = img.shape[:2]
 
-                # Resize to standard analysis resolution (preserving aspect ratio)
-                max_dim = max(orig_h, orig_w)
-                if max_dim > self.analysis_res:
-                    scale = self.analysis_res / float(max_dim)
-                    new_w = max(32, int(round(orig_w * scale)))
-                    new_h = max(32, int(round(orig_h * scale)))
-                    # Ensure divisible by 8 for clean patch grid
-                    new_w = (new_w // 8) * 8
-                    new_h = (new_h // 8) * 8
-                    img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                else:
-                    new_w = (orig_w // 8) * 8
-                    new_h = (orig_h // 8) * 8
-                    img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR) if (new_w != orig_w or new_h != orig_h) else img
+                if analysis_res is not None:
+                    max_dim = max(orig_h, orig_w)
+                    if max_dim > analysis_res:
+                        scale = analysis_res / float(max_dim)
+                        new_w = max(32, int(round(orig_w * scale)))
+                        new_h = max(32, int(round(orig_h * scale)))
+                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                return (path, img_resized, orig_w, orig_h, sz_mb)
+                # Ensure dimensions are divisible by 4 for clean pooling
+                h, w = img.shape[:2]
+                pad_h = (4 - (h % 4)) % 4
+                pad_w = (4 - (w % 4)) % 4
+                if pad_h > 0 or pad_w > 0:
+                    img = cv2.copyMakeBorder(img, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
+
+                return (path, img, orig_w, orig_h, sz_mb)
             except Exception:
                 return None
 
-        # Process in batches
-        worker_threads = min(16, os.cpu_count() or 4)
         processed_count = 0
+        b_size = max(1, min(batch_size, 4))  # Conservative batch size for full-res VRAM safety
 
-        for b_start in range(0, total, batch_size):
+        for b_start in range(0, total, b_size):
             if cancel_token and cancel_token():
                 break
 
-            b_paths = image_paths[b_start:b_start + batch_size]
+            b_paths = image_paths[b_start:b_start + b_size]
             with ThreadPoolExecutor(max_workers=worker_threads) as pool:
-                decoded_items = list(pool.map(_read_and_downscale, b_paths))
+                decoded_items = list(pool.map(_read_and_prep, b_paths))
 
             valid_items = [it for it in decoded_items if it is not None]
             if not valid_items:
                 continue
 
-            # Group images by identical resized resolution for clean batch tensor stacking,
-            # or process individually if resolutions vary
-            # Note: To guarantee 100% batched tensor compute, pad to common max dimensions in batch
-            max_bh = max(it[1].shape[0] for it in valid_items)
-            max_bw = max(it[1].shape[1] for it in valid_items)
-
-            # Pad into batch tensor (B, 1, H, W)
-            batch_tensors = []
-            for _, img_arr, _, _, _ in valid_items:
-                h, w = img_arr.shape
-                pad_h = max_bh - h
-                pad_w = max_bw - w
-                if pad_h > 0 or pad_w > 0:
-                    img_arr = cv2.copyMakeBorder(img_arr, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT)
-                batch_tensors.append(torch.from_numpy(img_arr).float() / 255.0)
-
-            batch_stack = torch.stack(batch_tensors, dim=0).unsqueeze(1).to(self.device)  # (B, 1, H, W)
-
-            # Evaluate GPU metrics
-            batch_metrics = self._evaluate_batch_gpu(batch_stack, valid_items)
-
-            for i, (path, _, orig_w, orig_h, sz_mb) in enumerate(valid_items):
-                m = batch_metrics[i]
-                res = self._compute_scores_and_classify(
-                    path=path,
-                    orig_w=orig_w,
-                    orig_h=orig_h,
-                    sz_mb=sz_mb,
-                    raw_metrics=m,
-                    threshold=threshold,
-                    preset=preset,
-                    motion_sensitivity=motion_sensitivity,
-                    subject_aware=subject_aware
-                )
-                results.append(res)
+            for path, img_arr, orig_w, orig_h, sz_mb in valid_items:
+                if cancel_token and cancel_token():
+                    break
+                try:
+                    tensor = torch.from_numpy(img_arr).float().to(self.device).unsqueeze(0).unsqueeze(0) / 255.0
+                    metrics = self._evaluate_single_tensor_gpu(tensor, orig_w, orig_h)
+                    res = self._compute_scores_and_classify(
+                        path=path,
+                        orig_w=orig_w,
+                        orig_h=orig_h,
+                        sz_mb=sz_mb,
+                        raw_metrics=metrics,
+                        threshold=threshold,
+                        preset=preset,
+                        motion_sensitivity=motion_sensitivity,
+                        subject_aware=subject_aware,
+                        inspection_mode=inspection_mode
+                    )
+                    results.append(res)
+                except Exception as e:
+                    print(f"[BlurDrop Error] Failed to analyze {Path(path).name} on GPU: {e}")
 
             processed_count += len(valid_items)
             if progress_callback:
-                msg = f"⚡ Analyzing blur with CUDA GPU ({processed_count}/{total} images)..."
+                mode_str = "Full Native Canvas" if analysis_res is None else f"{analysis_res}px"
+                msg = f"[GPU] Analyzing blur on RTX GPU [{mode_str}] ({processed_count}/{total} images)..."
                 progress_callback(processed_count, total, msg)
 
         return results
 
-    def _evaluate_batch_gpu(self, batch: torch.Tensor, valid_items: List[Any]) -> List[Dict[str, Any]]:
+    def _evaluate_single_tensor_gpu(self, tensor: torch.Tensor, orig_w: int, orig_h: int) -> Dict[str, Any]:
         """
-        Executes fused GPU 2D convolutions, structure tensor coherence, patch decomposition,
-        and FFT spectral power across the batch in parallel with reflection padding.
+        Executes SOTA Full-Canvas Re-blur Ratio, Edge Spread Peakiness,
+        2D Directional Structure Tensor, and Spatial Grid Decomposition on GPU.
         """
-        B, _, H, W = batch.shape
+        _, _, H, W = tensor.shape
 
-        # 1. Gradients (Sobel Gx, Gy) with BORDER_REFLECT padding
-        pad1 = F.pad(batch, (1, 1, 1, 1), mode='reflect')
-        gx = F.conv2d(pad1, self._gpu_kx, padding=0)
-        gy = F.conv2d(pad1, self._gpu_ky, padding=0)
+        # 1. Native Gradients
+        pad_t = F.pad(tensor, (1, 1, 1, 1), mode='reflect')
+        gx = F.conv2d(pad_t, self._gpu_kx, padding=0)
+        gy = F.conv2d(pad_t, self._gpu_ky, padding=0)
+        g_mag = torch.sqrt(gx**2 + gy**2)
 
-        # 2. Laplacian with BORDER_REFLECT padding
-        lap = F.conv2d(pad1, self._gpu_klap, padding=0)
+        # 2. Known Gaussian Re-blurring (sigma=1.5, 5x5)
+        img_rb = F.conv2d(F.pad(tensor, (2, 2, 2, 2), mode='reflect'), self._gpu_kreblur, padding=0)
+        gx_rb = F.conv2d(F.pad(img_rb, (1, 1, 1, 1), mode='reflect'), self._gpu_kx, padding=0)
+        gy_rb = F.conv2d(F.pad(img_rb, (1, 1, 1, 1), mode='reflect'), self._gpu_ky, padding=0)
+        g_mag_rb = torch.sqrt(gx_rb**2 + gy_rb**2)
 
-        # 3. Structure Tensor J = [ <Gx^2> <GxGy> ; <GxGy> <Gy^2> ] with BORDER_REFLECT padding
-        pad_g = (5, 5, 5, 5)
-        jxx = F.conv2d(F.pad(gx * gx, pad_g, mode='reflect'), self._gpu_kgauss, padding=0)
-        jyy = F.conv2d(F.pad(gy * gy, pad_g, mode='reflect'), self._gpu_kgauss, padding=0)
-        jxy = F.conv2d(F.pad(gx * gy, pad_g, mode='reflect'), self._gpu_kgauss, padding=0)
+        # 3. Dynamic Edge Mask (Adaptive 85th percentile of gradients to isolate true edges)
+        sub = g_mag[:, :, ::2, ::2].reshape(-1)
+        tau = max(0.015, torch.quantile(sub, 0.85).item())
+        mask = g_mag > tau
+        num_edges = int(mask.sum().item())
 
+        if num_edges < 30:
+            return {
+                "reblur_ratio": 1.0,
+                "peakiness": 1.0,
+                "defocus_score": 5.0,
+                "motion_score": 90.0,
+                "streak": 0.0,
+                "fft_score": 10.0,
+                "subject_score": 5.0,
+                "uniformity": 50.0,
+                "dyn_range": 0.1,
+                "top_coords": (0, 0, orig_w, orig_h)
+            }
+
+        # 4. Contrast-Invariant Re-blur Ratio at true edges
+        ratio = g_mag[mask] / (g_mag_rb[mask] + 1e-4)
+        med_ratio = torch.median(ratio).item()
+        p75_ratio = torch.quantile(ratio, 0.75).item()
+        r_val = 0.5 * med_ratio + 0.5 * p75_ratio
+
+        # 5. Edge Spread Peakiness (max_pool vs avg_pool in 7x7 neighborhood)
+        g_max = F.max_pool2d(F.pad(g_mag, (3, 3, 3, 3), mode='reflect'), kernel_size=7, stride=1, padding=0)
+        g_avg = F.avg_pool2d(F.pad(g_mag, (3, 3, 3, 3), mode='reflect'), kernel_size=7, stride=1, padding=0)
+        peakiness = torch.median(g_max[mask] / (g_avg[mask] + 1e-4)).item()
+
+        # Defocus calibration (combines re-blur decay and edge peakiness)
+        sc_reblur = max(0.0, min(100.0, (r_val - 1.05) / (2.20 - 1.05) * 100.0))
+        sc_peak = max(0.0, min(100.0, (peakiness - 1.30) / (2.50 - 1.30) * 100.0))
+        defocus_score = 0.60 * sc_reblur + 0.40 * sc_peak
+
+        # 6. Full-Canvas 2D Structure Tensor & Directional Motion Streak Detection
+        pad_j = (7, 7, 7, 7)
+        jxx = F.avg_pool2d(F.pad(gx * gx, pad_j, mode='reflect'), kernel_size=15, stride=1, padding=0)
+        jyy = F.avg_pool2d(F.pad(gy * gy, pad_j, mode='reflect'), kernel_size=15, stride=1, padding=0)
+        jxy = F.avg_pool2d(F.pad(gx * gy, pad_j, mode='reflect'), kernel_size=15, stride=1, padding=0)
         trace = jxx + jyy
-        det_diff = torch.sqrt(torch.clamp((jxx - jyy) ** 2 + 4.0 * (jxy ** 2), min=0.0))
+        det_diff = torch.sqrt(torch.clamp((jxx - jyy)**2 + 4.0 * (jxy**2), min=0.0))
         l1 = (trace + det_diff) / 2.0
         l2 = (trace - det_diff) / 2.0
+        coherence = ((l1 - l2) / (l1 + l2 + 1e-4))**2
+        streak = torch.quantile(coherence[mask], 0.75).item() if mask.any() else 0.0
 
-        # Pixel coherence map: (l1 - l2)^2 / (l1 + l2 + eps)^2
-        coherence_map = ((l1 - l2) / (l1 + l2 + 1e-5)) ** 2
+        vx = torch.var(gx[mask]).item() if mask.any() else 0.0
+        vy = torch.var(gy[mask]).item() if mask.any() else 0.0
+        disparity = abs(vx - vy) / max(vx, vy, 1e-5)
+        comb_motion = max(streak, disparity)
+        motion_score = max(0.0, min(100.0, (1.0 - comb_motion * 1.15) * 100.0))
 
-        # Per-item evaluation (respecting original unpadded dimensions before batch stacking)
-        out_metrics = []
-        for i in range(B):
-            h_i, w_i = valid_items[i][1].shape
-            img_slice = batch[i, 0, :h_i, :w_i].cpu().numpy()
-            p95, p5 = np.percentile(img_slice, [95, 5])
-            dyn_range = float(max(0.01, p95 - p5))
+        # 7. 2D FFT High-Frequency Energy Ratio
+        try:
+            fft_item = torch.fft.rfft2(tensor)
+            mag_sq = torch.abs(fft_item)**2
+            total_fft = torch.sum(mag_sq).item() + 1e-6
+            freq_y = torch.fft.fftfreq(H, device=self.device).view(1, 1, H, 1)
+            freq_x = torch.fft.rfftfreq(W, device=self.device).view(1, 1, 1, fft_item.shape[-1])
+            hf_mask = ((freq_y**2 + freq_x**2) > (0.20**2)).float()
+            hf_ratio = torch.sum(mag_sq * hf_mask).item() / total_fft
+            fft_score = max(0.0, min(100.0, (math.log10(max(1e-7, hf_ratio)) + 3.5) * 33.3))
+        except Exception:
+            fft_score = defocus_score
 
-            lap_var = float(torch.var(lap[i, 0, :h_i, :w_i], unbiased=False).item())
-            vx = float(torch.var(gx[i, 0, :h_i, :w_i], unbiased=False).item())
-            vy = float(torch.var(gy[i, 0, :h_i, :w_i], unbiased=False).item())
-            coherence = float(torch.mean(coherence_map[i, 0, :h_i, :w_i]).item())
-            anisotropy = abs(vx - vy) / (vx + vy + 1e-6)
+        # 8. Spatial 3x3 Grid (Subject vs Bokeh & Corner Uniformity)
+        ch, cw = H // 3, W // 3
+        tile_scores = []
+        best_coords = (0, 0, orig_w, orig_h)
+        best_tile_val = -1.0
 
-            # 2D FFT High-Frequency Power Ratio on unpadded item
-            fft_item = torch.fft.rfft2(batch[i:i+1, :, :h_i, :w_i])
-            mag_sq_i = torch.abs(fft_item) ** 2
-            total_fft_power = torch.sum(mag_sq_i).item() + 1e-6
-            freq_y_i = torch.fft.fftfreq(h_i, device=self.device).view(1, 1, h_i, 1)
-            freq_x_i = torch.fft.rfftfreq(w_i, device=self.device).view(1, 1, 1, fft_item.shape[-1])
-            hf_mask_i = ((freq_y_i ** 2 + freq_x_i ** 2) > (0.20 ** 2)).float()
-            hf_fft_power = torch.sum(mag_sq_i * hf_mask_i).item()
-            hf_ratio = hf_fft_power / total_fft_power
+        for cy in range(3):
+            for cx in range(3):
+                y0, y1 = cy * ch, (cy + 1) * ch
+                x0, x1 = cx * cw, (cx + 1) * cw
+                sub_m = mask[:, :, y0:y1, x0:x1]
+                if sub_m.sum() > 10:
+                    sub_r = g_mag[:, :, y0:y1, x0:x1][sub_m] / (g_mag_rb[:, :, y0:y1, x0:x1][sub_m] + 1e-4)
+                    t_val = 0.5 * torch.median(sub_r).item() + 0.5 * torch.quantile(sub_r, 0.75).item()
+                    t_sc = max(0.0, min(100.0, (t_val - 1.05) / (2.20 - 1.05) * 100.0))
+                    tile_scores.append(t_sc)
+                    if t_sc > best_tile_val:
+                        best_tile_val = t_sc
+                        # Map back to original image space
+                        scale_x = orig_w / float(W)
+                        scale_y = orig_h / float(H)
+                        best_coords = (int(x0 * scale_x), int(y0 * scale_y), int(x1 * scale_x), int(y1 * scale_y))
 
-            patch_scores, top_coords = self._compute_patch_metrics_np(img_slice)
+        if not tile_scores:
+            tile_scores = [defocus_score]
 
-            out_metrics.append({
-                "lap_var": lap_var,
-                "gx_var": vx,
-                "gy_var": vy,
-                "coherence": coherence,
-                "anisotropy": anisotropy,
-                "hf_ratio": hf_ratio,
-                "dyn_range": dyn_range,
-                "patch_scores": patch_scores,
-                "top_coords": top_coords
-            })
+        tile_scores.sort()
+        worst_tile = tile_scores[0]
+        best_tile = tile_scores[-1]
+        subject_score = best_tile
+        uniformity = max(0.0, min(100.0, (worst_tile / (best_tile + 1e-4)) * 100.0))
 
-        return out_metrics
+        # Dynamic Range
+        sub_np = sub.cpu().numpy()
+        p95, p5 = np.percentile(sub_np, [95, 5])
+        dyn_range = float(max(0.01, p95 - p5))
+
+        return {
+            "reblur_ratio": r_val,
+            "peakiness": peakiness,
+            "defocus_score": defocus_score,
+            "motion_score": motion_score,
+            "streak": streak,
+            "comb_motion": comb_motion,
+            "fft_score": fft_score,
+            "subject_score": subject_score,
+            "worst_tile": worst_tile,
+            "uniformity": uniformity,
+            "dyn_range": dyn_range,
+            "top_coords": best_coords
+        }
 
     # -------------------------------------------------------------------------
     # CPU Parallel Analysis Pipeline (Fallback)
@@ -384,13 +444,15 @@ class BlurDropEngine:
         preset: str,
         motion_sensitivity: float,
         subject_aware: bool,
+        inspection_mode: str,
+        analysis_res: Optional[int],
         progress_callback: Optional[Callable[[int, int, str], None]],
         cancel_token: Optional[Callable[[], bool]]
     ) -> List[ImageQualityResult]:
         """Multi-threaded CPU processing using OpenCV SIMD."""
         total = len(image_paths)
         results: List[ImageQualityResult] = []
-        worker_threads = min(16, os.cpu_count() or 4)
+        worker_threads = min(12, os.cpu_count() or 4)
 
         def _analyze_single(path: str) -> Optional[ImageQualityResult]:
             try:
@@ -400,69 +462,127 @@ class BlurDropEngine:
                     return None
                 orig_h, orig_w = img.shape[:2]
 
-                max_dim = max(orig_h, orig_w)
-                if max_dim > self.analysis_res:
-                    scale = self.analysis_res / float(max_dim)
-                    new_w = max(32, int(round(orig_w * scale)))
-                    new_h = max(32, int(round(orig_h * scale)))
-                    new_w = (new_w // 8) * 8
-                    new_h = (new_h // 8) * 8
-                    img_proc = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                else:
-                    new_w = (orig_w // 8) * 8
-                    new_h = (orig_h // 8) * 8
-                    img_proc = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR) if (new_w != orig_w or new_h != orig_h) else img
+                if analysis_res is not None:
+                    max_dim = max(orig_h, orig_w)
+                    if max_dim > analysis_res:
+                        scale = analysis_res / float(max_dim)
+                        new_w = max(32, int(round(orig_w * scale)))
+                        new_h = max(32, int(round(orig_h * scale)))
+                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                img_f = img_proc.astype(np.float32) / 255.0
+                img_f = img.astype(np.float32) / 255.0
+                H, W = img_f.shape
 
-                # 1. Gradients & Laplacian
+                # 1. Gradients
                 gx = cv2.Sobel(img_f, cv2.CV_32F, 1, 0, ksize=3)
                 gy = cv2.Sobel(img_f, cv2.CV_32F, 0, 1, ksize=3)
-                lap = cv2.Laplacian(img_f, cv2.CV_32F, ksize=3)
+                g_mag = np.sqrt(gx**2 + gy**2)
 
-                lap_var = float(np.var(lap))
-                vx = float(np.var(gx))
-                vy = float(np.var(gy))
-                anisotropy = abs(vx - vy) / (vx + vy + 1e-6)
+                # 2. Gaussian re-blur (5x5, sigma=1.5)
+                img_rb = cv2.GaussianBlur(img_f, (5, 5), 1.5)
+                gx_rb = cv2.Sobel(img_rb, cv2.CV_32F, 1, 0, ksize=3)
+                gy_rb = cv2.Sobel(img_rb, cv2.CV_32F, 0, 1, ksize=3)
+                g_mag_rb = np.sqrt(gx_rb**2 + gy_rb**2)
 
-                # 2. Structure tensor coherence
-                jxx = cv2.GaussianBlur(gx * gx, (11, 11), 2.5)
-                jyy = cv2.GaussianBlur(gy * gy, (11, 11), 2.5)
-                jxy = cv2.GaussianBlur(gx * gy, (11, 11), 2.5)
+                # 3. Dynamic edge mask
+                sub = g_mag[::2, ::2].reshape(-1)
+                tau = max(0.015, float(np.percentile(sub, 85)))
+                mask = g_mag > tau
+                num_edges = int(np.sum(mask))
 
-                trace = jxx + jyy
-                det_diff = np.sqrt(np.maximum(0.0, (jxx - jyy) ** 2 + 4.0 * (jxy ** 2)))
-                l1 = (trace + det_diff) / 2.0
-                l2 = (trace - det_diff) / 2.0
-                coherence = float(np.mean(((l1 - l2) / (l1 + l2 + 1e-5)) ** 2))
+                if num_edges < 30:
+                    raw_m = {
+                        "reblur_ratio": 1.0, "peakiness": 1.0, "defocus_score": 5.0,
+                        "motion_score": 90.0, "streak": 0.0, "fft_score": 10.0,
+                        "subject_score": 5.0, "worst_tile": 5.0, "uniformity": 50.0,
+                        "dyn_range": 0.1, "top_coords": (0, 0, orig_w, orig_h)
+                    }
+                else:
+                    ratio = g_mag[mask] / (g_mag_rb[mask] + 1e-4)
+                    eff_ratio = float(np.median(ratio))
+                    p75_ratio = float(np.percentile(ratio, 75))
+                    r_val = 0.5 * eff_ratio + 0.5 * p75_ratio
 
-                # 3. 2D FFT
-                f = np.fft.rfft2(img_f)
-                mag_sq = np.abs(f) ** 2
-                h, w_half = mag_sq.shape
-                freq_y = np.fft.fftfreq(h).reshape(-1, 1)
-                freq_x = np.fft.rfftfreq(img_f.shape[1]).reshape(1, -1)
-                hf_mask = (freq_y ** 2 + freq_x ** 2) > (0.20 ** 2)
-                total_fft = float(np.sum(mag_sq)) + 1e-6
-                hf_ratio = float(np.sum(mag_sq[hf_mask])) / total_fft
+                    # Peakiness
+                    kernel_7 = np.ones((7, 7), np.uint8)
+                    g_max = cv2.dilate(g_mag, kernel_7)
+                    g_avg = cv2.boxFilter(g_mag, -1, (7, 7), normalize=True)
+                    peakiness = float(np.median(g_max[mask] / (g_avg[mask] + 1e-4)))
 
-                # 4. Dynamic Range
-                p95, p5 = np.percentile(img_f, [95, 5])
-                dyn_range = float(max(0.01, p95 - p5))
+                    sc_reblur = max(0.0, min(100.0, (r_val - 1.05) / (2.20 - 1.05) * 100.0))
+                    sc_peak = max(0.0, min(100.0, (peakiness - 1.30) / (2.50 - 1.30) * 100.0))
+                    defocus_score = 0.60 * sc_reblur + 0.40 * sc_peak
 
-                patch_scores, top_coords = self._compute_patch_metrics_np(img_f)
+                    # Structure tensor & directional motion streak detection
+                    jxx = cv2.boxFilter(gx * gx, -1, (15, 15), normalize=True)
+                    jyy = cv2.boxFilter(gy * gy, -1, (15, 15), normalize=True)
+                    jxy = cv2.boxFilter(gx * gy, -1, (15, 15), normalize=True)
+                    trace = jxx + jyy
+                    det_diff = np.sqrt(np.maximum(0.0, (jxx - jyy)**2 + 4.0 * (jxy**2)))
+                    l1 = (trace + det_diff) / 2.0
+                    l2 = (trace - det_diff) / 2.0
+                    coherence = ((l1 - l2) / (l1 + l2 + 1e-4))**2
+                    streak = float(np.percentile(coherence[mask], 75)) if np.any(mask) else 0.0
 
-                raw_m = {
-                    "lap_var": lap_var,
-                    "gx_var": vx,
-                    "gy_var": vy,
-                    "coherence": coherence,
-                    "anisotropy": anisotropy,
-                    "hf_ratio": hf_ratio,
-                    "dyn_range": dyn_range,
-                    "patch_scores": patch_scores,
-                    "top_coords": top_coords
-                }
+                    vx = float(np.var(gx[mask])) if np.any(mask) else 0.0
+                    vy = float(np.var(gy[mask])) if np.any(mask) else 0.0
+                    disparity = abs(vx - vy) / max(vx, vy, 1e-5)
+                    comb_motion = max(streak, disparity)
+                    motion_score = max(0.0, min(100.0, (1.0 - comb_motion * 1.15) * 100.0))
+
+                    # 3x3 Grid
+                    ch, cw = H // 3, W // 3
+                    tile_scores = []
+                    best_coords = (0, 0, orig_w, orig_h)
+                    best_tile_val = -1.0
+
+                    for cy in range(3):
+                        for cx in range(3):
+                            y0, y1 = cy * ch, (cy + 1) * ch
+                            x0, x1 = cx * cw, (cx + 1) * cw
+                            sub_m = mask[y0:y1, x0:x1]
+                            if np.sum(sub_m) > 10:
+                                sub_r = g_mag[y0:y1, x0:x1][sub_m] / (g_mag_rb[y0:y1, x0:x1][sub_m] + 1e-4)
+                                t_val = 0.5 * float(np.median(sub_r)) + 0.5 * float(np.percentile(sub_r, 75))
+                                t_sc = max(0.0, min(100.0, (t_val - 1.05) / (2.20 - 1.05) * 100.0))
+                                tile_scores.append(t_sc)
+                                if t_sc > best_tile_val:
+                                    best_tile_val = t_sc
+                                    scale_x = orig_w / float(W)
+                                    scale_y = orig_h / float(H)
+                                    best_coords = (int(x0 * scale_x), int(y0 * scale_y), int(x1 * scale_x), int(y1 * scale_y))
+
+                    if not tile_scores:
+                        tile_scores = [defocus_score]
+
+                    tile_scores.sort()
+                    worst_tile = tile_scores[0]
+                    best_tile = tile_scores[-1]
+                    subject_score = best_tile
+                    uniformity = max(0.0, min(100.0, (worst_tile / (best_tile + 1e-4)) * 100.0))
+
+                    # 2D FFT
+                    try:
+                        f = np.fft.rfft2(img_f)
+                        mag_sq = np.abs(f)**2
+                        total_fft = float(np.sum(mag_sq)) + 1e-6
+                        freq_y = np.fft.fftfreq(H).reshape(-1, 1)
+                        freq_x = np.fft.rfftfreq(W).reshape(1, -1)
+                        hf_mask = (freq_y**2 + freq_x**2) > (0.20**2)
+                        hf_ratio = float(np.sum(mag_sq[hf_mask])) / total_fft
+                        fft_score = max(0.0, min(100.0, (math.log10(max(1e-7, hf_ratio)) + 3.5) * 33.3))
+                    except Exception:
+                        fft_score = defocus_score
+
+                    p95, p5 = np.percentile(img_f, [95, 5])
+                    dyn_range = float(max(0.01, p95 - p5))
+
+                    raw_m = {
+                        "reblur_ratio": r_val, "peakiness": peakiness, "defocus_score": defocus_score,
+                        "motion_score": motion_score, "streak": streak, "comb_motion": comb_motion, "fft_score": fft_score,
+                        "subject_score": subject_score, "worst_tile": worst_tile, "uniformity": uniformity,
+                        "dyn_range": dyn_range, "top_coords": best_coords
+                    }
 
                 return self._compute_scores_and_classify(
                     path=path,
@@ -473,12 +593,12 @@ class BlurDropEngine:
                     threshold=threshold,
                     preset=preset,
                     motion_sensitivity=motion_sensitivity,
-                    subject_aware=subject_aware
+                    subject_aware=subject_aware,
+                    inspection_mode=inspection_mode
                 )
             except Exception:
                 return None
 
-        # Execute thread pool
         with ThreadPoolExecutor(max_workers=worker_threads) as pool:
             for i, res in enumerate(pool.map(_analyze_single, image_paths)):
                 if cancel_token and cancel_token():
@@ -492,41 +612,8 @@ class BlurDropEngine:
         return results
 
     # -------------------------------------------------------------------------
-    # Patch-Level Sharpness & Scoring Functions
+    # Scoring & Classification Diagnosis
     # -------------------------------------------------------------------------
-
-    def _compute_patch_metrics_np(self, img_f: np.ndarray) -> Tuple[List[float], Tuple[int, int, int, int]]:
-        """
-        Decomposes image into a 4x4 patch grid to measure local sharpness variations
-        and find the sharpest subject patch.
-        """
-        h, w = img_f.shape
-        ny, nx = self.patch_grid
-        step_y = h // ny
-        step_x = w // nx
-
-        scores = []
-        best_score = -1.0
-        best_coords = (0, 0, w, h)
-
-        for iy in range(ny):
-            for ix in range(nx):
-                y0 = iy * step_y
-                y1 = h if iy == ny - 1 else (iy + 1) * step_y
-                x0 = ix * step_x
-                x1 = w if ix == nx - 1 else (ix + 1) * step_x
-
-                patch = img_f[y0:y1, x0:x1]
-                lap_p = cv2.Laplacian(patch, cv2.CV_32F, ksize=3)
-                p_score = float(np.var(lap_p))
-                scores.append(p_score)
-
-                if p_score > best_score:
-                    best_score = p_score
-                    best_coords = (x0, y0, x1, y1)
-
-        scores.sort()
-        return scores, best_coords
 
     def _compute_scores_and_classify(
         self,
@@ -538,66 +625,52 @@ class BlurDropEngine:
         threshold: float,
         preset: str,
         motion_sensitivity: float,
-        subject_aware: bool
+        subject_aware: bool,
+        inspection_mode: str
     ) -> ImageQualityResult:
-        """
-        Normalizes raw sensor metrics into calibrated 0.0 - 100.0 quality scores,
-        diagnoses blur classification, and applies the cutoff threshold.
-        """
+        """Calculates normalized 0-100 scores and diagnoses classification."""
         filename = os.path.basename(path)
-        lap_var = raw_metrics["lap_var"]
-        coherence = raw_metrics["coherence"]
-        anisotropy = raw_metrics["anisotropy"]
-        hf_ratio = raw_metrics["hf_ratio"]
+        defocus_score = raw_metrics["defocus_score"]
+        motion_score = raw_metrics["motion_score"]
+        fft_score = raw_metrics["fft_score"]
+        subject_score = raw_metrics["subject_score"]
+        worst_tile = raw_metrics.get("worst_tile", defocus_score)
+        uniformity = raw_metrics["uniformity"]
+        streak = raw_metrics["streak"]
         dyn_range = raw_metrics["dyn_range"]
-        patch_scores = raw_metrics["patch_scores"]
+        reblur_ratio = raw_metrics["reblur_ratio"]
+        peakiness = raw_metrics["peakiness"]
         top_coords = raw_metrics["top_coords"]
 
-        # 1. Defocus Score (Log-scaled micro-edge gradient variance normalized by bounded contrast)
-        eff_dr = max(0.25, dyn_range)
-        norm_lap = lap_var / eff_dr
-        if norm_lap <= 1e-7:
-            defocus_score = 0.0
+        # Adjust motion score with sensitivity
+        comb_motion = raw_metrics.get("comb_motion", raw_metrics.get("streak", 0.0))
+        adj_motion = min(1.0, comb_motion * motion_sensitivity)
+        adj_motion_score = max(0.0, min(100.0, (1.0 - adj_motion * 1.15) * 100.0))
+
+        # Effective defocus base
+        if inspection_mode == "uniform" and not subject_aware:
+            # Photogrammetry corner-to-corner mode: penalize soft corners
+            effective_focus = 0.70 * defocus_score + 0.30 * worst_tile
         else:
-            log_lap = math.log10(norm_lap)
-            # Map [-4.5, 0.5] -> [0.0, 100.0]
-            defocus_score = max(0.0, min(100.0, (log_lap + 4.5) * 20.0))
+            # Subject-aware / Bokeh-invariant mode: prioritize sharp subject
+            effective_focus = (0.75 * subject_score + 0.25 * defocus_score) if subject_aware else defocus_score
 
-        # 2. Motion Score (Penalizes directional structure tensor coherence and gradient disparity)
-        motion_penalty = max(0.0, min(1.0, (coherence * 0.5 + anisotropy * 0.5) * motion_sensitivity))
-        motion_score = max(0.0, min(100.0, (1.0 - motion_penalty) * 100.0))
+        # Motion gate: dampens composite score when directional streaks exist
+        motion_gate = min(1.0, (adj_motion_score / 55.0)**0.85)
+        composite_score = max(0.0, min(100.0, (effective_focus * 0.85 + fft_score * 0.15) * motion_gate))
 
-        # 3. FFT High-Frequency Score
-        if hf_ratio <= 1e-7:
-            fft_score = 0.0
-        else:
-            fft_score = max(0.0, min(100.0, (math.log10(hf_ratio) + 3.5) * 33.3))
-
-        # 4. Subject-Aware Patch Score (75th percentile of patches)
-        if patch_scores:
-            p75_idx = int(len(patch_scores) * 0.75)
-            p75_var = patch_scores[min(len(patch_scores) - 1, p75_idx)]
-            norm_p75 = p75_var / eff_dr
-            subject_patch_score = max(0.0, min(100.0, (math.log10(max(1e-7, norm_p75)) + 4.5) * 20.0))
-        else:
-            subject_patch_score = defocus_score
-
-        # 5. Composite Sharpness Score (Gated by motion streak)
-        effective_defocus = (subject_patch_score * 0.75 + defocus_score * 0.25) if subject_aware else defocus_score
-        edge_base = effective_defocus * 0.75 + fft_score * 0.25
-        motion_gate = min(1.0, (motion_score / 65.0) ** 0.8)
-        composite_score = max(0.0, min(100.0, edge_base * motion_gate))
-
-        # 6. Classification Diagnosis
+        # Diagnosis
         if composite_score >= threshold:
             classification = "SHARP"
             is_blurry = False
         else:
             is_blurry = True
-            if composite_score < (threshold * 0.5):
+            if composite_score < (threshold * 0.40):
                 classification = "SEVERE_BLUR"
-            elif motion_score < 48.0:
+            elif adj_motion_score < 45.0:
                 classification = "MOTION_BLUR"
+            elif inspection_mode == "uniform" and subject_score >= threshold and worst_tile < (threshold * 0.6):
+                classification = "CORNER_SOFT"
             else:
                 classification = "DEFOCUS_BLUR"
 
@@ -608,12 +681,15 @@ class BlurDropEngine:
             width=orig_w,
             height=orig_h,
             defocus_score=round(defocus_score, 1),
-            motion_score=round(motion_score, 1),
+            motion_score=round(adj_motion_score, 1),
             fft_score=round(fft_score, 1),
-            subject_patch_score=round(subject_patch_score, 1),
+            subject_patch_score=round(subject_score, 1),
             composite_score=round(composite_score, 1),
-            coherence=round(coherence, 3),
+            coherence=round(comb_motion, 3),
             dynamic_range=round(dyn_range, 3),
+            reblur_ratio=round(reblur_ratio, 3),
+            edge_spread=round(peakiness, 2),
+            uniformity=round(uniformity, 1),
             classification=classification,
             is_blurry=is_blurry,
             top_patch_coords=top_coords
@@ -628,7 +704,8 @@ class BlurDropEngine:
         threshold: float,
         preset: str = "balanced",
         motion_sensitivity: float = 1.0,
-        subject_aware: bool = True
+        subject_aware: bool = True,
+        inspection_mode: str = "uniform"
     ) -> List[ImageQualityResult]:
         """
         Instantly re-evaluates all cached results against new threshold / sensitivity sliders.
@@ -636,27 +713,33 @@ class BlurDropEngine:
         """
         updated = []
         for r in self.cached_results:
-            effective_defocus = (r.subject_patch_score * 0.75 + r.defocus_score * 0.25) if subject_aware else r.defocus_score
-            raw_penalty = (1.0 - (r.motion_score / 100.0)) * motion_sensitivity
-            adj_motion = max(0.0, min(100.0, (1.0 - raw_penalty) * 100.0))
+            adj_streak = min(1.0, r.coherence * motion_sensitivity)
+            adj_motion = max(0.0, min(100.0, (1.0 - adj_streak * 1.15) * 100.0))
 
-            edge_base = effective_defocus * 0.75 + r.fft_score * 0.25
-            motion_gate = min(1.0, (adj_motion / 65.0) ** 0.8)
-            comp = max(0.0, min(100.0, edge_base * motion_gate))
+            if inspection_mode == "uniform" and not subject_aware:
+                effective_focus = r.defocus_score * 0.80 + (r.defocus_score * (r.uniformity / 100.0)) * 0.20
+            else:
+                effective_focus = (0.75 * r.subject_patch_score + 0.25 * r.defocus_score) if subject_aware else r.defocus_score
+
+            motion_gate = min(1.0, (adj_motion / 55.0)**0.85)
+            comp = max(0.0, min(100.0, (effective_focus * 0.85 + r.fft_score * 0.15) * motion_gate))
 
             if comp >= threshold:
                 classification = "SHARP"
                 is_blurry = False
             else:
                 is_blurry = True
-                if comp < (threshold * 0.5):
+                if comp < (threshold * 0.40):
                     classification = "SEVERE_BLUR"
-                elif adj_motion < 48.0:
+                elif adj_motion < 45.0:
                     classification = "MOTION_BLUR"
+                elif inspection_mode == "uniform" and r.subject_patch_score >= threshold and r.uniformity < 50.0:
+                    classification = "CORNER_SOFT"
                 else:
                     classification = "DEFOCUS_BLUR"
 
             r.composite_score = round(comp, 1)
+            r.motion_score = round(adj_motion, 1)
             r.classification = classification
             r.is_blurry = is_blurry
             updated.append(r)
@@ -683,7 +766,6 @@ class BlurDropEngine:
         dest_path.mkdir(parents=True, exist_ok=True)
 
         if selected_paths is None:
-            # Default to all currently flagged blurry images
             targets = [r.path for r in self.cached_results if r.is_blurry]
         else:
             targets = list(selected_paths)
@@ -697,7 +779,6 @@ class BlurDropEngine:
             if not src.is_file():
                 continue
             dest_file = dest_path / src.name
-            # Avoid collision if file exists
             if dest_file.exists():
                 stem = src.stem
                 ext = src.suffix
@@ -717,10 +798,7 @@ class BlurDropEngine:
             if progress_callback and (i % 5 == 0 or i == total_targets - 1):
                 progress_callback(i + 1, total_targets, f"Moving blurry image {i + 1}/{total_targets}...")
 
-        # Store manifest for Undo
         self.last_move_manifest = manifest
-
-        # Update cached_results by removing moved images
         moved_src_set = {m["source"] for m in manifest}
         self.cached_results = [r for r in self.cached_results if r.path not in moved_src_set]
 
@@ -736,9 +814,7 @@ class BlurDropEngine:
         self,
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Dict[str, Any]:
-        """
-        Restores all files moved in the most recent operation back to their original locations.
-        """
+        """Restores all files moved in the most recent operation back to original locations."""
         if not self.last_move_manifest:
             return {"restored_count": 0, "status": "No previous move operation to undo."}
 
