@@ -1,164 +1,168 @@
-# Walkthrough: Abu Align & Train v0.1.2.7
-## FileSift: High-Speed File Matching, Cross-Folder Comparison & Parallel Transfer Studio
+# Walkthrough: Abu Align & Train v0.1.2.8
+## Renamer: Interactive Sequence Naming, Live Preview, and Atomic Batch Renaming Studio
 
 ### 1. Executive Summary
-Release **v0.1.2.7** introduces **FileSift**, an ultra-fast, state-of-the-art file comparison, matching, and curation tool engineered for photogrammetry, 3D Gaussian Splatting (3DGS), VFX, and multi-camera dataset pipelines.
+Release **v0.1.2.8** introduces **Renamer**, a high-performance, sequence and batch file renaming studio designed for computer vision, 3D Gaussian Splatting (3DGS), VFX, photogrammetry, and neural rendering pipelines.
 
-In real-world computer vision workflows, users routinely curate lightweight proxy images (such as low-res JPGs or filtered selections from **BlurDrop**) and need to reliably find, extract, and isolate the matching high-resolution RAW files (`.ARW`, `.CR3`, `.DNG`, `.NEF`), high-bitrate video frames, or mask layers from massive target storage folders. **FileSift** solves this by providing:
-1. Flexible **Source Reference** ingestion: Folder, File List (`.txt`, `.csv`, `.json`), or direct clipboard text paste.
-2. Recursive or flat scanning of **Target Search Directory (Folder 2)**.
-3. Sub-millisecond $O(1)$ set and hash-based matching ("speed of light") supporting cross-extension stem matching (`img_001.jpg` <-> `img_001.ARW`), exact matching, prefix, and suffix matching.
-4. High-speed multi-threaded **Copy** or **Cut (Move)** into a **Destination Directory (Folder 3)**, leaving the target directory organized or trimmed.
-5. Safe **One-Click Undo Restoration** to revert all moved or copied files with zero data loss.
+Datasets often arrive with erratic, unordered, or camera-generated file names (e.g. `DSC0042.PNG`, `IMG_1.jpg`, `img_10.jpg`, `DJI_0088.JPG`). Aligning and training engines require consistent, deterministic sequence numbering (e.g. `frame_0001.png`, `frame_0002.png`). **Renamer** provides an intuitive, robust solution with:
+1. **Live Interactive Preview**: A reactive side-by-side table displaying the exact mapping of `Original Filename` ➔ `New Sequenced Name` in real-time as you type, before making any changes to files on disk.
+2. **Two Execution Modes**:
+   - **✏️ Overwrite in Input Folder (In-Place)**: Renames files directly inside the source directory using a collision-free two-phase atomic rename algorithm.
+   - **📋 Copy with New Names to Another Folder**: Preserves the original source files completely untouched, duplicating and sequencing the files into a specified destination directory.
+3. **Smart Sorting Modes**:
+   - **Human Natural Alphanumeric Sort**: Recognizes embedded numbers so `img_1.jpg`, `img_2.jpg`, ..., `img_10.jpg` are sorted correctly rather than standard ASCII (`img_1.jpg`, `img_10.jpg`, `img_2.jpg`).
+   - **Timeline Chronological Sort**: Orders files by filesystem creation/modification timestamps (`Oldest First` or `Newest First`), ideal for continuous video frame grabs or burst shots.
+   - **Reverse Natural Sort & Raw ASCII Sort**.
+4. **Flexible Sequence Configuration**:
+   - Base sequence name prompt (e.g. `frame`, `cam01`, `scan`).
+   - Configurable start index (e.g. `0`, `1`, `100`).
+   - Configurable zero-padding width (e.g. `4` for `0001`, `5` for `00001`, `0` for unpadded `1`).
+   - Delimiter selection (`_`, `-`, `.` or empty).
+   - Extension casing control (preserve, lowercase, uppercase).
+5. **One-Click Safe Undo Restoration**: Automatically logs a timestamped JSON manifest (`.renamer_manifest_<timestamp>.json`) in the folder, enabling instant, one-click reversal of in-place renames or destination copies.
+6. **Headless CLI (`renamer_cli.py`)**: Scriptable command-line interface with `--dry-run` support for terminal pipelines and automated batch jobs.
 
 ---
 
-### 2. Algorithmic Architecture & Speed-of-Light Design
+### 2. Algorithmic Architecture & Safe Two-Phase Renaming
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                         FileSift O(1) Algorithmic Architecture                         │
+│                        Renamer Safe In-Place Renaming Pipeline                         │
 │                                                                                        │
-│  [Source Reference] (Folder 1 / File List .txt/.csv/.json / Clipboard Paste)          │
+│  [Input Folder] (Unordered files: img_1.jpg, img_2.jpg, img_3.jpg...)                  │
 │          │                                                                             │
 │          ▼                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                    O(N) IN-MEMORY HASH INDEX GENERATION                          │  │
+│  │                     PHASE 0: LIVE REACTIVE PREVIEW ENGINE                        │  │
 │  │                                                                                  │  │
-│  │  • Exact Name Map : Dict[filename, List[Path]]                                    │  │
-│  │  • Stem Map       : Dict[base_stem, List[Path]] (ignores extensions!)            │  │
-│  │  • Case-Fold Index: Normalized lowercase lookups                                 │  │
+│  │  • Natural Alphanumeric Key: re.split(r'(\d+)', filename)                        │  │
+│  │  • Sub-millisecond formatting without touching disk                              │  │
+│  │  • Real-time validation against duplicate target stems                           │  │
 │  └────────────────────────────────────────┬─────────────────────────────────────────┘  │
 │                                           │                                            │
-│  [Target Folder 2]                        │                                            │
-│  • Fast os.scandir traversal              │                                            │
-│  • Native Win32 file metadata query       ▼                                            │
-│  ─────────────────────────────────> ┌───────────────────────────────────────────────┐  │
-│                                     │     O(1) SUB-MILLISECOND SET LOOKUP           │  │
-│                                     │                                               │  │
-│                                     │  • Evaluates 100,000+ files in < 15ms         │  │
-│                                     │  • Matches JPGs to .ARW, .DNG, .CR3, .EXR     │  │
-│                                     │  • Cross-Format & Invert Selection supported  │  │
-│                                     └───────────────────────┬───────────────────────┘  │
-│                                                             │                          │
-│                                                             ▼                          │
+│                      User Clicks 'Rename Files'                                        │
+│                                           ▼                                            │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                    HIGH-SPEED PARALLEL TRANSFER PIPELINE                         │  │
+│  │                     PHASE 1: ATOMIC TEMPORARY SENTINELS                          │  │
 │  │                                                                                  │  │
-│  │  • Same-drive Cut : Instantaneous O(1) metadata pointer swap (os.replace)        │  │
-│  │  • Cross-drive    : Multi-threaded ThreadPoolExecutor with chunked streaming     │  │
-│  │  • Audit Trail    : JSON transfer manifest for instant one-click Undo           │  │
+│  │  • Files renamed to: .tmp_renamer_<uuid>_<index>.tmp                             │  │
+│  │  • Eliminates cyclic collisions (e.g., img_1 -> img_0, img_2 -> img_1)           │  │
+│  │  • Prevents in-order overwrite clobbering on Windows filesystems                 │  │
+│  └────────────────────────────────────────┬─────────────────────────────────────────┘  │
+│                                           │                                            │
+│                                           ▼                                            │
+│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                     PHASE 2: FINAL SEQUENCE COMMIT                               │  │
+│  │                                                                                  │  │
+│  │  • Temp sentinels committed to final target names (e.g. frame_0001.jpg)          │  │
+│  │  • Timestamped manifest generated for 100% reversible Undo                       │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Sub-Millisecond $O(1)$ Hash Table Lookups**:
-   - Rather than naive $O(N \times M)$ double iteration, Target files are indexed in memory during `os.scandir` traversal.
-   - Looking up each source key executes in instantaneous $O(1)$ time, delivering complete matching in under **1 millisecond** for thousands of files.
-2. **Cross-Format Stem Matching (JPG <-> RAW/DNG/TIFF/EXR)**:
-   - Strips extensions and matches by semantic base stem (`photo_0001.jpg` automatically pairs with `photo_0001.ARW`, `photo_0001.DNG`, and `photo_0001.mask.png`).
-3. **High-Speed Transfer Pipeline**:
-   - When cutting/moving files on the same physical filesystem volume, `os.replace` executes in sub-microsecond time per file via native OS directory table pointer re-assignment.
-   - For cross-volume transfers, a parallel `ThreadPoolExecutor` saturates NVMe/SSD read/write bandwidth.
-4. **Safety & Manifest Audit**:
-   - Saves a `.filesift_manifest_<timestamp>.json` alongside every transfer operation.
-   - Enables full one-click **Undo Restoration**: reverts moved files back to their exact original relative subdirectories, or removes copied replicas from the destination.
+#### Why Two-Phase Renaming Matters
+In naive single-pass renaming, shifting filenames (such as renaming `img_1.jpg` to `img_0.jpg`, `img_2.jpg` to `img_1.jpg`) can fail or overwrite data because the target name already exists on disk. 
+**Renamer Engine** solves this by:
+1. Renaming all source files into temporary, cryptographically random sentinel filenames (`.tmp_renamer_<uuid>_<idx>`).
+2. Committing temporary sentinels into the final sequenced names.
+If any step encounters an unexpected error or lock, the engine automatically rolls back all intermediate operations.
 
 ---
 
-### 3. Interactive Studio Dialog (`file_sift_ui.py`)
+### 3. User Interface & Controls
 
-- **Three-Path Workflow Panel**:
-  - **Source Reference**: Folder, File List file, or direct clipboard text paste.
-  - **Target Search Folder**: Recursive subfolder scan toggle, extension filter (`*.*`, `*.arw;*.dng;*.cr3`, etc.).
-  - **Destination Folder**: Auto-suggests `<target>/sifted_files`.
-- **Matching Strategies**:
-  - `Stem Match` (default, cross-format).
-  - `Exact Filename Match`.
-  - `Prefix Match` & `Suffix Match`.
-  - `Case-Insensitive` & `Invert Selection` (extract files NOT in source list).
-  - `Preserve Subfolder Hierarchy` (mirrors relative directory trees in destination).
-- **Interactive Results Review Table**:
-  - Filter tabs: `🟢 Matched in Target`, `⚠️ Missing from Target`, `📋 All Target Files`.
-  - Real-time search filter and tally counter.
-  - Individual selection checkboxes (`Select All`, `Deselect All`, `Invert Checks`, Spacebar toggle).
-- **Execution & Undo Controls**:
-  - `📋 Copy to Destination` (keeps original files safe in Folder 2).
-  - `✂️ Cut / Move to Destination` (moves files into Folder 3, cleaning Folder 2).
-  - `↩️ Undo Last Transfer` (instant full restoration).
+The **Renamer Studio** dialog is accessed from:
+- Main Window: **Dataset Row** ➔ Click `🏷️ Renamer...`
+- Main Window: **Prepare Dropdown** ➔ Click `🏷️ Renamer (Sequence Naming)`
+- Main Window: **Tools Menu** ➔ Click `🏷️ Renamer: Sequence & Batch File Renamer...`
 
----
-
-### 4. Seamless UI Integration in Abu Align
-
-FileSift is accessible throughout the application:
-1. **Tools Menu**: `Tools ──> 📂 FileSift: High-Speed File Matching & Sifter...` in [`abu_align_gui.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/abu_align_gui.py).
-2. **Main Dataset Card**: Added dedicated `📂 FileSift...` button next to `💧 BlurDrop...` and `Browse folder` in [`desktop_ui.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/desktop_ui.py).
-3. **Prepare Input Menu**: `Prepare input ▾ ──> 📂 FileSift (Cross-Folder File Matcher)`.
+#### Studio Dialog Controls
+1. **Directories**:
+   - **Input Folder**: Select source directory containing images/files to rename.
+   - **Mode Selection**:
+     - `✏️ Overwrite in Input Folder (In-Place)`: Renames files in their current folder.
+     - `📋 Copy with New Names to Another Folder`: Duplicates files into an output directory.
+   - **Destination Folder**: Enabled when copy mode is active.
+2. **Sequence Settings**:
+   - **Base Sequence Name**: Prompt text (e.g. `frame`, `cam_rig`, `capture`).
+   - **Start Index**: Starting number (default `1`).
+   - **Zero Padding**: Digits width (default `4` ➔ `0001`, `0002`).
+   - **Delimiter**: Delimiter between base name and number (`_`, `-`, `.` or None).
+   - **Sort Order**: `Natural (1, 2, 10)`, `Chronological (Oldest First)`, `Chronological (Newest First)`, `Reverse Natural`, or `Raw ASCII`.
+   - **Extension Casing**: `Preserve`, `lowercase (.jpg)`, `UPPERCASE (.JPG)`.
+3. **Live Preview Table**:
+   - Side-by-side columns: `#`, `Original Filename`, `New Sequenced Name`, `Size`, `Status`.
+   - As you change any sequence setting, the table updates in real-time instantly without touching disk.
+4. **Execution & Restoration**:
+   - **Rename Files Button**: Executes in-place rename or destination copy with progress updates.
+   - **Undo Last Rename Button**: Reverts the last operation using the saved manifest.
 
 ---
 
-### 5. Headless Scriptable CLI (`file_sift_cli.py`)
+### 4. Headless CLI Usage
 
-FileSift can also be driven entirely from the command line in automated batch pipelines:
+Renamer is fully usable without a GUI via `renamer_cli.py`:
+
 ```bash
-# Dry run cross-format matching:
-python file_sift_cli.py --source /path/to/curated_jpgs --target /path/to/raw_drive --mode stem --action dry-run
+# Preview what the renaming will look like (Dry-Run, no disk writes):
+python renamer_cli.py --input "C:\Datasets\MyScans" --name "frame" --padding 4 --dry-run
 
-# Copy matching RAW files to destination preserving directory hierarchy:
-python file_sift_cli.py --source /path/to/curated_jpgs --target /path/to/raw_drive --dest /path/to/sifted_raws --mode stem --action copy
+# In-place sequence rename:
+python renamer_cli.py --input "C:\Datasets\MyScans" --name "frame" --padding 4 --start-index 1
+
+# Copy files with sequenced names to another folder:
+python renamer_cli.py --input "C:\Datasets\RawShots" --dest "C:\Datasets\Sequenced" --name "cam01" --copy
+
+# Sort chronologically by capture date:
+python renamer_cli.py --input "C:\Datasets\Burst" --name "burst" --sort date_asc
 ```
 
 ---
 
-### 6. Verification & Automated Test Suite Results
+### 5. Automated Verification & Test Results
 
-The comprehensive test suite in [`test_file_sift.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/test_file_sift.py) passed all 11 stages with 100% success:
+The automated test suite in [`test_renamer.py`](file:///c:/Users/USer/.gemini/antigravity/scratch/General%20Stuff%2001/abu%20align/test_renamer.py) passed all 8 stages with 100% success:
 
 ```
 ======================================================================
-RUNNING COMPREHENSIVE FILESIFT ENGINE, CLI & UI TEST SUITE
+RUNNING COMPREHENSIVE RENAMER ENGINE, CLI & UI TEST SUITE
 ======================================================================
-[1] Created synthetic multi-folder environment in:
-    C:\Users\USer\AppData\Local\Temp\filesift_test_...
-
-[2] Testing Source Ingestion (Folder, TXT, JSON, Text Parsing)...
-    [PASS] Ingestion from folder, txt, json, and comma-separated string verified.
-
-[3] Testing Target Folder Scanning & Indexing...
-    [PASS] Rapidly indexed 35 target files across nested directories.
-
-[4] Testing Sub-Millisecond Cross-Format Stem Matching (JPG <-> ARW/DNG)...
-[FileSift] Matched 25 files (0 unmatched) in 0.00ms
-    [PASS] Stem matching paired 20 source keys to 25 target files across .ARW, .DNG, and .JPG.
-
-[5] Testing Exact Filename Matching...
-[FileSift] Matched 5 files (15 unmatched) in 1.01ms
-    [PASS] Exact matching correctly isolated only identically extended files.
-
-[6] Testing Parallel Multi-Threaded COPY Transfer...
-[FileSift] Matched 25 files (0 unmatched) in 0.00ms
-[FileSift] Copy completed: 25 files (0.0 MB) in 0.03s (1.2 MB/s)
-    [PASS] Copied 25 files cleanly. Target folder remained 100% intact.
-
-[7] Testing Undo of COPY Action...
-    [PASS] Undo copy cleaned up all replicated files in destination.
-
-[8] Testing CUT (Move) Transfer...
-[FileSift] Matched 25 files (0 unmatched) in 1.00ms
-[FileSift] Cut completed: 25 files (0.0 MB) in 0.07s (0.5 MB/s)
-    [PASS] Cut cleanly moved 25 files into destination. Target left with only 10 unmatched files.
-
-[9] Testing One-Click UNDO Restoration of CUT Action...
-    [PASS] Full one-click undo successfully restored all moved files back to their exact original locations.
-
-[10] Testing FileSift Studio Dialog GUI Initialization...
-    [PASS] FileSift Studio Dialog instantiated cleanly with callbacks and bindings.
-
-[11] Testing FileSift Headless CLI in subprocess...
-    [PASS] Headless CLI verified with dry-run mode.
-
+[1] Created synthetic test folder with 9 files
+[2] Testing Natural Alphanumeric Sorting...
+    [PASS] Natural sort correctly ordered: ['img_1.jpg', 'img_2.jpg', 'img_3.jpg', 'img_10.jpg', 'img_20.jpg']
+[3] Testing Chronological Timeline Sorting...
+    [PASS] Chronological sorting ordered files by timeline timestamps.
+[4] Testing Live Preview Generation without Disk Modification...
+    [PASS] Preview generated in memory. Sample: DSC0042.PNG -> frame_0001.png
+[5] Testing Safe In-Place Renaming (Overwriting inside Input Folder)...
+    [PASS] Two-phase atomic rename resolved shift collisions with zero clobbering.
+    [PASS] Undo restored original filenames.
+[6] Testing Copy to Destination Folder with New Names...
+    [PASS] Copy mode generated 9 renamed files in destination while leaving source untouched.
+    [PASS] Undo copy cleanly removed replicas from destination.
+[7] Testing Renamer Studio Dialog GUI Initialization...
+    [PASS] Renamer Studio Dialog instantiated cleanly with callbacks and bindings.
+[8] Testing Renamer Headless CLI...
+    [PASS] Headless CLI verified with live dry-run preview.
 ======================================================================
-ALL FILESIFT TESTS PASSED PERFECTLY (100%)!
+ALL RENAMER ENGINE, CLI & UI TESTS PASSED PERFECTLY (100%)!
 ======================================================================
 ```
+
+---
+
+## Prior Release Notes
+
+### v0.1.2.7: FileSift Cross-Folder File Matcher & Sifter
+- High-speed file list and folder matching between two directories.
+- Cross-format stem matching (`.jpg` <-> `.ARW`, `.DNG`, `.CR3`).
+- Sub-millisecond $O(1)$ set and hash lookup engine.
+- Parallel multi-threaded Copy and Cut (Move) to 3rd destination folder.
+- Reversible one-click Undo restoration.
+
+### v0.1.2.6: BlurDrop Image Sharpness & Blur Filter
+- Hardware-accelerated Laplacian variance, FFT frequency analysis, and Tenengrad edge gradient evaluation.
+- Subject-aware depth-of-field mode (Bokeh invariance).
+- Real-time dynamic threshold slider reclassification.
+- Instant cut & move to curated blur folder with full one-click Undo.
