@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.2.9", 9, muted=True)
+    app.version_label = label(header, "v0.1.3.0", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -534,6 +534,7 @@ def build_workspace(app, tooltip):
     prepare_menu.add_command(label="💧 BlurDrop (Filter Blurry Images)", command=app._open_blur_drop_dialog)
     prepare_menu.add_command(label="📂 FileSift (Cross-Folder File Matcher)", command=app._open_file_sift_dialog)
     prepare_menu.add_command(label="🏷️ Renamer (Sequence Naming)", command=app._open_renamer_dialog)
+    prepare_menu.add_command(label="🎞️ Frame Picker (Decimate Frames)", command=app._open_frame_picker_dialog)
     prepare.configure(menu=prepare_menu)
     prepare.pack(side="right", padx=8)
 
@@ -635,6 +636,7 @@ def build_workspace(app, tooltip):
     button(row, "💧 BlurDrop...", app._open_blur_drop_dialog).pack(side="left", padx=(8, 0))
     button(row, "📂 FileSift...", app._open_file_sift_dialog).pack(side="left", padx=(8, 0))
     button(row, "🏷️ Renamer...", app._open_renamer_dialog).pack(side="left", padx=(8, 0))
+    button(row, "🎞️ Frame Picker...", app._open_frame_picker_dialog).pack(side="left", padx=(8, 0))
     app.profile_panel = tk.Frame(project, bg=SURFACE)
     def toggle_profiles():
         shown = bool(app.profile_panel.winfo_manager())
