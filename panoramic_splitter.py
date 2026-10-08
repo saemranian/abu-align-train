@@ -638,46 +638,31 @@ def compute_xcr_focal_length_35mm(fov_degrees: float) -> str:
     """
     Computes RealityScan 35mm equivalent focal length for square perspective crops.
     Formula: f = 18.0 / tan(fov_degrees / 2)
-    In accordance with RealityScan Rig Guide 06 and Epic Games Slovakia (pano2views).
+    Matches True_Schema_360_Camera_Rig: 114° -> 11.6893366775552
     """
     half_angle_rad = math.radians(fov_degrees / 2.0)
     focal_mm = 18.0 / math.tan(half_angle_rad)
-    return f"{focal_mm:.6f}"
+    return f"{focal_mm:.13f}"
 
 
-def write_realityscan_xmp_sidecar(image_path: Union[str, Path], fov_degrees: float = 114.0) -> Path:
+def write_realityscan_xmp_sidecar(
+    image_path: Union[str, Path],
+    fov_degrees: float = 114.0,
+    pose: Optional[Dict[str, Any]] = None,
+    pose_prior: str = "locked",
+) -> Path:
     """
-    Writes a RealityScan 2.2-compliant XMP sidecar locking synthetic intrinsics
-    while leaving extrinsics unconstrained for free bundle adjustment (RealityScan Rig Guide 06).
+    Writes a RealityScan 2.2-compliant XMP sidecar conforming to True_Schema_360_Camera_Rig.
     """
     img_p = Path(image_path)
-    focal_length_str = compute_xcr_focal_length_35mm(fov_degrees)
-    xmp_path = img_p.with_suffix(".xmp")
-
-    xmp_payload = (
-        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
-        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
-        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"\n'
-        '      xcr:Version="3"\n'
-        f'      xcr:FocalLength35mm="{focal_length_str}"\n'
-        '      xcr:Skew="0.000000"\n'
-        '      xcr:AspectRatio="1.000000"\n'
-        '      xcr:PrincipalPointU="0.000000"\n'
-        '      xcr:PrincipalPointV="0.000000"\n'
-        '      xcr:CalibrationPrior="exact"\n'
-        '      xcr:CalibrationGroup="1"\n'
-        '      xcr:DistortionGroup="1"\n'
-        '      xcr:DistortionModel="brown3"\n'
-        '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"\n'
-        '      xcr:InTexturing="1"\n'
-        '      xcr:InMeshing="1" />\n'
-        '  </rdf:RDF>\n'
-        '</x:xmpmeta>\n'
+    xmp_xml = generate_realityscan_xmp(
+        pose=pose,
+        fov_deg=fov_degrees,
+        pose_prior=pose_prior,
     )
-
+    xmp_path = img_p.with_suffix(".xmp")
     with open(xmp_path, "w", encoding="utf-8") as file:
-        file.write(xmp_payload)
-
+        file.write(xmp_xml)
     return xmp_path
 
 
@@ -685,68 +670,50 @@ def generate_realityscan_xmp(
     rig_id: Optional[str] = None,
     rig_instance_id: Optional[str] = None,
     pose: Dict[str, Any] = None,
-    pose_prior: str = "exact",
+    pose_prior: str = "locked",
     pos_accuracy: Tuple[float, float, float] = (0.3, 0.3, 0.3),
     rot_accuracy: Tuple[float, float, float] = (0.001, 0.001, 0.001),
     locked_pose_group: Optional[int] = None,
     cam_name: Optional[str] = None,
     camera_index: Optional[int] = None,
     fov_deg: Optional[float] = None,
-    include_extrinsics: bool = False,
+    aspect_ratio: float = 1.0,
+    **kwargs
 ) -> str:
     """
     Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
-    Follows official RealityScan schema: http://www.capturingreality.com/ns/xcr/1.1#
-    In accordance with RealityScan Rig Guide 06 and Epic Games Slovakia (pano2views):
-    - Locks synthetic pinhole camera intrinsics (exact focal length, zero distortion, centered principal point).
-    - Omits extrinsic tags (Rotation, Position, Rig, LockedPoseGroup) to prevent solver singularity,
-      component fragmentation, and coordinate pinning. RealityScan uses physical image overlap (114° FOV)
-      to resolve relative orientations and world trajectories automatically.
+    Follows official True_Schema_360_Camera_Rig:
+    - xcr:PosePrior="locked"
+    - xcr:Coordinates="absolute"
+    - xcr:FocalLength35mm (exact from FOV, e.g. 11.6893366775552 for 114°)
+    - xcr:DistortionModel="perspective"
+    - xcr:DistortionCoeficients="0 0 0 0 0 0"
+    - xcr:DistortionPrior="exact"
+    - xcr:Skew="0"
+    - xcr:AspectRatio="1"
+    - xcr:PrincipalPointU="0"
+    - xcr:PrincipalPointV="0"
+    - xcr:CalibrationPrior="exact"
+    - xcr:CalibrationGroup="1"
+    - xcr:DistortionGroup="1"
+    - xcr:InTexturing="1"
+    - xcr:InMeshing="1"
+    - <xcr:Rotation>{r_str}</xcr:Rotation>
+    - <xcr:Position>{pos_str}</xcr:Position>
     """
     if pose is None:
         pose = {}
 
-    if fov_deg is not None:
-        focal_length_str = compute_xcr_focal_length_35mm(fov_deg)
-    elif "fov_deg" in pose:
-        focal_length_str = compute_xcr_focal_length_35mm(float(pose["fov_deg"]))
-    elif "f_35mm" in pose:
-        focal_length_str = f"{float(pose['f_35mm']):.6f}"
-    else:
-        focal_length_str = "11.689337"
+    eff_fov = fov_deg if fov_deg is not None else float(pose.get("fov_deg", 114.0))
+    focal_length_str = compute_xcr_focal_length_35mm(eff_fov)
 
-    px = float(pose.get("px_norm", 0.0))
-    py = float(pose.get("py_norm", 0.0))
-
-    if not include_extrinsics:
-        xml_lines = [
-            '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
-            '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
-            '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
-            '      xcr:Version="3"',
-            f'      xcr:FocalLength35mm="{focal_length_str}"',
-            '      xcr:Skew="0.000000"',
-            '      xcr:AspectRatio="1.000000"',
-            f'      xcr:PrincipalPointU="{px:.6f}"',
-            f'      xcr:PrincipalPointV="{py:.6f}"',
-            '      xcr:CalibrationPrior="exact"',
-            '      xcr:CalibrationGroup="1"',
-            '      xcr:DistortionGroup="1"',
-            '      xcr:DistortionModel="brown3"',
-            '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"',
-            '      xcr:InTexturing="1"',
-            '      xcr:InMeshing="1" />',
-            '  </rdf:RDF>',
-            '</x:xmpmeta>',
-            ''
-        ]
-        return "\n".join(xml_lines)
-
-    # Optional extrinsics export (if explicitly requested)
+    # Metric position (X, Y, Alt)
     pos_x = float(pose.get("x", 0.0))
     pos_y = float(pose.get("y", 0.0))
     pos_z = float(pose.get("alt", 0.0))
+    pos_str = f"{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}"
 
+    # 3x3 Rotation matrix in RealityCapture convention
     R = pose.get("R")
     if R is not None and len(R) == 9:
         R_vals = [0.0 if abs(v) < 1e-12 else float(v) for v in R]
@@ -756,7 +723,12 @@ def generate_realityscan_xmp(
         R_arr = np.vstack([r_c, d_c, f_c])
         R_vals = [0.0 if abs(v) < 1e-12 else float(v) for v in R_arr.flatten()]
 
-    r_str = " ".join(f"{v:.8f}" for v in R_vals)
+    r_str = " ".join(f"{v:.16g}" if abs(v) >= 1e-12 else "0" for v in R_vals)
+
+    px = int(round(pose.get("px_norm", 0.0)))
+    py = int(round(pose.get("py_norm", 0.0)))
+    skew = "0"
+    aspect_str = "1" if abs(aspect_ratio - 1.0) < 1e-6 else f"{aspect_ratio:.6f}"
 
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
@@ -765,20 +737,21 @@ def generate_realityscan_xmp(
         '      xcr:Version="3"',
         f'      xcr:PosePrior="{pose_prior}"',
         '      xcr:Coordinates="absolute"',
-        f'      xcr:Rotation="{r_str}"',
         f'      xcr:FocalLength35mm="{focal_length_str}"',
-        '      xcr:DistortionModel="brown3"',
-        '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"',
-        '      xcr:Skew="0.000000"',
-        '      xcr:AspectRatio="1.000000"',
-        f'      xcr:PrincipalPointU="{px:.6f}"',
-        f'      xcr:PrincipalPointV="{py:.6f}"',
+        '      xcr:DistortionModel="perspective"',
+        '      xcr:DistortionCoeficients="0 0 0 0 0 0"',
+        '      xcr:DistortionPrior="exact"',
+        f'      xcr:Skew="{skew}"',
+        f'      xcr:AspectRatio="{aspect_str}"',
+        f'      xcr:PrincipalPointU="{px}"',
+        f'      xcr:PrincipalPointV="{py}"',
         '      xcr:CalibrationPrior="exact"',
         '      xcr:CalibrationGroup="1"',
         '      xcr:DistortionGroup="1"',
         '      xcr:InTexturing="1"',
         '      xcr:InMeshing="1">',
-        f'      <xcr:Position>{pos_x:.6f} {pos_y:.6f} {pos_z:.6f}</xcr:Position>',
+        f'      <xcr:Rotation>{r_str}</xcr:Rotation>',
+        f'      <xcr:Position>{pos_str}</xcr:Position>',
         '    </rdf:Description>',
         '  </rdf:RDF>',
         '</x:xmpmeta>',
@@ -1141,7 +1114,7 @@ def split_panorama_dataset(
     export_realityscan_csv: bool = True,
     export_xmp: bool = True,
     rig_id: str = "cubemap_rig",
-    xmp_pose_prior: str = "approximate",
+    xmp_pose_prior: str = "locked",
     xmp_pos_accuracy: Tuple[float, float, float] = (0.3, 0.3, 0.3),
     xmp_rot_accuracy: Tuple[float, float, float] = (0.001, 0.001, 0.001),
     subfolder_per_perspective: bool = True,
@@ -1816,7 +1789,7 @@ def main():
     parser.add_argument("--no-rc-csv", action="store_true", help="Skip exporting RealityScan / RealityCapture cameras.csv")
     parser.add_argument("--no-xmp", action="store_true", help="Skip exporting RealityScan / RealityCapture .xmp XML metadata sidecars")
     parser.add_argument("--rig-id", type=str, default="cubemap_rig", help="Rig identifier in XMP metadata (for RealityScan Rig Parser)")
-    parser.add_argument("--xmp-pose-prior", type=str, default="approximate", choices=["approximate", "locked", "exact", "initial"], help="PosePrior in XMP metadata")
+    parser.add_argument("--xmp-pose-prior", type=str, default="locked", choices=["approximate", "locked", "exact", "initial"], help="PosePrior in XMP metadata")
     parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
     parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
     parser.add_argument("--compound-rotations", action="store_true", help="Compound full 3D rotation instead of overriding orientations with clean modified rig angles")

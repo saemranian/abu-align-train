@@ -37,12 +37,18 @@ try:
     for xmp_f in xmp_files:
         with open(os.path.join(imgs_dir, xmp_f), encoding='utf-8') as f:
             content = f.read()
-        print(f'=== {xmp_f} ===\n{content.strip()}\n')
-        assert 'xcr:FocalLength35mm="11.689337"' in content
+        assert 'xcr:Version="3"' in content
+        assert 'xcr:PosePrior="locked"' in content
+        assert 'xcr:Coordinates="absolute"' in content
+        assert 'xcr:FocalLength35mm="11.6893366775552"' in content
+        assert 'xcr:DistortionModel="perspective"' in content
+        assert 'xcr:DistortionCoeficients="0 0 0 0 0 0"' in content
+        assert 'xcr:DistortionPrior="exact"' in content
         assert 'xcr:CalibrationPrior="exact"' in content
-        assert 'xcr:DistortionModel="brown3"' in content
-        assert 'xcr:Rotation' not in content
-        assert 'xcr:Position' not in content
+        assert '<xcr:Rotation>' in content
+        assert '<xcr:Position>' in content
+        assert '</xcr:Rotation>' in content
+        assert '</xcr:Position>' in content
         assert 'xcr:Rig' not in content
         assert 'xcr:LockedPoseGroup' not in content
 

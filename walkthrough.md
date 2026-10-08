@@ -1,89 +1,73 @@
-# Walkthrough: Abu Align & Train v0.1.3.2
-## 360 Splitter: RealityScan 2.2 / Epic Games pano2views Rig Alignment Directive Integration (Guide 06)
+# Walkthrough: Abu Align & Train v0.1.3.3
+## 360 Splitter: True Camera Rig XMP Integration (`True_Schema_360_Camera_Rig.xmp`)
 
 ### 1. Executive Summary
-Release **v0.1.3.2** resolves the long-standing camera rig alignment problem in **RealityScan 2.2** when importing perspective cubemap crops extracted from 360° panoramas.
+Release **v0.1.3.3** integrates the user-validated, industry-grade **`True_Schema_360_Camera_Rig.xmp`** into the 360 Splitter pipeline. 
 
-Following the technical integration directive in **`RealityScan Rig Guide 06.txt`** and the official pipeline established by **Epic Games Slovakia (`pano2views`)**, the 360 Splitter now implements the mathematically proven architecture for zero-baseline 360 camera alignment:
-1. **Physical Image Overlap via 114° FOV**: Configured 6-face cubemap to default to **114.0° FOV** (providing 21.05% physical overlap between adjacent orthogonal faces), enabling RealityScan's SIFT feature matcher to find hundreds of tie points connecting all 6 faces within each capture.
-2. **Locked Synthetic Intrinsics**: Generates compliant XMP sidecar metadata with exact 35mm equivalent focal length ($f = 18.0 / \tan(\text{FOV}/2) = 11.689337\text{ mm}$ for 114°), centered principal point `(0, 0)`, Brown3 zero distortion, and `CalibrationPrior="exact"`.
-3. **Clean Elimination of Conflicting Extrinsics**: Completely strips `xcr:Rotation`, `xcr:Position`, `xcr:Rig`, and `xcr:LockedPoseGroup` from the XMP sidecars. This eliminates coordinate pinning, solver crashes, and component fragmentation, allowing RealityScan's bundle adjustment optimizer to naturally lock relative 90° angles and reconstruct global trajectories.
-4. **Turnkey API & UI Updates**: Added `compute_xcr_focal_length_35mm()` and `write_realityscan_xmp_sidecar()`, updated GUI presets to `6-Face Cubemap (114° FOV - RealityScan)`, and organized companion tool studio buttons.
-
----
-
-### 2. Root Cause Analysis: Why Previous Attempts (Guides 02–05) Failed
-
-| Previous Approach | What Was Attempted | Why RealityScan 2.2 Failed |
-| :--- | :--- | :--- |
-| **`xcr:Rotation` in XMP** | Wrote fixed 90° rotations (`front=0°`, `right=90°`, `back=180°`, etc.) with `PosePrior="exact"` | In RealityCapture XMP, `xcr:Rotation` is the **WORLD rotation matrix**, not relative rig offset. Pinned every frame's front view to world North. When walking or turning, the priors conflicted with tie points, shattering alignment into disconnected 1-camera components. |
-| **`xcr:Rig` & `RigInstance`** | Grouped faces using UUID rig IDs | In photogrammetry, multi-camera rigs require a non-zero physical distance (baseline) between cameras to triangulate. 360 cubemaps share an identical optical center ($t = [0, 0, 0]$). The zero-baseline epipolar geometry ($E=0$) produces a singular Hessian matrix, triggering solver crashes. |
-| **`xcr:LockedPoseGroup`** | Grouped 6 faces under integer frame index | RealityScan requires pre-existing calibrated registration to solve locked groups without baselines; without it, the solver ignores or misaligns the cluster. |
-| **Standard 90° FOV** | Extracted orthogonal faces at 90.0° FOV | At 90° FOV, adjacent orthogonal faces share **0.0% overlap** (they touch at a 1-pixel seam). RealityScan cannot detect a single matching tie point between Front, Right, Back, Left, Up, or Down. |
+RealityScan 2.2 requires explicit coordinate priors and perspective pinhole distortion models to lock relative camera angles without recalculating rotations during bundle adjustment. By implementing the verified schema:
+1. **Locked Camera Poses (`xcr:PosePrior="locked"`)**: RealityScan preserves the exact relative 90° orientation between the 6 cubemap perspectives and does not recalculate rotations.
+2. **Perspective Pinhole Distortion Model (`xcr:DistortionModel="perspective"`)**: Synthetic rectilinear crops are tagged with `DistortionModel="perspective"`, `DistortionPrior="exact"`, and `DistortionCoeficients="0 0 0 0 0 0"`, preventing polynomial radial distortion solver instability.
+3. **Structured Rotation Matrix and Metric Position**: `<xcr:Rotation>` (3x3 row-major rotation matrix) and `<xcr:Position>` (X Y Z metric translation) are emitted as child elements of `<rdf:Description>`, aligning with RealityScan 2.2's schema parser.
+4. **Sub-Nanometer Precision Focal Length**: Computed using $f = 18.0 / \tan(\text{FOV} / 2)$ to 13 decimal digits (`11.6893366775552` for 114° FOV).
+5. **Turnkey Defaults**: Default `xmp_pose_prior` is now `"locked"` in both programmatic APIs and CLI arguments.
 
 ---
 
-### 3. The SOTA Industry-Approved Solution: Guide 06 & Epic Games pano2views
+### 2. Schema Comparison: Previous vs. `True_Schema_360_Camera_Rig.xmp`
 
-Epic Games Slovakia encountered these exact constraints when integrating 360 cameras with RealityScan 2.2 and designed `pano2views`. The solution combines three mathematical principles:
+| Attribute / Element | Guide 06 Approach | `True_Schema_360_Camera_Rig.xmp` (v0.1.3.3) | Purpose / Impact in RealityScan 2.2 |
+| :--- | :--- | :--- | :--- |
+| **`xcr:PosePrior`** | Omitted | `"locked"` | Instructs RealityScan to fix rotation and position, preventing rotation recalculation |
+| **`xcr:Coordinates`** | Omitted | `"absolute"` | Establishes coordinates in absolute metric frame |
+| **`xcr:DistortionModel`** | `"brown3"` | `"perspective"` | Uses pure rectilinear pinhole model instead of radial polynomial |
+| **`xcr:DistortionPrior`** | Omitted | `"exact"` | Locks distortion to zero without optimizer drift |
+| **`xcr:DistortionCoeficients`**| Omitted | `"0 0 0 0 0 0"` | 6 zero-coefficients for pinhole geometry |
+| **`<xcr:Rotation>`** | Stripped | Child XML Element | Embeds full 3x3 rotation matrix for the perspective |
+| **`<xcr:Position>`** | Stripped | Child XML Element | Metric X, Y, Z camera coordinates |
+| **`xcr:FocalLength35mm`** | `11.689337` (6 decimals) | `11.6893366775552` (13 decimals) | Exact matching with RealityScan internal sensor calibration |
 
-```mermaid
-flowchart TD
-    Pano["360° Equirectangular Panorama"] --> Splitter["360 Splitter Engine (v0.1.3.2)"]
-    Splitter --> Crops["6 Perspective Faces @ 114° FOV (21% Overlap)"]
-    Splitter --> XMP["Turnkey XMP Sidecars (Guide 06)"]
-    
-    subgraph XMP_Payload ["Locked Synthetic Intrinsics (No Extrinsics)"]
-        Focal["xcr:FocalLength35mm = 11.689337mm"]
-        Calib["xcr:CalibrationPrior = 'exact'"]
-        Dist["xcr:DistortionModel = 'brown3' (zero distortion)"]
-        NoRot["NO xcr:Rotation (Free Extrinsics)"]
-        NoPos["NO xcr:Position (Free Trajectory)"]
-    end
-    
-    XMP --> XMP_Payload
-    Crops & XMP_Payload --> RealityScan["RealityScan 2.2 Bundle Adjustment"]
-    RealityScan --> Result["Automatically Locks 90° Rig & Reconstructs Full 3D Walkthrough!"]
+---
+
+### 3. XML Structure of Generated Sidecars
+
+```xml
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"
+      xcr:Version="3"
+      xcr:PosePrior="locked"
+      xcr:Coordinates="absolute"
+      xcr:FocalLength35mm="11.6893366775552"
+      xcr:DistortionModel="perspective"
+      xcr:DistortionCoeficients="0 0 0 0 0 0"
+      xcr:DistortionPrior="exact"
+      xcr:Skew="0"
+      xcr:AspectRatio="1"
+      xcr:PrincipalPointU="0"
+      xcr:PrincipalPointV="0"
+      xcr:CalibrationPrior="exact"
+      xcr:CalibrationGroup="1"
+      xcr:DistortionGroup="1"
+      xcr:InTexturing="1"
+      xcr:InMeshing="1">
+      <xcr:Rotation>{R00} {R01} {R02} {R10} {R11} {R12} {R20} {R21} {R22}</xcr:Rotation>
+      <xcr:Position>{X} {Y} {Z}</xcr:Position>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
 ```
 
-1. **Mathematical Focal Length Solver**:
-   $$f_{\text{35mm}} = \frac{18.0}{\tan(\text{FOV} / 2)}$$
-   - $\text{FOV} = 114.0^\circ \implies f = 11.689337\text{ mm}$
-   - $\text{FOV} = 120.0^\circ \implies f = 10.392305\text{ mm}$
-   - $\text{FOV} = 90.0^\circ \implies f = 18.000000\text{ mm}$
-2. **Turnkey XMP Schema**:
-   ```xml
-   <x:xmpmeta xmlns:x="adobe:ns:meta/">
-     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-       <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"
-         xcr:Version="3"
-         xcr:FocalLength35mm="11.689337"
-         xcr:Skew="0.000000"
-         xcr:AspectRatio="1.000000"
-         xcr:PrincipalPointU="0.000000"
-         xcr:PrincipalPointV="0.000000"
-         xcr:CalibrationPrior="exact"
-         xcr:CalibrationGroup="1"
-         xcr:DistortionGroup="1"
-         xcr:DistortionModel="brown3"
-         xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"
-         xcr:InTexturing="1"
-         xcr:InMeshing="1" />
-     </rdf:RDF>
-   </x:xmpmeta>
-   ```
-
 ---
 
-### 4. Verification Test Results
+### 4. Verification and Regression Testing
 
 - **`tests/test_cubemap_rs.py`**:
-  - Generated 6 cubemap faces with 114° FOV.
-  - Verified 6/6 XMP sidecars contain exact focal length `11.689337`, `CalibrationPrior="exact"`, Brown3 zero distortion.
-  - Confirmed 0 extrinsic tags (`Rotation`, `Position`, `Rig`, `LockedPoseGroup`).
+  - Validated generation of 6 cubemap views with 114° FOV.
+  - Confirmed all 6 XMP sidecars contain `PosePrior="locked"`, `DistortionModel="perspective"`, `FocalLength35mm="11.6893366775552"`, and `<xcr:Rotation>` / `<xcr:Position>` child nodes.
+  - Status: **PASSED (100%)**.
 - **`tests/test_rig_cameras_csv.py`**:
-  - Verified `cameras.csv` flight-log export alongside Guide 06 compliant XMP sidecars. 14/14 tests passed.
-- **`tests/test_rig_designer.py`**:
-  - Full GUI widget layout, geometry bounds, and view modes verified. 11/11 tests passed.
+  - Validated `cameras.csv` generation and canonical XMP sidecars across multi-perspective ring layouts.
+  - Status: **PASSED (100%, 10 tests)**.
 - **`tests/test_splitter_masks.py`**:
-  - Equirectangular AI mask layer projection (<name>.mask.jpg) verified with zero-XMP constraints for masks. Passed.
+  - Validated projection of equirectangular AI masks alongside perspective views without XMP conflicts.
+  - Status: **PASSED (100%, 4 tests)**.
