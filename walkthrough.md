@@ -1,73 +1,53 @@
-# Walkthrough: Abu Align & Train v0.1.3.3
-## 360 Splitter: True Camera Rig XMP Integration (`True_Schema_360_Camera_Rig.xmp`)
+# Walkthrough: Abu Align & Train v0.1.3.4
+## 360 Splitter: Up/Down Zenith/Nadir Inversion Fix & Full Dataset True XMP Application
 
 ### 1. Executive Summary
-Release **v0.1.3.3** integrates the user-validated, industry-grade **`True_Schema_360_Camera_Rig.xmp`** into the 360 Splitter pipeline. 
-
-RealityScan 2.2 requires explicit coordinate priors and perspective pinhole distortion models to lock relative camera angles without recalculating rotations during bundle adjustment. By implementing the verified schema:
-1. **Locked Camera Poses (`xcr:PosePrior="locked"`)**: RealityScan preserves the exact relative 90° orientation between the 6 cubemap perspectives and does not recalculate rotations.
-2. **Perspective Pinhole Distortion Model (`xcr:DistortionModel="perspective"`)**: Synthetic rectilinear crops are tagged with `DistortionModel="perspective"`, `DistortionPrior="exact"`, and `DistortionCoeficients="0 0 0 0 0 0"`, preventing polynomial radial distortion solver instability.
-3. **Structured Rotation Matrix and Metric Position**: `<xcr:Rotation>` (3x3 row-major rotation matrix) and `<xcr:Position>` (X Y Z metric translation) are emitted as child elements of `<rdf:Description>`, aligning with RealityScan 2.2's schema parser.
-4. **Sub-Nanometer Precision Focal Length**: Computed using $f = 18.0 / \tan(\text{FOV} / 2)$ to 13 decimal digits (`11.6893366775552` for 114° FOV).
-5. **Turnkey Defaults**: Default `xmp_pose_prior` is now `"locked"` in both programmatic APIs and CLI arguments.
+Release **v0.1.3.4** addresses the root causes identified in the GPT Camera Rig audit (`CAMERA_RIG_README.md`), fixes a fundamental pitch sign inversion in the 360 Splitter's equirectangular remapper, and updates the entire 3,558-image dataset at:
+`C:\Users\USer\Documents\Works\Clients\Schemata\Container_03\Insta360\Insta Exports\VID_20260902_094505_00_003_frames\CC\Masked\pinhole_rig\perspectives`
 
 ---
 
-### 2. Schema Comparison: Previous vs. `True_Schema_360_Camera_Rig.xmp`
+### 2. Issues Discovered in the Audit & GPT Solutions
 
-| Attribute / Element | Guide 06 Approach | `True_Schema_360_Camera_Rig.xmp` (v0.1.3.3) | Purpose / Impact in RealityScan 2.2 |
+#### Issue 1: Pitch Inversion in Equirectangular Remapping (`up` = floor, `down` = ceiling)
+- **Root Cause**: In `panoramic_splitter.py`, the rotation matrix generator `euler_to_rotation_matrix()` had inverted `sin(pitch)` signs in `Rx`. When sampling rays via `rays_cam @ R.T`, a positive pitch ($+90^\circ$ for `up`) rotated camera forward vector into $-Y$ (latitude $-90^\circ$, nadir/floor), while negative pitch ($-90^\circ$ for `down`) rotated into $+Y$ (latitude $+90^\circ$, zenith/ceiling).
+- Meanwhile, `basis()` in the metadata compounding code treated positive pitch as pointing up ($+Z$). As a result:
+  - The image saved as `up.jpg` contained the **floor/tripod**, but its metadata claimed it looked at the **ceiling**.
+  - The image saved as `down.jpg` contained the **ceiling**, but its metadata claimed it looked at the **floor**.
+- **RealityScan Impact**: When SIFT tie points on the floor matched with the bottom of `front.jpg` and `up.jpg`, RealityScan looked at `up.jpg`'s metadata (pointing at the ceiling) and flagged massive reprojection errors or shattered the component.
+- **GPT Correction**: GPT discovered this via pixel feature correspondences and swapped the base orientation matrices of `up` and `down` for the existing image files.
+- **Code Fix in `panoramic_splitter.py`**: Fixed `Rx` in `euler_to_rotation_matrix` so that $+90^\circ$ pitches upward to $+Y$ (Zenith/Ceiling) and $-90^\circ$ pitches downward to $-Y$ (Nadir/Floor), ensuring all future extractions are physically and geometrically coherent.
+
+#### Issue 2: Uniform World Orientations vs. True Trajectory Orientation
+- **Root Cause**: The original split had `override_orientations_from_rig = True`, which discarded the panorama's actual heading (`yaw`, `pitch`, `roll`) from the 360DVO trajectory and stamped every single station with identity (`yaw=0.0000`, `pitch=90.0000`). With `PosePrior="locked"`, this told RealityScan that the camera never rotated while walking.
+- **GPT Correction**: GPT estimated each station's true orientation $Q_{\text{station}}$ from image features, then applied $R_{\text{face}} = B_{\text{face}} @ Q_{\text{station}}$.
+- **Dataset Update**: For the 36 stations (Mask042 to Mask077), the verified GPT solutions were preserved. For the remaining 557 stations (Mask000 to Mask041, Mask078 to Mask592), station rotations $Q = [r, f, u]^T$ were computed from `sparse_01_360dvo\Postshot_RealityCapture\cameras.csv`, ensuring every station reflects its true heading and orientation.
+
+#### Issue 3: Schema Conformance to `True_Schema_360_Camera_Rig.xmp`
+- Cleanly generated all 3,558 XMP sidecars with:
+  - `xcr:PosePrior="locked"`
+  - `xcr:DistortionModel="perspective"`
+  - `xcr:DistortionPrior="exact"`
+  - `xcr:DistortionCoeficients="0 0 0 0 0 0"`
+  - `xcr:FocalLength35mm="11.6893366775552"` (13 decimal places)
+  - `<xcr:Rotation>` and `<xcr:Position>` child nodes
+  - Full removal of `Rig`, `RigInstance`, `ComponentId`, and `LockedPoseGroup`.
+
+---
+
+### 3. Dataset Update Summary
+
+| Action | Path / Target | Count | Status |
 | :--- | :--- | :--- | :--- |
-| **`xcr:PosePrior`** | Omitted | `"locked"` | Instructs RealityScan to fix rotation and position, preventing rotation recalculation |
-| **`xcr:Coordinates`** | Omitted | `"absolute"` | Establishes coordinates in absolute metric frame |
-| **`xcr:DistortionModel`** | `"brown3"` | `"perspective"` | Uses pure rectilinear pinhole model instead of radial polynomial |
-| **`xcr:DistortionPrior`** | Omitted | `"exact"` | Locks distortion to zero without optimizer drift |
-| **`xcr:DistortionCoeficients`**| Omitted | `"0 0 0 0 0 0"` | 6 zero-coefficients for pinhole geometry |
-| **`<xcr:Rotation>`** | Stripped | Child XML Element | Embeds full 3x3 rotation matrix for the perspective |
-| **`<xcr:Position>`** | Stripped | Child XML Element | Metric X, Y, Z camera coordinates |
-| **`xcr:FocalLength35mm`** | `11.689337` (6 decimals) | `11.6893366775552` (13 decimals) | Exact matching with RealityScan internal sensor calibration |
+| **Backup** | `pinhole_rig\Original_XMP_Backup_20261009_001000` | 3,558 XMP files | **Backed up safely** |
+| **GPT Verified Copy** | Stations `Container1_Mask042` to `Mask077` | 216 XMP files (36 stations) | **Copied & verified** |
+| **Trajectory Update** | Stations `Mask000`–`Mask041` & `Mask078`–`Mask592` | 3,342 XMP files (557 stations) | **Generated & applied** |
+| **Total Sidecars** | `perspectives/` (`front`, `back`, `left`, `right`, `up`, `down`) | **3,558 XMP files** | **100% Complete** |
 
 ---
 
-### 3. XML Structure of Generated Sidecars
+### 4. Verification and Regression Tests
 
-```xml
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"
-      xcr:Version="3"
-      xcr:PosePrior="locked"
-      xcr:Coordinates="absolute"
-      xcr:FocalLength35mm="11.6893366775552"
-      xcr:DistortionModel="perspective"
-      xcr:DistortionCoeficients="0 0 0 0 0 0"
-      xcr:DistortionPrior="exact"
-      xcr:Skew="0"
-      xcr:AspectRatio="1"
-      xcr:PrincipalPointU="0"
-      xcr:PrincipalPointV="0"
-      xcr:CalibrationPrior="exact"
-      xcr:CalibrationGroup="1"
-      xcr:DistortionGroup="1"
-      xcr:InTexturing="1"
-      xcr:InMeshing="1">
-      <xcr:Rotation>{R00} {R01} {R02} {R10} {R11} {R12} {R20} {R21} {R22}</xcr:Rotation>
-      <xcr:Position>{X} {Y} {Z}</xcr:Position>
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>
-```
-
----
-
-### 4. Verification and Regression Testing
-
-- **`tests/test_cubemap_rs.py`**:
-  - Validated generation of 6 cubemap views with 114° FOV.
-  - Confirmed all 6 XMP sidecars contain `PosePrior="locked"`, `DistortionModel="perspective"`, `FocalLength35mm="11.6893366775552"`, and `<xcr:Rotation>` / `<xcr:Position>` child nodes.
-  - Status: **PASSED (100%)**.
-- **`tests/test_rig_cameras_csv.py`**:
-  - Validated `cameras.csv` generation and canonical XMP sidecars across multi-perspective ring layouts.
-  - Status: **PASSED (100%, 10 tests)**.
-- **`tests/test_splitter_masks.py`**:
-  - Validated projection of equirectangular AI masks alongside perspective views without XMP conflicts.
-  - Status: **PASSED (100%, 4 tests)**.
+- `tests/test_cubemap_rs.py`: **PASSED (100%)**
+- `tests/test_rig_cameras_csv.py`: **PASSED (100%, 10 tests)**
+- `tests/test_splitter_masks.py`: **PASSED (100%, 4 tests)**

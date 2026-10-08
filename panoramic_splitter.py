@@ -259,11 +259,11 @@ def euler_to_rotation_matrix(yaw_deg: float, pitch_deg: float, roll_deg: float =
         [-math.sin(yaw), 0.0, math.cos(yaw)]
     ], dtype=np.float64)
 
-    # Rx (pitch around X axis)
+    # Rx (pitch around X axis): positive pitch pitches up towards +Y (Zenith)
     Rx = np.array([
         [1.0, 0.0,            0.0          ],
-        [0.0, math.cos(pitch), -math.sin(pitch)],
-        [0.0, math.sin(pitch),  math.cos(pitch)]
+        [0.0, math.cos(pitch),  math.sin(pitch)],
+        [0.0, -math.sin(pitch), math.cos(pitch)]
     ], dtype=np.float64)
 
     # Rz (roll around Z axis)
