@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.3.1
+Abu Align & Train Version 0.1.3.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.3.1 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.3.2 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2497,9 +2497,11 @@ class AbuAlignApp:
 
         tk.Button(r4, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#db2777", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
         tk.Button(r4, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_mask_folder).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(r4, text="🎭 AI Masker (SAM 2)...", font=("Segoe UI", 8, "bold"), bg=self.accent_color, fg=self.bg_dark, relief=tk.FLAT, padx=6, command=lambda: self._open_sam2_masker_dialog(in_var.get())).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(r4, text="💧 BlurDrop...", font=("Segoe UI", 8, "bold"), bg="#0284c7", fg="#ffffff", relief=tk.FLAT, padx=6, command=lambda: self._open_blur_drop_dialog(in_var.get())).pack(side=tk.LEFT, padx=(0, 3))
-        tk.Button(r4, text="🎞️ Frame Picker...", font=("Segoe UI", 8, "bold"), bg="#0f766e", fg="#ffffff", relief=tk.FLAT, padx=6, command=lambda: self._open_frame_picker_dialog(in_var.get())).pack(side=tk.LEFT)
+        r4_tools = tk.Frame(paths_card, bg=self.panel_bg)
+        r4_tools.pack(fill=tk.X, pady=(1, 2))
+        tk.Button(r4_tools, text="🎭 AI Masker", font=("Segoe UI", 8, "bold"), bg=self.accent_purple, fg=self.bg_dark, relief=tk.FLAT, padx=6, command=lambda: self._open_sam2_masker_dialog(in_var.get())).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(r4_tools, text="💧 BlurDrop", font=("Segoe UI", 8, "bold"), bg="#0284c7", fg="#ffffff", relief=tk.FLAT, padx=6, command=lambda: self._open_blur_drop_dialog(in_var.get())).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(r4_tools, text="🎞️ Frame Picker", font=("Segoe UI", 8, "bold"), bg="#0f766e", fg="#ffffff", relief=tk.FLAT, padx=6, command=lambda: self._open_frame_picker_dialog(in_var.get())).pack(side=tk.LEFT)
 
         # Mask Telemetry Badge
         mask_badge_lbl = tk.Label(
@@ -2576,7 +2578,7 @@ class AbuAlignApp:
 
         mode_options = [
             ("ring", "Horizontal Ring (Equatorial)"),
-            ("cubemap", "6-Face Cubemap (90° FOV)"),
+            ("cubemap", "6-Face Cubemap (114° FOV - RealityScan)"),
             ("dome", "Spherical Dome (Multi-Tier)"),
             ("fibonacci", "Fibonacci Sphere (Golden Spiral)"),
         ]
@@ -2819,7 +2821,7 @@ class AbuAlignApp:
 
         xmp_chk = tk.Checkbutton(
             o5,
-            text="Export .xmp Rig sidecars (RealityScan Rig Parser)",
+            text="Export .xmp sidecars (RealityScan 2.2 / pano2views)",
             variable=export_xmp_var,
             font=("Segoe UI", 8, "bold"),
             fg="#38bdf8",
@@ -2828,7 +2830,7 @@ class AbuAlignApp:
             activebackground=self.panel_bg
         )
         xmp_chk.pack(side=tk.LEFT)
-        ToolTip(xmp_chk, "Generates an .xmp XML sidecar for every image (e.g. image.jpg.xmp and image.xmp) with RigId, RigInstanceId, 35mm focal equivalent, locked intrinsics, and metric trajectory position for RealityScan's Rig Parser.")
+        ToolTip(xmp_chk, "Generates an .xmp XML sidecar for every image compliant with RealityScan 2.2 / Epic Games pano2views (locking synthetic pinhole intrinsics, Brown3 zero-distortion, exact 35mm focal equivalent, and unconstrained extrinsics for automated bundle adjustment alignment).")
 
         # -----------------------------------------------------------------
         # RIGHT COLUMN: Interactive Visualizer Canvas & Telemetry Dashboard
@@ -3251,9 +3253,9 @@ class AbuAlignApp:
                     cams_lbl.config(text="Cube Faces (Fixed):")
                     cams_scale.config(state=tk.DISABLED)
                     num_cams_var.set(6)
-                    if last_rig_mode[0] != "cubemap" and (fov_v < 60.0 or fov_v > 135.0):
-                        fov_var.set(90.0)
-                        fov_v = 90.0
+                    if last_rig_mode[0] != "cubemap":
+                        fov_var.set(114.0)
+                        fov_v = 114.0
                 elif m == "fibonacci":
                     dome_frame.pack_forget()
                     cams_lbl.config(text="Sphere Cams (N):")
@@ -4608,7 +4610,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.3.1 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.3.2 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5167,7 +5169,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.3.1 - {title}")
+        doc_win.title(f"Abu Align v0.1.3.2 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5794,7 +5796,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.3.1\n"
+            "Abu Align & Train - Version 0.1.3.2\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

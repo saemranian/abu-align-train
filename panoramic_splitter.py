@@ -122,8 +122,11 @@ def calculate_vertical_fov(fov_h_deg: float, width: int, height: int) -> float:
 # ======================================================================
 # Format per camera: (name, yaw_deg, pitch_deg, roll_deg, fov_deg)
 
-def get_cubemap_rig(fov_deg: float = 90.0) -> List[Tuple[str, float, float, float, float]]:
-    """Standard 6-face orthogonal cubemap rig (Front, Right, Back, Left, Zenith, Nadir)."""
+def get_cubemap_rig(fov_deg: float = 114.0) -> List[Tuple[str, float, float, float, float]]:
+    """
+    Standard 6-face orthogonal cubemap rig (Front, Right, Back, Left, Zenith, Nadir).
+    Default 114.0° FOV provides 21.05% overlap between adjacent faces for RealityScan 2.2 / pano2views.
+    """
     return [
         ("front",  0.0,    0.0,   0.0, fov_deg),  # +Z
         ("right",  90.0,   0.0,   0.0, fov_deg),  # +X
@@ -591,6 +594,7 @@ def compound_realitycapture_pose(
         "pitch": pitch,
         "roll": roll,
         "f_35mm": f_35mm,
+        "fov_deg": fov_deg,
         "px_norm": 0.0,
         "py_norm": 0.0,
         "k1": float(k1),
@@ -630,6 +634,53 @@ def extract_frame_index(name: str, fallback_idx: int = 0) -> int:
     return fallback_idx
 
 
+def compute_xcr_focal_length_35mm(fov_degrees: float) -> str:
+    """
+    Computes RealityScan 35mm equivalent focal length for square perspective crops.
+    Formula: f = 18.0 / tan(fov_degrees / 2)
+    In accordance with RealityScan Rig Guide 06 and Epic Games Slovakia (pano2views).
+    """
+    half_angle_rad = math.radians(fov_degrees / 2.0)
+    focal_mm = 18.0 / math.tan(half_angle_rad)
+    return f"{focal_mm:.6f}"
+
+
+def write_realityscan_xmp_sidecar(image_path: Union[str, Path], fov_degrees: float = 114.0) -> Path:
+    """
+    Writes a RealityScan 2.2-compliant XMP sidecar locking synthetic intrinsics
+    while leaving extrinsics unconstrained for free bundle adjustment (RealityScan Rig Guide 06).
+    """
+    img_p = Path(image_path)
+    focal_length_str = compute_xcr_focal_length_35mm(fov_degrees)
+    xmp_path = img_p.with_suffix(".xmp")
+
+    xmp_payload = (
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"\n'
+        '      xcr:Version="3"\n'
+        f'      xcr:FocalLength35mm="{focal_length_str}"\n'
+        '      xcr:Skew="0.000000"\n'
+        '      xcr:AspectRatio="1.000000"\n'
+        '      xcr:PrincipalPointU="0.000000"\n'
+        '      xcr:PrincipalPointV="0.000000"\n'
+        '      xcr:CalibrationPrior="exact"\n'
+        '      xcr:CalibrationGroup="1"\n'
+        '      xcr:DistortionGroup="1"\n'
+        '      xcr:DistortionModel="brown3"\n'
+        '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"\n'
+        '      xcr:InTexturing="1"\n'
+        '      xcr:InMeshing="1" />\n'
+        '  </rdf:RDF>\n'
+        '</x:xmpmeta>\n'
+    )
+
+    with open(xmp_path, "w", encoding="utf-8") as file:
+        file.write(xmp_payload)
+
+    return xmp_path
+
+
 def generate_realityscan_xmp(
     rig_id: Optional[str] = None,
     rig_instance_id: Optional[str] = None,
@@ -640,19 +691,58 @@ def generate_realityscan_xmp(
     locked_pose_group: Optional[int] = None,
     cam_name: Optional[str] = None,
     camera_index: Optional[int] = None,
+    fov_deg: Optional[float] = None,
+    include_extrinsics: bool = False,
 ) -> str:
     """
     Generates standard RealityScan 2.2 / RealityCapture compliant XMP metadata XML string.
     Follows official RealityScan schema: http://www.capturingreality.com/ns/xcr/1.1#
-    Uses verified, crash-free camera priors:
-    - xcr:PosePrior="exact" (natively recognized by RealityScan 2.2 enum parser)
-    - xcr:Coordinates="absolute"
-    - xcr:CalibrationPrior="locked"
-    - Unified CalibrationGroup="1" and DistortionGroup="1"
-    - Omit uncalibrated hardware rig tags (xcr:Rig, xcr:RigInstance) to avoid singular Hessian matrix crashes
+    In accordance with RealityScan Rig Guide 06 and Epic Games Slovakia (pano2views):
+    - Locks synthetic pinhole camera intrinsics (exact focal length, zero distortion, centered principal point).
+    - Omits extrinsic tags (Rotation, Position, Rig, LockedPoseGroup) to prevent solver singularity,
+      component fragmentation, and coordinate pinning. RealityScan uses physical image overlap (114° FOV)
+      to resolve relative orientations and world trajectories automatically.
     """
     if pose is None:
         pose = {}
+
+    if fov_deg is not None:
+        focal_length_str = compute_xcr_focal_length_35mm(fov_deg)
+    elif "fov_deg" in pose:
+        focal_length_str = compute_xcr_focal_length_35mm(float(pose["fov_deg"]))
+    elif "f_35mm" in pose:
+        focal_length_str = f"{float(pose['f_35mm']):.6f}"
+    else:
+        focal_length_str = "11.689337"
+
+    px = float(pose.get("px_norm", 0.0))
+    py = float(pose.get("py_norm", 0.0))
+
+    if not include_extrinsics:
+        xml_lines = [
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+            '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
+            '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
+            '      xcr:Version="3"',
+            f'      xcr:FocalLength35mm="{focal_length_str}"',
+            '      xcr:Skew="0.000000"',
+            '      xcr:AspectRatio="1.000000"',
+            f'      xcr:PrincipalPointU="{px:.6f}"',
+            f'      xcr:PrincipalPointV="{py:.6f}"',
+            '      xcr:CalibrationPrior="exact"',
+            '      xcr:CalibrationGroup="1"',
+            '      xcr:DistortionGroup="1"',
+            '      xcr:DistortionModel="brown3"',
+            '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"',
+            '      xcr:InTexturing="1"',
+            '      xcr:InMeshing="1" />',
+            '  </rdf:RDF>',
+            '</x:xmpmeta>',
+            ''
+        ]
+        return "\n".join(xml_lines)
+
+    # Optional extrinsics export (if explicitly requested)
     pos_x = float(pose.get("x", 0.0))
     pos_y = float(pose.get("y", 0.0))
     pos_z = float(pose.get("alt", 0.0))
@@ -668,43 +758,22 @@ def generate_realityscan_xmp(
 
     r_str = " ".join(f"{v:.8f}" for v in R_vals)
 
-    f_35mm = float(pose.get("f_35mm", 11.689337))
-    px = float(pose.get("px_norm", 0.0))
-    py = float(pose.get("py_norm", 0.0))
-    k1 = float(pose.get("k1", 0.0))
-    k2 = float(pose.get("k2", 0.0))
-    k3 = float(pose.get("k3", 0.0))
-    k4 = float(pose.get("k4", 0.0))
-    t1 = float(pose.get("t1", 0.0))
-    t2 = float(pose.get("t2", 0.0))
-    dist_str = f"{k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {t1:.6f} {t2:.6f}"
-
-    # Determine pose prior enum: RealityScan accepts "initial", "exact", "locked"
-    if str(pose_prior).lower() in ("approximate", "exact"):
-        effective_pose_prior = "exact"
-    elif str(pose_prior).lower() in ("draft", "initial"):
-        effective_pose_prior = "initial"
-    elif str(pose_prior).lower() == "locked":
-        effective_pose_prior = "locked"
-    else:
-        effective_pose_prior = "exact"
-
     xml_lines = [
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
         '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
         '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"',
         '      xcr:Version="3"',
-        f'      xcr:PosePrior="{effective_pose_prior}"',
+        f'      xcr:PosePrior="{pose_prior}"',
         '      xcr:Coordinates="absolute"',
         f'      xcr:Rotation="{r_str}"',
-        f'      xcr:FocalLength35mm="{f_35mm:.6f}"',
+        f'      xcr:FocalLength35mm="{focal_length_str}"',
         '      xcr:DistortionModel="brown3"',
-        f'      xcr:DistortionCoeficients="{dist_str}"',
+        '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"',
         '      xcr:Skew="0.000000"',
         '      xcr:AspectRatio="1.000000"',
         f'      xcr:PrincipalPointU="{px:.6f}"',
         f'      xcr:PrincipalPointV="{py:.6f}"',
-        '      xcr:CalibrationPrior="locked"',
+        '      xcr:CalibrationPrior="exact"',
         '      xcr:CalibrationGroup="1"',
         '      xcr:DistortionGroup="1"',
         '      xcr:InTexturing="1"',
@@ -1317,6 +1386,7 @@ def split_panorama_dataset(
                                 rot_accuracy=xmp_rot_accuracy,
                                 locked_pose_group=frame_int_idx,
                                 cam_name=cam_name,
+                                fov_deg=rig_cam_tuple[4],
                             )
                             xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
                             with open(xmp_file, "w", encoding="utf-8") as xf:
@@ -1491,6 +1561,7 @@ def split_panorama_dataset(
                             rot_accuracy=xmp_rot_accuracy,
                             locked_pose_group=frame_int_idx,
                             cam_name=cam_name,
+                            fov_deg=rig_cam_tuple[4],
                         )
                         xmp_file = f"{os.path.splitext(out_filepath)[0]}.xmp"
                         with open(xmp_file, "w", encoding="utf-8") as xf:

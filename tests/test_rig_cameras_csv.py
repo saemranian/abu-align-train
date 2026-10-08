@@ -302,16 +302,18 @@ class TestDatasetSplittingExport(unittest.TestCase):
             self.assertTrue(os.path.isfile(xmp_stem), f"Missing canonical XMP: {xmp_stem}")
             self.assertFalse(os.path.isfile(xmp_ext), f"Redundant .jpg.xmp should not exist: {xmp_ext}")
 
-            # Verify XMP XML contents contain RigId, RigInstanceId, Position, Rotation
+            # Verify XMP XML contents lock synthetic intrinsics and omit unconstrained extrinsics (Guide 06)
             with open(xmp_stem, "r", encoding="utf-8") as xf:
                 xmp_content = xf.read()
-            self.assertIn('xcr:PosePrior="exact"', xmp_content)
-            self.assertIn('xcr:CalibrationPrior="locked"', xmp_content)
+            self.assertIn('xcr:CalibrationPrior="exact"', xmp_content)
             self.assertIn('xcr:CalibrationGroup="1"', xmp_content)
             self.assertIn('xcr:DistortionGroup="1"', xmp_content)
-            self.assertIn("<xcr:Position>1.000000 2.000000 3.000000</xcr:Position>", xmp_content)
-            self.assertIn('xcr:Rotation="', xmp_content)
+            self.assertIn('xcr:DistortionModel="brown3"', xmp_content)
             self.assertIn('xcr:FocalLength35mm="', xmp_content)
+            self.assertNotIn('xcr:Rotation="', xmp_content)
+            self.assertNotIn("<xcr:Position>", xmp_content)
+            self.assertNotIn('xcr:PosePrior="', xmp_content)
+            self.assertNotIn('xcr:LockedPoseGroup="', xmp_content)
 
         # 3. Verify cameras_csv/ folder contains separate CSV per camera
         csv_dir = os.path.join(self.out_dir, "cameras_csv")
