@@ -520,18 +520,19 @@ def compound_realitycapture_pose(
     crop_h: int,
     k1: float = 0.0,
     k2: float = 0.0,
-    override_orientations_from_rig: bool = True,
+    override_orientations_from_rig: bool = False,
 ) -> Dict[str, Any]:
     """
     Compounds a 360 panorama 6-DoF pose with a virtual rig camera offset into
     RealityScan / RealityCapture standard Euler orientation and coordinates.
 
-    If override_orientations_from_rig is True (default):
+    If override_orientations_from_rig is False (default):
+        - Panorama 3D rotation and rig orientation are multiplied in SO(3) to preserve
+          the exact camera heading, pitch, and roll from the trajectory prior.
+    If override_orientations_from_rig is True:
         - Metric position (x, y, alt) is taken from the imported panorama trajectory prior.
         - Imported yaw, pitch, roll from the trajectory are discarded and overridden with
-          the clean, canonical Euler orientation derived directly from the splitting rig.
-    If override_orientations_from_rig is False:
-        - Panorama 3D rotation and rig orientation are multiplied in SO(3).
+          the canonical flat Euler orientation (yaw=0, pitch=90).
     """
     cam_name, rig_yaw, rig_pitch, rig_roll, fov_deg = rig_cam
 
@@ -723,7 +724,7 @@ def generate_realityscan_xmp(
         R_arr = np.vstack([r_c, d_c, f_c])
         R_vals = [0.0 if abs(v) < 1e-12 else float(v) for v in R_arr.flatten()]
 
-    r_str = " ".join(f"{v:.16g}" if abs(v) >= 1e-12 else "0" for v in R_vals)
+    r_str = " ".join(f"{v:.17g}" if abs(v) >= 1e-12 else "0" for v in R_vals)
 
     px = int(round(pose.get("px_norm", 0.0)))
     py = int(round(pose.get("py_norm", 0.0)))
@@ -1119,7 +1120,7 @@ def split_panorama_dataset(
     xmp_rot_accuracy: Tuple[float, float, float] = (0.001, 0.001, 0.001),
     subfolder_per_perspective: bool = True,
     dvo_trajectory_csv: Optional[str] = None,
-    override_orientations_from_rig: bool = True,
+    override_orientations_from_rig: bool = False,
     mask_dir: Optional[str] = None,
     auto_detect_mask: bool = True,
     masks_only: bool = False,
@@ -1792,7 +1793,7 @@ def main():
     parser.add_argument("--xmp-pose-prior", type=str, default="locked", choices=["approximate", "locked", "exact", "initial"], help="PosePrior in XMP metadata")
     parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
     parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
-    parser.add_argument("--compound-rotations", action="store_true", help="Compound full 3D rotation instead of overriding orientations with clean modified rig angles")
+    parser.add_argument("--override-orientations", action="store_true", help="Override trajectory orientations with flat identity rig angles (yaw=0, pitch=90) instead of compounding true 3D rotations")
     parser.add_argument("--mask-dir", type=str, default=None, help="Directory of equirectangular mask images or mask video")
     parser.add_argument("--no-auto-mask", action="store_true", help="Disable auto-detection of mask folder in dataset")
     parser.add_argument("--masks-only", action="store_true", help="Only project and export .mask images for an existing dataset")
@@ -1849,7 +1850,7 @@ def main():
         xmp_pose_prior=args.xmp_pose_prior,
         subfolder_per_perspective=not args.flat_images,
         dvo_trajectory_csv=args.dvo_trajectory,
-        override_orientations_from_rig=not args.compound_rotations,
+        override_orientations_from_rig=args.override_orientations,
         mask_dir=args.mask_dir,
         auto_detect_mask=not args.no_auto_mask,
         masks_only=args.masks_only,
