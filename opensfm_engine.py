@@ -509,7 +509,9 @@ class OpenSfMEngine:
         feature_process_size: int = 2048,
         bundle_interval: int = 10,
         optimize_camera_parameters: bool = False,
-        use_gpu: bool = True
+        use_gpu: bool = True,
+        retrieval_neighbors: int = 10,
+        max_processes: int = 8
     ):
         if not dataset_path and output_dir:
             dataset_path = output_dir
@@ -524,6 +526,8 @@ class OpenSfMEngine:
         self.bundle_interval = bundle_interval
         self.optimize_camera_parameters = optimize_camera_parameters
         self.use_gpu = use_gpu
+        self.retrieval_neighbors = max(0, int(retrieval_neighbors))
+        self.max_processes = max(1, int(max_processes))
 
         self.opensfm_bin = self._locate_opensfm_executable()
 
@@ -583,12 +587,13 @@ class OpenSfMEngine:
             "feature_process_size_panorama": self.feature_process_size,
             "sift_nfeatures": self.feature_min_frames,
             "matching_order_neighbors": self.matching_order_neighbors,
+            "matching_bow_neighbors": self.retrieval_neighbors if self.feature_type == 'HAHOG' else 0,
             "matching_gps_distance": 150,
             "matching_gps_neighbors": 8,
             "matcher_type": actual_matcher,
             "bundle_interval": self.bundle_interval,
             "optimize_camera_parameters": self.optimize_camera_parameters,
-            "processes": max(1, os.cpu_count() - 2) if os.cpu_count() else 4,
+            "processes": min(self.max_processes, max(1, (os.cpu_count() or 4) - 2)),
             "read_processes": min(8, max(1, (os.cpu_count() or 4) - 2)),
         }
         with open(os.path.join(self.output_dir, "config.yaml"), "w", encoding="utf-8") as f:
@@ -625,6 +630,7 @@ class OpenSfMEngine:
         log("   Mapillary OpenSfM - Neural & Spherical Photogrammetry Engine")
         log(f"   * Projection: {self.projection_type.upper()}")
         log(f"   * Features:   {self.feature_type}")
+        log("   * Solver:     Ceres CPU (GPU setting does not provide a supported OpenSfM GPU extractor)")
         log(f"   * Workspace:  {self.output_dir}")
         log("=" * 70)
 
@@ -721,6 +727,7 @@ class OpenSfMEngine:
             bundle_interval=self.bundle_interval,
             optimize_camera_parameters=self.optimize_camera_parameters,
             stride=stride,
+            retrieval_neighbors=self.retrieval_neighbors,
             log_callback=log_callback
         )
 
@@ -844,7 +851,8 @@ def run_opensfm_spherical_sfm(
     bundle_interval: int = 1,
     optimize_camera_parameters: bool = False,
     stride: int = 1,
-    log_callback: Optional[Callable[[str], None]] = None
+    log_callback: Optional[Callable[[str], None]] = None,
+    retrieval_neighbors: int = 10
 ) -> Tuple[Optional[object], np.ndarray, np.ndarray]:
     """
     Stand-alone Native Python Spherical Structure-from-Motion (Spherical SfM) Pipeline.
@@ -967,6 +975,19 @@ def run_opensfm_spherical_sfm(
                 pair_indices.add((i, j))
 
     # Loop closure: match start of sequence with end of sequence
+    if retrieval_neighbors > 0 and N_views > window + 2:
+        # Descriptor-mean retrieval provides interior revisit candidates; all
+        # proposals still pass the same spherical geometric verification below.
+        from sklearn.neighbors import NearestNeighbors
+        signatures = []
+        for feature in features:
+            descriptors = feature['des']
+            signatures.append(descriptors.astype(float).mean(axis=0) if descriptors is not None and len(descriptors) else np.zeros(128 if feature_type.upper() not in ['ORB', 'AKAZE'] else (32 if feature_type.upper() == 'ORB' else 61)))
+        signatures = np.stack(signatures)
+        neighbors = NearestNeighbors(n_neighbors=min(N_views, retrieval_neighbors + 2 * window + 1), metric='cosine').fit(signatures).kneighbors(return_distance=False)
+        for i, candidates in enumerate(neighbors):
+            selected = [int(j) for j in candidates if abs(int(j) - i) > window][:retrieval_neighbors]
+            pair_indices.update((min(i, j), max(i, j)) for j in selected)
     if N_views >= 8:
         for i in range(min(3, N_views)):
             for j in range(max(i + 4, N_views - 3), N_views):

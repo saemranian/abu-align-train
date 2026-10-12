@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.3.9 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.4.0 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1668,6 +1668,9 @@ def main():
     parser.add_argument("--input", "-i", type=str, required=False, default=None, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
     parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo", "realityscan", "realitycapture", "rc"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), '360dvo' (Deep 360 Visual Odometry), or 'realityscan' (Epic Games / Capturing Reality)")
+    parser.add_argument('--spherical_refine', action='store_true', help='Joint native spherical camera/landmark refinement before packaging')
+    parser.add_argument('--control_points', help='Manual landmark, local XYZ GCP, distance and check-point JSON')
+    parser.add_argument('--spherical_ba_points', type=int, default=10000, help='Automatic landmark budget for sparse spherical BA')
     # RealityScan / RealityCapture Options
     parser.add_argument("--rs_gui", action="store_true", default=False, help="Launch interactive RealityScan GUI window instead of running headless in background")
     parser.add_argument("--rs_prior_run", type=str, default=None, help="Custom prior alignment run folder or cameras.csv path to ingest")
@@ -2426,6 +2429,28 @@ def main():
         reconstruction, dense_3d, dense_rgb = run_vggt_reconstruction(
             engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
         )
+
+    if args.spherical_refine or args.control_points:
+        if engine not in ['opensfm', '360dvo', 'dvo']:
+            raise ValueError('Spherical refinement currently accepts OpenSfM/360DVO outputs')
+        candidates = [os.path.join(output_dir, 'opensfm_workspace', 'reconstruction.json'),
+                      os.path.join(output_dir, 'opensfm', 'reconstruction.json'),
+                      os.path.join(output_dir, 'reconstruction.json')]
+        source = next((p for p in candidates if os.path.isfile(p)), None)
+        if not source:
+            raise RuntimeError('No spherical reconstruction available for refinement')
+        from spherical_refinement import refine
+        from opensfm_engine import opensfm_to_pycolmap
+        refined = os.path.join(output_dir, 'refined', 'reconstruction.json')
+        report = refine(source, refined, args.control_points, args.spherical_ba_points)
+        print(f"Spherical refinement: {report['before_angular_rms_deg']:.4f} -> {report['after_angular_rms_deg']:.4f} degrees RMS")
+        reconstruction = opensfm_to_pycolmap(refined)
+        dense_3d = np.array([p.xyz for p in reconstruction.points3D.values()], dtype=np.float32)
+        dense_rgb = np.array([p.color for p in reconstruction.points3D.values()], dtype=np.uint8)
+        # Keep the native handoff consistent with the corrected model used below.
+        handoff = os.path.join(output_dir, '3dgs_dataset', 'opensfm')
+        os.makedirs(handoff, exist_ok=True)
+        shutil.copy2(refined, os.path.join(handoff, 'reconstruction.json'))
 
     # Stage 5: Exporting outputs organized by target application
     export_start = time.time()
