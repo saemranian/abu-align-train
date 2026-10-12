@@ -984,7 +984,7 @@ def run_opensfm_spherical_sfm(
             descriptors = feature['des']
             signatures.append(descriptors.astype(float).mean(axis=0) if descriptors is not None and len(descriptors) else np.zeros(128 if feature_type.upper() not in ['ORB', 'AKAZE'] else (32 if feature_type.upper() == 'ORB' else 61)))
         signatures = np.stack(signatures)
-        neighbors = NearestNeighbors(n_neighbors=min(N_views, retrieval_neighbors + 2 * window + 1), metric='cosine').fit(signatures).kneighbors(return_distance=False)
+        neighbors = NearestNeighbors(n_neighbors=min(N_views, retrieval_neighbors + 2 * window + 1), metric='cosine').fit(signatures).kneighbors(signatures, return_distance=False)
         for i, candidates in enumerate(neighbors):
             selected = [int(j) for j in candidates if abs(int(j) - i) > window][:retrieval_neighbors]
             pair_indices.update((min(i, j), max(i, j)) for j in selected)

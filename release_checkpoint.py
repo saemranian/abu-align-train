@@ -28,7 +28,7 @@ def publish_stage(summary, details):
     files = [p for p in root.iterdir() if p.is_file() and
              (p.suffix in {".py", ".exe", ".bat", ".cs", ".ico"} or p.name in {"VERSION.txt", "walkthrough.md"})]
     for folder in (root / "docs", root / "tests"):
-        files.extend(p for p in folder.rglob("*") if p.is_file() and p.suffix in {".md", ".py", ".json"})
+        files.extend(p for p in folder.rglob("*") if p.is_file() and p.suffix in {".md", ".py", ".json", ".txt"})
     for source in files:
         relative = source.relative_to(root)
         for destination in (mirror / relative, snapshot / relative, canonical / relative):

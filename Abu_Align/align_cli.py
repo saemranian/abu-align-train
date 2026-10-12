@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.4.0 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.4.1 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1667,7 +1667,7 @@ def main():
     parser.add_argument("--check_updates", "--check_engines", action="store_true", help="Check upstream GitHub repositories for updates across all 11 engines and print a diagnostic report")
     parser.add_argument("--input", "-i", type=str, required=False, default=None, help="Path to photoscan folder or image directory")
     parser.add_argument("--output_dir", "--output", "-o", type=str, default=None, help="Custom output directory for sparse alignment and rig files")
-    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "360dvo", "dvo", "realityscan", "realitycapture", "rc"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), '360dvo' (Deep 360 Visual Odometry), or 'realityscan' (Epic Games / Capturing Reality)")
+    parser.add_argument("--engine", "-e", type=str, choices=["vggt_omega", "vggttt", "vgg-ttt", "vggt3", "ace0", "acezero", "pycusfm", "cusfm", "opensfm", "native_colmap", "360dvo", "dvo", "realityscan", "realitycapture", "rc"], default="vggt_omega", help="Model engine: 'vggt_omega' (Neural Transformer), 'vggttt' (NVIDIA Linear SfM), 'ace0' (Niantic Labs), 'pycusfm' (NVIDIA Isaac cuSFM), 'opensfm' (Mapillary 360), '360dvo' (Deep 360 Visual Odometry), or 'realityscan' (Epic Games / Capturing Reality)")
     parser.add_argument('--spherical_refine', action='store_true', help='Joint native spherical camera/landmark refinement before packaging')
     parser.add_argument('--control_points', help='Manual landmark, local XYZ GCP, distance and check-point JSON')
     parser.add_argument('--spherical_ba_points', type=int, default=10000, help='Automatic landmark budget for sparse spherical BA')
@@ -1702,6 +1702,11 @@ def main():
     parser.add_argument("--video_resolution", choices=["native", "8k", "5.7k", "4k", "2k", "1k"], default="native", help="Resolution for extracted video frames")
     parser.add_argument("--video_blur", type=float, default=0.0, help="Laplacian variance threshold to discard blurred frames (default: 0.0, disabled)")
     parser.add_argument("--extract_video_only", action="store_true", help="Extract video frames to sequence and exit without running alignment")
+    parser.add_argument('--native_colmap_mapper', choices=['incremental', 'global'], default='incremental')
+    parser.add_argument('--native_colmap_device', choices=['auto', 'cpu', 'cuda'], default='auto')
+    parser.add_argument('--native_colmap_features', type=int, default=6000)
+    parser.add_argument('--native_colmap_width', type=int, default=2048)
+    parser.add_argument('--pfgs_pose_mode', choices=['fixed', 'refine', 'posefree'], default='fixed')
     # 360DVO Deep Visual Odometry Options
     parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
     parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
@@ -1940,7 +1945,7 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
     print(f"      * Target Output: {output_dir}")
-    if args.engine in ["opensfm", "360dvo", "dvo"]:
+    if args.engine in ["opensfm", "native_colmap", "360dvo", "dvo"]:
         from run_manifest import write_manifest
         write_manifest(image_paths, os.path.join(output_dir, "run_manifest.json"), args.engine,
                        {"stride": args.stride, "max_frames": args.max_frames, "projection": args.projection})
@@ -2227,6 +2232,25 @@ def main():
         print()
         print(f"      * PyCuSFM Finished in: {inf_elapsed:.2f}s ({inf_elapsed/num_frames:.3f}s per view)")
         print()
+    elif engine == 'native_colmap':
+        from native_colmap_engine import run as run_native_colmap
+        import pycolmap
+        native_output = os.path.join(output_dir, 'native_colmap')
+        report = run_native_colmap(image_paths, native_output, args.native_colmap_mapper,
+                                  args.native_colmap_device, args.native_colmap_features,
+                                  args.native_colmap_width)
+        components = sorted(Path(native_output).glob('component_*/reconstruction.json'))
+        source = max(components, key=lambda path: len(json.loads(path.read_text(encoding='utf-8'))[0]['shots']))
+        reconstruction = pycolmap.Reconstruction(source.parent)
+        dense_3d = np.array([point.xyz for point in reconstruction.points3D.values()], dtype=np.float32)
+        dense_rgb = np.array([point.color for point in reconstruction.points3D.values()], dtype=np.uint8)
+        shutil.copy2(source, os.path.join(output_dir, 'reconstruction.json'))
+        handoff = os.path.join(output_dir, '3dgs_dataset', 'opensfm')
+        os.makedirs(handoff, exist_ok=True)
+        shutil.copy2(source, os.path.join(handoff, 'reconstruction.json'))
+        print(f"Native COLMAP: {report['registered_images']}/{report['input_images']} images across {report['components']} components; {report['backend']}")
+        if len(components) > 1:
+            print('Exporting the largest component; separate component models remain available in native_colmap/.')
     elif engine in ["opensfm"]:
         print("[3/5] Starting Mapillary OpenSfM Spherical & Street-Scale Engine...")
         print(f"      * Projection Type:   {args.projection.upper()}")
@@ -2431,7 +2455,7 @@ def main():
         )
 
     if args.spherical_refine or args.control_points:
-        if engine not in ['opensfm', '360dvo', 'dvo']:
+        if engine not in ['opensfm', '360dvo', 'dvo', 'native_colmap']:
             raise ValueError('Spherical refinement currently accepts OpenSfM/360DVO outputs')
         candidates = [os.path.join(output_dir, 'opensfm_workspace', 'reconstruction.json'),
                       os.path.join(output_dir, 'opensfm', 'reconstruction.json'),
@@ -2969,6 +2993,7 @@ def main():
                 bvh_backend=getattr(args, "bvh_backend", "optix"),
                 pfgs_depth=getattr(args, "pfgs_depth", "unik3d"),
                 pfgs_dataparser=getattr(args, "pfgs_dataparser", "auto"),
+                pfgs_pose_mode=args.pfgs_pose_mode,
                 pfgs_filter_sky=getattr(args, "pfgs_filter_sky", True),
                 pfgs_sky_depth=getattr(args, "pfgs_sky_depth", 50.0),
                 pfgs_match_views=getattr(args, "pfgs_match_views", 8),

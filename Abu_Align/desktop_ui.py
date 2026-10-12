@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.4.0", 9, muted=True)
+    app.version_label = label(header, "v0.1.4.1", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -691,9 +691,9 @@ def build_workspace(app, tooltip):
     engines.pack(fill="x", pady=(0, 14))
     engine_controls = []
     for i, (name, value) in enumerate([("VGGT-Omega", "vggt_omega"), ("VGG-T³", "vggttt"), ("ACE0", "ace0"),
-            ("PyCuSFM", "pycusfm"), ("OpenSfM", "opensfm"), ("360DVO", "360dvo"), ("RealityScan", "realityscan")]):
+            ("PyCuSFM", "pycusfm"), ("OpenSfM", "opensfm"), ("360DVO", "360dvo"), ("Native COLMAP", "native_colmap"), ("RealityScan", "realityscan")]):
         detail = {"vggt_omega": "Neural geometry", "vggttt": "Linear SfM (CVPR 2026)", "ace0": "Pose refinement", "pycusfm": "GPU matching",
-                  "opensfm": "Photos & panoramas", "360dvo": "360° sequences", "realityscan": "Photogrammetry & Prior"}[value]
+                  "opensfm": "Photos & panoramas", "360dvo": "360° sequences", "native_colmap": "Spherical · candidate", "realityscan": "Photogrammetry & Prior"}[value]
         control = tk.Radiobutton(engines, text=f"{name}\n{detail}", variable=app.engine_var, value=value,
                                   indicatoron=False, padx=14, pady=8, justify="left", anchor="w")
         control.grid(row=0, column=i, sticky="ew", padx=(0, 8))
@@ -705,6 +705,7 @@ def build_workspace(app, tooltip):
              "ace0": "Scene coordinate regression · camera pose refinement",
              "pycusfm": "Perspective photos · GPU feature matching",
              "opensfm": "360° panoramas & perspective photos · feature-based reconstruction",
+             "native_colmap": "Native spherical reconstruction · CPU available; CUDA requires a compatible build",
              "360dvo": "Sequential 360° frames & video · visual odometry",
              "realityscan": "Epic Games RealityScan photogrammetry · aligns with prior trajectories from other engines or scratch"}
     for control, variable in engine_controls:
