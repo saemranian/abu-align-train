@@ -99,11 +99,11 @@ class ControlDocument:
             point['observations'].append({'shot_id': shot, 'pixel': list(pixel), 'sigma_px': float(sigma)})
 
 
-def atomic_json(path, data):
+def atomic_json(path, data, indent=2):
     path = Path(path)
     temporary = path.with_name(path.name + '.tmp')
     try:
-        temporary.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        temporary.write_text(json.dumps(data, indent=indent), encoding='utf-8')
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

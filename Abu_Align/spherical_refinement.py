@@ -8,23 +8,18 @@ import copy
 import json
 import time
 from pathlib import Path
-
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation
 from spherical_geometry import load_observations
-
-
 def pixel_bearing(pixel, width, height):
     x, y = pixel
     longitude = (x / width - .5) * 2 * np.pi
     latitude = (.5 - y / height) * np.pi
     return np.array([np.cos(latitude) * np.sin(longitude), -np.sin(latitude),
                      np.cos(latitude) * np.cos(longitude)])
-
-
 def triangulate(observations, cameras):
     rays, centers = [], []
     for shot, pixel, _ in observations:
@@ -42,9 +37,11 @@ def triangulate(observations, cameras):
     if np.any(np.sum((point - centers) * rays, axis=1) <= 0):
         raise ValueError('Manual observations triangulate behind an observed spherical ray')
     return point
-
-
-def refine(input_path, output_path, controls_path=None, max_points=10000, max_iterations=40):
+def refine(input_path, output_path, controls_path=None, max_points=10000, max_iterations=100, backend="auto", progress=None):
+    started=time.perf_counter()
+    def notify(phase, **values):
+        if progress:progress(dict(phase=phase,elapsed=time.perf_counter()-started,**values))
+    notify("load")
     input_path, output_path = Path(input_path), Path(output_path)
     if input_path.absolute() == output_path.absolute():
         raise ValueError('Refinement output must differ from its immutable input')
@@ -61,6 +58,7 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
             raise ValueError('This solver requires native spherical cameras')
         cameras[name] = (cv2.Rodrigues(np.asarray(shot['rotation'], dtype=float))[0],
                          np.asarray(shot['translation'], dtype=float), camera['width'], camera['height'])
+    notify("tracks", cameras=len(cameras))
     observations = {}
     for shot, point, pixel in load_observations(input_path, component):
         observations.setdefault(point, []).append((shot, pixel, 1.0))
@@ -151,62 +149,40 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
     scale_anchor = bool(not gcps and not distances and baseline > 1e-8)
     if not gcps and not distances and not scale_anchor:
         raise ValueError('A translated camera baseline or metric controls are required')
-
     def unpack(values):
         poses = {name: (r, t) for name, (r, t, _, _) in cameras.items()}
         for name, start in camera_index.items():
             poses[name] = (Rotation.from_rotvec(values[start:start+3]).as_matrix(), values[start+3:start+6])
         points = {name: values[start:start+3] for name, start in point_index.items()}
         return poses, points
-
-    def residual(values, weighted=True):
-        poses, points = unpack(values)
-        rows = []
-        for point, shot, bearing, sigma in measurements:
-            rotation, translation = poses[shot]
-            ray = rotation @ points[point] + translation
-            norm = np.linalg.norm(ray)
-            error = (ray / max(norm, 1e-12) - bearing)
-            rows.extend(error / sigma if weighted else error)
-        if not weighted:
-            return np.asarray(rows)
-        for point, control in gcps.items():
-            sigma = float(control.get('sigma_m', .01))
-            if sigma <= 0:
-                raise ValueError('GCP uncertainty must be positive')
-            rows.extend((points[point] - np.asarray(control['position'])) / sigma)
-        for distance in distances:
-            rows.append((np.linalg.norm(points[str(distance['a'])] - points[str(distance['b'])]) - float(distance['meters'])) / float(distance.get('sigma_m', .01)))
-        if scale_anchor:
-            r, t = poses[scale_name]
-            rows.append((np.linalg.norm(-r.T @ t - centers[names[0]]) - baseline) / max(baseline * .001, 1e-8))
-        return np.asarray(rows)
-
-    row_count = len(measurements) * 3 + len(gcps) * 3 + len(distances) + int(scale_anchor)
-    sparsity = lil_matrix((row_count, len(initial)), dtype=int)
-    row = 0
-    for point, shot, _, _ in measurements:
-        start = point_index[point]
-        sparsity[row:row+3, start:start+3] = 1
-        if shot in camera_index:
-            start = camera_index[shot]
-            sparsity[row:row+3, start:start+6] = 1
-        row += 3
-    for point in gcps:
-        start = point_index[point]
-        sparsity[row:row+3, start:start+3] = 1
-        row += 3
-    for distance in distances:
-        for key in ['a', 'b']:
-            start = point_index[str(distance[key])]
-            sparsity[row, start:start+3] = 1
-        row += 1
-    if scale_anchor:
-        start = camera_index[scale_name]
-        sparsity[row, start:start+6] = 1
-    started = time.perf_counter()
-    result = least_squares(residual, initial, jac_sparsity=sparsity.tocsr(), loss='soft_l1',
-                           f_scale=2.0, max_nfev=max_iterations, x_scale='jac')
+    from spherical_acceleration import BearingProblem, cuda_available, solve_cuda
+    problem=BearingProblem(cameras,free_names,point_ids,measurements,gcps,distances,scale_name,baseline,scale_anchor)
+    if backend not in ['auto','cpu','cuda']:raise ValueError('Choose auto, cpu or cuda refinement.')
+    use_cuda=backend=='cuda' or (backend=='auto' and len(measurements)>=2000 and cuda_available())
+    if use_cuda and not cuda_available():raise ValueError('CUDA requested but PyTorch CUDA is unavailable. Select CPU or Auto.')
+    def residual(values,weighted=True):return problem.evaluate(values,weighted=weighted)
+    notify('optimize',backend='cuda' if use_cuda else 'cpu',points=len(point_ids),observations=len(measurements))
+    setup_seconds=time.perf_counter()-started;solve_started=time.perf_counter();fallback_reason=None
+    if use_cuda:
+        import torch
+        def gpu_progress(event):
+            event=dict(event);phase=event.pop('phase');event['solver_elapsed']=event.pop('elapsed',0);notify(phase,**event)
+        try:result=solve_cuda(problem,initial,max_iterations,gpu_progress)
+        except torch.cuda.OutOfMemoryError:
+            if backend!='auto':raise
+            use_cuda=False;fallback_reason='CUDA out of memory; using analytic CPU solver';notify('fallback',reason=fallback_reason)
+        finally:torch.cuda.empty_cache()
+    if not use_cuda:
+        evaluations=0;last_update=0.
+        def jacobian(values):
+            nonlocal evaluations,last_update
+            evaluations+=1
+            if time.perf_counter()-last_update>1:
+                notify('optimize',iteration=evaluations,iterations=max_iterations,backend='cpu');last_update=time.perf_counter()
+            return problem.evaluate(values,jac=True)[1]
+        result=least_squares(residual,initial,jac=jacobian,loss='soft_l1',f_scale=2.,max_nfev=max_iterations,x_scale='jac')
+    solve_seconds=time.perf_counter()-solve_started
+    notify('retriangulate')
     if not np.isfinite(result.x).all() or np.sum(residual(result.x)**2) > np.sum(residual(initial)**2) * 1.001:
         raise RuntimeError('Refinement failed verification; input reconstruction preserved')
     poses, points = unpack(result.x)
@@ -219,14 +195,15 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
     check_results = []
     refined_cameras = {name: (poses[name][0], poses[name][1], *cameras[name][2:]) for name in names}
     # Points excluded by the BA budget must follow the corrected camera geometry.
-    for point, obs in observations.items():
-        if point in points or len(obs) < 2 or point not in component['points']:
-            continue
-        try:
-            component['points'][point]['coordinates'] = triangulate(obs, refined_cameras).tolist()
-            component['points'][point]['observations'] = [{'shot_id': shot, 'pixel': pixel.tolist()} for shot, pixel, _ in obs]
-        except ValueError:
-            component['points'].pop(point, None)
+    from spherical_acceleration import retriangulate_batch
+    remaining=[point for point,obs in observations.items() if point not in points and len(obs)>=2 and point in component['points']]
+    for start in range(0,len(remaining),5000):
+        batch=remaining[start:start+5000];xyz,valid=retriangulate_batch(batch,observations,refined_cameras)
+        for i,point in enumerate(batch):
+            if not valid[i]:component['points'].pop(point,None);continue
+            component['points'][point]['coordinates']=xyz[i].tolist()
+            component['points'][point]['observations']=[{'shot_id':shot,'pixel':pixel.tolist()} for shot,pixel,_ in observations[point]]
+        notify('retriangulate',completed=min(start+5000,len(remaining)),total=len(remaining))
     for control, obs in checks:
         position = triangulate(obs, refined_cameras)
         check_results.append({'id': control['id'], 'error_units': float(np.linalg.norm(position - np.asarray(control['position'])))})
@@ -234,23 +211,33 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
         chord = residual(values, weighted=False).reshape(-1, 3)
         angles = 2 * np.arcsin(np.clip(np.linalg.norm(chord, axis=1) / 2, 0, 1))
         return float(np.degrees(np.sqrt(np.mean(angles**2))))
-    report = {'backend': 'scipy_sparse_cpu_joint_spherical_ba', 'cameras': len(names), 'optimized_points': len(point_ids),
+    report = {'backend': 'torch_cuda_sparse_lm_analytic' if use_cuda else 'scipy_sparse_cpu_analytic', 'cameras': len(names), 'optimized_points': len(point_ids),
               'observations': len(measurements), 'before_angular_rms_deg': angle_rms(initial),
               'after_angular_rms_deg': angle_rms(result.x), 'seconds': time.perf_counter() - started,
               'converged': bool(result.success), 'termination': result.message, 'checks': check_results,
-              'scale': 'metric_constraints' if gcps or distances else 'original_arbitrary_scale'}
+              'scale': 'metric_constraints' if gcps or distances else 'original_arbitrary_scale',
+              'evaluations':int(result.nfev),'device':getattr(result,'device','CPU'),
+              'peak_solver_vram_mib':getattr(result,'peak_vram_mib',0.),'setup_seconds':setup_seconds,
+              'solver_seconds':solve_seconds,'fallback_reason':fallback_reason}
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps([component], indent=2), encoding='utf-8')
-    output_path.with_suffix('.report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    notify('export')
+    from control_points_model import atomic_json
+    from refined_exports import export_refined
+    atomic_json(output_path,[component],indent=None)
+    report['exports']=export_refined(output_path,component)
+    report['seconds']=time.perf_counter()-started
+    atomic_json(output_path.with_suffix('.report.json'),report)
+    notify('complete',seconds=report['seconds'])
     return report
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--controls')
     parser.add_argument('--max-points', type=int, default=10000)
-    parser.add_argument('--iterations', type=int, default=40)
+    parser.add_argument('--iterations', type=int, default=100)
+    parser.add_argument('--backend',choices=['auto','cpu','cuda'],default='auto')
     args = parser.parse_args()
-    print(json.dumps(refine(args.input, args.output, args.controls, args.max_points, args.iterations), indent=2))
+    def progress(event):print('ABU_PROGRESS '+json.dumps(event),flush=True)
+    report=refine(args.input,args.output,args.controls,args.max_points,args.iterations,args.backend,progress)
+    print('ABU_RESULT '+json.dumps(report),flush=True)

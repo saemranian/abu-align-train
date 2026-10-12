@@ -17,9 +17,9 @@ for the exact same originals retains prepared measurements.
 **Import CSV** previews RealityScan image measurements or local XYZ, with
 explicit column mapping, units, merge policy and undo. Perspective-image
 measurements cannot be transferred onto panoramas: import point names and
-re-mark the features instead. **Image grid** provides paged thumbnails,
+re-mark the features instead. **Image grid** provides continuously scrolling thumbnails,
 filename search and measurement filters. Plain Left/Right browse images;
-Ctrl/Shift arrows nudge measurements. **3D view** serves a local loopback
+Ctrl/Shift arrows nudge measurements. **3D view** opens an embedded hardware navigator with an optional local loopback
 WebGL scene with sampled sparse points, camera centres, triangulated controls
 and selected sight lines. It does not overlay unregistered survey XYZ.
 
@@ -32,8 +32,9 @@ landmark names. Every position/observation has an uncertainty.
 
 **Refine alignment** writes a new reconstruction and report. The source stays
 unchanged. The native solver jointly optimizes cameras and landmarks using
-sparse SciPy CPU BA and robust bearing residuals; this is not advertised as a
-GPU solver. The automatic point budget is 10,000 and manual points are kept.
+analytic bearing Jacobians. Auto uses CUDA sparse damped least squares for
+larger problems; CPU uses the vectorized sparse SciPy path. The editor runs
+refinement in an isolated, cancellable process with progress logging. The automatic point budget is 10,000 and manual points are kept.
 Unselected tracked points are retriangulated after camera refinement. For a
 large reconstruction, start with a small budget and inspect the termination
 and angular residual report. Angular residual improvement alone is not proof
@@ -69,3 +70,5 @@ Use `--dvo_allow_fallback` only for an explicitly experimental CPU run.
 
 
 Disabled manual points and distance constraints attached to them are excluded from optimization. Controls retain their disabled state on disk. Use Apply properties to commit property edits; Save as keeps separate control-file variants. The workspace includes measured angular residuals and unconfirmed projection guidance. Predictions never become observations automatically.
+
+Each successful refinement exports a binary sparse PLY and a native-frame camera CSV beside its JSON. Existing saved refinements can be exported from Results. Properties > Predicted images provides geometric candidate locations, not visibility guarantees. See [performance and verification](CONTROL_ACCELERATION_VERIFICATION.md).

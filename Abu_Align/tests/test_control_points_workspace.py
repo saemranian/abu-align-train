@@ -143,9 +143,14 @@ class WorkspaceTests(unittest.TestCase):
         report = {'converged': False, 'before_angular_rms_deg': 1., 'after_angular_rms_deg': .5, 'cameras': 3,
                   'optimized_points': 1, 'observations': 2, 'seconds': .1, 'termination': 'Budget reached', 'scale': 'original_arbitrary_scale', 'checks': []}
         e.settings['max_points'].set(250); e.settings['iterations'].set(15)
-        with patch('control_points_workspace.filedialog.asksaveasfilename', return_value=str(output)), patch('spherical_refinement.refine', return_value=report) as run:
-            e.refine(); self.wait(lambda: not e.busy)
-            self.assertEqual(run.call_args.kwargs, {'max_points': 250, 'max_iterations': 15})
+        with patch('control_points_workspace.filedialog.asksaveasfilename', return_value=str(output)), patch.object(e,'launch_worker') as run:
+            e.refine();self.assertTrue(e.busy)
+            command,kind,target=run.call_args.args
+            self.assertEqual(kind,'refine');self.assertEqual(target,output)
+            self.assertEqual(command[command.index('--max-points')+1],'250')
+            self.assertEqual(command[command.index('--iterations')+1],'15')
+            self.assertEqual(command[command.index('--backend')+1],'auto')
+            report['backend']='test';e.result_queue.put(('refined',output,report));self.wait(lambda:not e.busy)
         self.assertEqual(self.rec.read_bytes(), source)
         self.assertTrue(output.with_suffix('.controls.json').exists())
         self.assertIn('Evaluation budget reached', e.results_text.get('1.0', 'end'))

@@ -4,6 +4,12 @@ import json
 import math
 import queue
 import threading
+import subprocess
+import sys
+import os
+import time
+import traceback
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tkinter as tk
@@ -11,11 +17,10 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from control_points_model import ControlDocument, validate_controls, atomic_json, point_geometry, projected_pixel
 from panorama_viewport import PanoramaViewport, PanoramaAsset
-
+from control_points_logging import ControlLog
 BG, PANEL, FIELD, BORDER = '#111518', '#1a2024', '#242d32', '#344149'
 TEXT, MUTED, ACCENT = '#e7edef', '#a0adb5', '#70dbc0'
 TYPES = {'tie': 'Tie point', 'gcp': 'Ground control', 'check': 'Check point'}
-
 HELP = '''360° CONTROL POINTS — WORKFLOW
 
 1. CHOOSE YOUR STARTING POINT
@@ -28,7 +33,7 @@ Add point (Ctrl+N) creates a named tie point immediately. In Place points mode, 
 3. NAVIGATE PRECISELY
 Wheel: zoom around the cursor. Middle-drag or Space + left-drag: pan. Fit / F: entire panorama. 1:1 / 1: original pixel size. Drag an existing marker to adjust it. Left/Right browse images in the active pane; Alt+Left/Right also browse. Ctrl+Arrow nudges 0.1 px; Shift+Arrow nudges 10 px. Disable arrow browsing in Settings for plain-arrow 1 px nudging. Text fields retain normal typing keys. Right-click a marker removes its measurement. Ctrl+Z / Ctrl+Y undo and redo.
 
-Image grid shows paged thumbnails. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. Thumbnail markers show existing measurements.
+Image grid shows all images on one continuous scrolling page; thumbnails load as you scroll with a bounded cache. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. Measured markers are yellow; predicted guidance is blue. A Predicted filter shows unmeasured candidate images.
 
 Wrap panorama seam allows close-up panning across the left/right boundary. Latitude stays bounded. Pixel display uses nearest-pixel rendering for precise inspection. Marker coordinates always refer to original image pixels regardless of display zoom. Both image panes navigate independently; linked zoom synchronizes pixel scale only.
 
@@ -53,15 +58,25 @@ Local survey XYZ uses point name, X, Y, Z and optionally survey uncertainty. Cho
 Ctrl+S saves portable control_points.json. Set the automatic-landmark and solver-evaluation budgets in Settings, then Refine alignment. Manual optimization points are always retained. Larger budgets need more CPU time and RAM. Refinement runs in the background with edits locked for a consistent snapshot. It writes a new reconstruction, the exact controls used and a report. Source photos and reconstruction remain unchanged.
 Refine alignment operates on the alignment currently open in this editor. To run the full pipeline, Use with main Align saves and attaches the controls to the main window. There, keep Apply manual 360 controls after initial alignment checked, choose the desired supported engine, and press the main Align button. Initial registration runs first, followed by spherical control refinement and exports using the refined poses. The CLI validates selected images and captures an immutable copy of the controls before inference. Controls are not initialization seeds and do not merge disconnected components. Attaching controls does not start alignment automatically.
 
+PROCESSING HARDWARE AND EXPORTS
+Auto uses CUDA for larger problems when available; CUDA forces GPU processing; CPU uses vectorized analytic derivatives. Default solver budget is 100. A separate worker keeps the editor responsive. Progress shows loading, optimization, retriangulation and export. Cancel refinement stops the worker and preserves input files. An iteration limit is not convergence.
+Every successful refinement writes <name>.points.ply, <name>.cameras.csv and <name>.exports.json beside the JSON. The PLY contains refined sparse landmarks. The CSV stores exact native-frame centres, camera-to-world quaternions, world-to-camera rotations/translations and spherical dimensions; it is not a RealityScan measurement CSV. Scale remains arbitrary unless established by metric constraints. To export an older result, open its refined JSON, then Results > Export cloud & camera CSV.
+
 9. INSPECT RESULTS AND 3D
 Results reports angular RMS before/after, solver convergence, independent check errors and output paths. Reaching the evaluation limit is not convergence. Reduced fitted residual is not proof of absolute accuracy. Open result inspects the new alignment with the same controls; it does not automatically replace or export the application's training package.
-3D view opens a local browser viewer of the sparse cloud, camera centres and triangulated controls. Click a control to select it in the editor, or a camera to open its image. Show selected-point sight lines and toggle labels or cloud visibility. Raw survey XYZ is not placed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. Points without reliable triangulation are listed. This is inspection of the currently open alignment, not an automatic live preview of a new solve.
+3D view opens the embedded hardware 3D navigator. Drag to orbit, right/middle drag to pan, wheel to zoom, F to fit. Use Front/Top, Focus selected, visibility switches, camera orientation axes and sight lines. Click or choose a point/camera in the lists to select it. The 2D workspace button returns to the images; the selected camera is loaded there. Browser view opens the optional local WebGL viewer. Public sharing is disabled. Raw survey XYZ is not guessed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. This inspects the open alignment, not a live preview of an unfinished solve.
 
 PREDICTIONS ARE GUIDANCE, NOT MEASUREMENTS
 A dashed blue marker predicts the selected point using at least two consistent measurements and the current alignment. It is never saved automatically. Find the actual feature and click it yourself. Predictions are suppressed when triangulation is unreliable or residuals are high. Avoid repeated patterns, reflections, moving objects, sky and stitching artefacts.
 
+PREDICTED IMAGE LIST
+Properties > Predicted images lists unmeasured registered images and predicted pixels, ranked near the views supporting triangulation. Select an image and Open & focus prediction, or show candidates in the grid. Occlusion and actual visibility are unknown. After measuring an image it leaves the unmeasured list. Predictions never become saved measurements automatically.
+
+TROUBLESHOOTING
+Results > Open troubleshooting log opens the local session JSONL file. It records point/measurement/property/distance edits, image and CSV selections, settings, saved paths, solver progress, device/timing/memory, outputs, cancellation and full error traces. Image contents are not logged. Logs normally live in %LOCALAPPDATA%/Abu_Align/logs, with a temporary-directory fallback if needed.
+
 PRIVACY AND LIMITS
-All images and controls remain on this PC. No uploads or cloud services are used. Image navigation uses CPU memory; spherical joint refinement uses the CPU solver. Geographic latitude/longitude conversion, disconnected-component merging and automatic matching are not supplied by this editor.
+All images and controls remain on this PC. No uploads or cloud services are used. Image navigation uses CPU memory; joint refinement uses CUDA sparse linear solves or the analytic CPU path. Native panorama measurements require no cubemaps. Geographic latitude/longitude conversion, disconnected-component merging and automatic matching are not supplied by this editor.
 
 SHORTCUTS
 Ctrl+O  Open alignment     Ctrl+N  Add point     Ctrl+S  Save controls
@@ -72,8 +87,6 @@ Left/Right  Browse images    Alt+Left/Right  Browse images
 Ctrl+Arrows 0.1 px nudge     Shift+Arrows 10 px nudge
 Plain arrows 1 px nudge when arrow browsing is disabled
 '''
-
-
 class HoverGuide:
     def __init__(self, widget, title, text):
         self.widget, self.title, self.text = widget, title, text
@@ -102,10 +115,10 @@ class HoverGuide:
             try: self.popup.destroy()
             except tk.TclError: pass
             self.popup = None
-
-
 class ControlPointEditor:
     def __init__(self, parent, on_attach=None):
+        self.audit=ControlLog();self.logged_signature=None;self.worker=None;self.cancel_requested=False;self.prediction_browser=None
+        self.native_3d=None;self.scene_future=None;self.scene_generation=0;self.scene_key=None
         self.window = tk.Toplevel(parent); self.window.title('360° Control Points · Abu Align & Train')
         self.window.geometry('1580x940'); self.window.minsize(1100, 720); self.window.configure(bg=BG)
         self.document = ControlDocument(); self.active = tk.StringVar(master=self.window)
@@ -119,7 +132,7 @@ class ControlPointEditor:
         self.context = tk.StringVar(master=self.window, value='No alignment open')
         self.mode = tk.StringVar(master=self.window, value='Place points')
         self.settings = {k: tk.Variable(master=self.window, value=v) for k, v in {
-            'max_points': 10000, 'iterations': 40, 'sigma_px': 1., 'marker_size': 6,
+            'max_points': 10000, 'iterations': 100, 'backend':'auto', 'sigma_px': 1., 'marker_size': 6,
             'wrap': False, 'preserve_zoom': True, 'linked_zoom': False, 'predictions': True, 'pixelated': False, 'other_labels': False, 'browse_arrows':True}.items()}
         self.build(); self.window.protocol('WM_DELETE_WINDOW', self.close)
         self.tabs.enable_traversal()
@@ -187,7 +200,6 @@ class ControlPointEditor:
         self.label(parent, title, muted=True).pack(fill='x', pady=(9, 4))
         widget = ttk.Combobox(parent, textvariable=variable, values=values, style='CP.TCombobox', state='readonly') if values is not None else self.entry(parent, variable)
         widget.pack(fill='x'); self.guide(widget, title, tip); return widget
-
     def build(self):
         style = ttk.Style(self.window)
         # Scoped clam elements keep the parent app's theme unchanged while
@@ -229,6 +241,7 @@ class ControlPointEditor:
         actions=tk.Frame(self.window,bg=BG,padx=18);actions.pack(fill='x',pady=(0,8))
         self.refine_button = self.button(actions, 'Refine alignment', self.refine, 'Jointly optimize cameras and landmarks into a new alignment and report. Source files stay unchanged.', primary=True)
         self.refine_button.pack(side='right')
+        self.cancel_button=self.button(actions,'Cancel refinement',self.cancel_refinement,'Stop the separate solver process. Source files are preserved.');self.cancel_button.configure(state='disabled')
         if self.on_attach:
             self.button(actions,'Use with main Align',self.attach_to_main,'Save and attach these controls to the main application. Main Align runs initial registration, then applies control refinement.',edit=True).pack(side='right',padx=6)
         context = self.label(actions, variable=self.context, muted=True); context.pack(side='left',fill='x',expand=True)
@@ -242,10 +255,10 @@ class ControlPointEditor:
         left = tk.Frame(split, bg=PANEL, padx=10, pady=10); center = tk.Frame(split, bg=BG); right = tk.Frame(split, bg=PANEL, padx=10, pady=10)
         split.add(left, minsize=210, width=260, stretch='never'); split.add(center, minsize=400, stretch='always'); split.add(right, minsize=250, width=300, stretch='never')
         self.build_points(left); self.build_views(center); self.build_inspector(right)
+        self.scene_page=tk.Frame(self.tabs,bg=BG);self.tabs.add(self.scene_page,text='3D navigator')
         footer = tk.Frame(self.window, bg=BG, padx=18, pady=10); footer.pack(side='bottom', fill='x', before=self.tabs)
         self.progress = ttk.Progressbar(footer, mode='indeterminate', length=100)
         self.label(footer, variable=self.status, muted=True, wraplength=1200).pack(side='left', fill='x', expand=True)
-
     def build_points(self, parent):
         tabs = ttk.Notebook(parent, style='CP.TNotebook'); tabs.pack(fill='both', expand=True)
         points, distances = tk.Frame(tabs, bg=PANEL), tk.Frame(tabs, bg=PANEL)
@@ -275,7 +288,6 @@ class ControlPointEditor:
         self.button(distances, 'Add distance', self.distance, 'Add this independently measured distance to the refinement.', edit=True).pack(fill='x', pady=12)
         self.distance_tree = self.tree(distances, ['Points', 'Metres'], [150, 65])
         self.button(distances, 'Remove selected distance', self.remove_distance, 'Remove an incorrect distance. Undo restores it.', edit=True).pack(side='bottom', fill='x', pady=10, before=self.distance_tree.master)
-
     def build_views(self, parent):
         tools = tk.Frame(parent, bg=BG, padx=8, pady=8); tools.pack(fill='x')
         for title in ['Place points', 'Pan']:
@@ -283,8 +295,8 @@ class ControlPointEditor:
                 bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT, font=('Segoe UI', 9))
             radio.pack(side='left'); self.guide(radio, title, 'Place points: click a measurement or drag a marker. Pan: left-drag moves the image without placing points.')
         self.button(tools, 'Fit both', lambda: [p['view'].fit() for p in self.panes], 'Fit both complete panoramas.').pack(side='right')
-        self.button(tools,'Image grid',self.open_grid,'Browse paged thumbnails, filter by measurements and open an image in either pane.').pack(side='right',padx=4)
-        self.button(tools,'3D view',self.open_3d,'Open local WebGL inspection of the sparse cloud, camera centres and triangulated control points. Requires an alignment.').pack(side='right',padx=4)
+        self.button(tools,'Image grid',self.open_grid,'Browse all images in one continuous grid. Thumbnails load as you scroll.').pack(side='right',padx=4)
+        self.button(tools,'3D view',self.open_3d,'Open the embedded hardware 3D navigator. Browser view is available inside it.').pack(side='right',padx=4)
         hint = self.label(tools, 'Wheel: zoom · Space + drag: pan', muted=True); hint.pack(side='right', padx=8)
         tools.bind('<Configure>', lambda e: hint.pack(side='right', padx=8) if e.width > 830 else hint.pack_forget())
         frames = tk.PanedWindow(parent, orient='horizontal', bg=BG, sashwidth=6, bd=0); frames.pack(fill='both', expand=True)
@@ -314,7 +326,6 @@ class ControlPointEditor:
                 self.button(nav, label, command, tip).pack(side='left', padx=(0, 4))
             pane['zoom_text'] = tk.StringVar(master=self.window, value='—'); self.label(nav, variable=pane['zoom_text'], muted=True).pack(side='right')
             pane['info'] = tk.StringVar(master=self.window, value='No image'); self.label(frame, variable=pane['info'], muted=True, padx=8, pady=5).pack(fill='x')
-
     def build_inspector(self, parent):
         self.right_tabs = ttk.Notebook(parent, style='CP.TNotebook'); self.right_tabs.pack(fill='both', expand=True)
         property_page, properties = self.scroll_page(self.right_tabs)
@@ -342,6 +353,7 @@ class ControlPointEditor:
         row = tk.Frame(properties, bg=PANEL); row.pack(fill='x', pady=5)
         self.button(row, 'View left', lambda: self.open_measurement(0), 'Open and focus the selected measurement in the left image.').pack(side='left', padx=(0, 4))
         self.button(row, 'View right', lambda: self.open_measurement(1), 'Open and focus the selected measurement in the right image.').pack(side='left')
+        self.button(properties,'Predicted images…',self.open_predictions,'List unmeasured images near supporting views. Open and focus a predicted location, then verify the real feature.').pack(fill='x',pady=5)
         row = tk.Frame(properties, bg=PANEL); row.pack(fill='x'); self.measurement_sigma = tk.StringVar(master=self.window, value='1')
         entry = self.entry(row, self.measurement_sigma, 5); entry.pack(side='left'); self.guide(entry, 'Measurement uncertainty (px)', 'Expected precision of the selected image measurement, in original pixels.')
         self.button(row, 'Set σ', self.apply_measurement_sigma, 'Apply uncertainty to the selected image measurement.', edit=True).pack(side='left', padx=4)
@@ -353,12 +365,14 @@ class ControlPointEditor:
         self.results_text = ScrolledText(self.results_page, wrap='word', bg=FIELD, fg=TEXT, font=('Segoe UI', 10), relief='flat', padx=10, pady=10)
         self.results_text.pack(fill='both', expand=True, pady=(8, 0)); self.set_results('No refinement run yet.\n\nSave controls, choose a solver budget in Settings, then Refine alignment.')
         self.button(self.results_page, 'Open result', self.open_result, 'Inspect the refined alignment with the same controls. This does not replace the training package.').pack(fill='x', pady=8)
-
+        self.button(self.results_page,'Export cloud & camera CSV',self.export_current,'Export sparse points and exact native-frame camera poses beside the JSON, including previously saved results.').pack(fill='x',pady=4)
+        self.button(self.results_page,'Open troubleshooting log',self.open_log,'Open this session’s local log: edits, settings, progress, errors and outputs.').pack(fill='x',pady=4)
     def build_settings(self, parent):
         self.label(parent, 'Refinement', pady=10).pack(fill='x')
+        self.field(parent,'Processing hardware',self.settings['backend'],'Auto selects CUDA for larger problems when available; CPU uses vectorized analytic derivatives. Refinement runs in a separate process.',['auto','cuda','cpu'])
         for title, key, low, high, tip in [
             ('Automatic landmarks', 'max_points', 1, 50000, 'Maximum automatic landmarks in joint refinement. Manual optimization points are kept. More landmarks require more CPU time and RAM.'),
-            ('Solver evaluations', 'iterations', 5, 500, 'Optimization evaluation budget. Default 40. Reaching the limit is not necessarily convergence.'),
+            ('Solver budget', 'iterations', 5, 500, 'Default 100. CUDA: LM iterations; CPU: residual evaluations. Reaching the limit is not convergence.'),
             ('New measurement σ (px)', 'sigma_px', .1, 100, 'Default uncertainty for new clicks, in original image pixels. Existing measurements retain their own uncertainty.'),
             ('Marker radius (px)', 'marker_size', 3, 16, 'Screen-pixel marker radius, independent of image zoom.')]:
             self.label(parent, title, muted=True).pack(fill='x', pady=(8, 4))
@@ -382,7 +396,6 @@ class ControlPointEditor:
             bg=PANEL, fg=TEXT, selectcolor=FIELD, activebackground=PANEL, activeforeground=TEXT)
         labels.pack(anchor='w', pady=5); self.guide(labels, 'Other point labels', 'The active point is always labelled. Other names appear on hover; enable this to show every name, which can clutter dense areas.')
         self.label(parent, 'Hover over a setting for a brief guide.\nAll processing remains on this PC.', muted=True, wraplength=260, pady=12).pack(fill='x')
-
     def shortcut(self, event, command):
         if isinstance(event.widget, (tk.Entry, ttk.Combobox, tk.Spinbox, tk.Text)) and command in [self.new, self.undo, self.redo]: return
         command(); return 'break'
@@ -404,8 +417,10 @@ class ControlPointEditor:
         if not self.document.dirty: return True
         answer = messagebox.askyesnocancel('Unsaved control points', 'Save your changes before continuing?', parent=self.window)
         return False if answer is None else self.save() if answer else True
-    def error(self, title, error): self.status.set(str(error)); messagebox.showerror(title, str(error), parent=self.window)
-
+    def error(self, title, error):
+        self.audit.error(title,error);self.status.set(str(error));messagebox.showerror(title,str(error),parent=self.window)
+    def open_log(self):
+        self.audit.event('log_open');os.startfile(str(self.audit.path))
     @staticmethod
     def read_alignment(path):
         import numpy as np
@@ -453,9 +468,11 @@ class ControlPointEditor:
         except Exception as error: self.error('Cannot open alignment', error)
     def install_alignment(self, path, component, cameras, directory):
         self.viewer_generation+=1;self.viewer_key=None
+        self.scene_generation+=1;self.scene_key=None
         self.reconstruction, self.component, self.cameras, self.image_dir = Path(path), component, cameras, Path(directory)
         self.image_names = sorted(component['shots']); self.context.set(f'{Path(path).name} · {len(self.image_names)} panoramas · {Path(path).parent.name}')
         self.image_sizes={name:list(camera[2:]) for name,camera in cameras.items()}
+        self.audit.event('alignment_loaded',path=path,image_dir=directory,cameras=len(cameras),points=len(component.get('points',{})))
         self.context_guide.text = str(Path(path))
         for index, pane in enumerate(self.panes):
             pane['choice']['values'] = self.image_names; pane['name'].set(self.image_names[min(index, len(self.image_names)-1)]); self.show(pane, preserve=False)
@@ -477,6 +494,9 @@ class ControlPointEditor:
                     sizes[path.name]=list(image.size)
             self.document=ControlDocument();self.active.set('');self.controls_path=None;self.pending=False
             self.reconstruction=self.component=None;self.cameras={};self.image_dir=Path(folder);self.image_names=list(sizes);self.image_sizes=sizes
+            self.scene_generation+=1;self.scene_key=None
+            if self.native_3d:self.native_3d.set_data({'points':np.empty((0,3)),'colors':np.empty((0,3),dtype='uint8'),'centers':{},'controls':{},'center':np.zeros(3),'extent':1.,'source':'photos-only'})
+            self.audit.event('panoramas_loaded',path=folder,images=len(sizes))
             self.viewer_generation+=1;self.viewer_key=None
             self.context.set(f'{len(sizes)} panoramas · Measurements only · Run main Align before refinement')
             self.context_guide.text=str(self.image_dir)
@@ -503,24 +523,51 @@ class ControlPointEditor:
             budget,iterations=int(self.settings['max_points'].get()),int(self.settings['iterations'].get())
             if not 1<=budget<=50000 or not 5<=iterations<=500:raise ValueError('Check refinement budgets in Settings.')
             if not self.save():return
-            self.on_attach(str(self.controls_path),str(self.image_dir),budget,iterations)
+            self.on_attach(str(self.controls_path),str(self.image_dir),budget,iterations,str(self.settings['backend'].get()))
             self.status.set('Controls attached. Use the main Align button for initial registration followed by refinement. This window’s Refine button updates an existing alignment only.')
         except Exception as error:self.error('Cannot attach controls',error)
-    def open_grid(self):
+    def open_predictions(self):
+        if self.prediction_browser and not self.prediction_browser.closed:self.prediction_browser.refresh();self.prediction_browser.window.lift();return
+        from control_point_predictions import PredictionBrowser
+        self.prediction_browser=PredictionBrowser(self);self.audit.event('predictions_open',point=self.active.get())
+    def open_grid(self,predicted=False):
         if not self.image_names:self.status.set('Open panoramas or an alignment first.');return
-        if self.grid and not self.grid.closed:self.grid.refresh();self.grid.window.lift();return
-        from control_images_grid import ImageGrid
-        self.grid=ImageGrid(self)
+        if self.grid and not self.grid.closed:self.grid.refresh();self.grid.window.lift()
+        else:
+            from control_images_grid import ImageGrid
+            self.grid=ImageGrid(self)
+        if predicted:self.grid.filter.set('Predicted for selected point');self.grid.refresh(reset=True)
+        self.audit.event('image_grid_open',images=len(self.image_names),predicted=predicted)
     def choose_image(self,name,index=None):
         if name not in self.image_sizes:return
         index=self.focused if index is None else index;self.focused=index;pane=self.panes[index];pane['name'].set(name);self.show(pane)
+        self.audit.event('image_selected',image=name,pane=index)
     def navigate_key(self,pane,direction):self.navigate(pane,direction);return 'break'
     def window_arrow(self,event,direction):
         if isinstance(event.widget,(tk.Entry,ttk.Combobox,tk.Spinbox,tk.Text,ttk.Treeview,tk.Canvas)) or event.state & (1|4|8):return
         if bool(self.settings['browse_arrows'].get()):self.navigate(self.panes[self.focused],direction);return 'break'
-    def open_3d(self):
+    def open_3d(self,browser=False):
         if not self.component:self.status.set('3D inspection needs an aligned reconstruction; photos-only mode has no cloud or camera poses.');return
-        self.request_3d(open_browser=True)
+        if browser:self.request_3d(open_browser=True);return
+        if self.native_3d is None:
+            from control_points_native_3d import NativeControlNavigator
+            self.native_3d=NativeControlNavigator(self,self.scene_page);self.native_3d.pack(fill='both',expand=True)
+        self.tabs.select(self.scene_page);self.request_scene();self.audit.event('native_3d_open')
+    def request_scene(self):
+        if not self.native_3d or not self.component or self.closed:return
+        key=(str(self.reconstruction),self.document.signature())
+        if key==self.scene_key:self.native_3d.set_selected(self.active.get());return
+        self.scene_generation+=1;generation=self.scene_generation
+        if self.scene_future:self.scene_future.cancel()
+        component=self.component;controls=copy.deepcopy(self.controls);cameras=self.cameras;source=str(self.reconstruction)
+        def work():
+            if self.closed or generation!=self.scene_generation:return
+            try:
+                from control_points_3d import scene_data
+                data=scene_data(component,controls,cameras);data['source']=source
+                if not self.closed and generation==self.scene_generation:self.result_queue.put(('native_scene',generation,key,data))
+            except Exception as error:self.audit.error('native_scene_error',error);self.result_queue.put(('viewer_error',str(error)))
+        self.scene_future=self.viewer_executor.submit(work)
     def request_3d(self,open_browser=False):
         if not self.component or self.closed or not (self.viewer or open_browser):return
         key=(str(self.reconstruction),self.document.signature())
@@ -539,6 +586,7 @@ class ControlPointEditor:
                     self.viewer=ControlSceneViewer(self.result_queue)
                 if self.closed or generation!=self.viewer_generation:self.viewer.close();self.viewer=None;return
                 self.viewer.update(component,controls,cameras,selected)
+                if open_browser:self.viewer.wait_ready()
                 if generation==self.viewer_generation:self.viewer_key=key
                 if open_browser and not self.closed and generation==self.viewer_generation:self.result_queue.put(('viewer_ready',self.viewer.url))
             except Exception as error:
@@ -577,6 +625,8 @@ class ControlPointEditor:
                 if other is pane: continue
                 other['view'].transform.zoom = zoom; other['view'].transform.constrain(); other['view'].request_draw(); other['zoom_text'].set(f'{zoom*100:.0f}%')
     def update_view_settings(self):
+        try:self.audit.event('view_settings',settings={k:v.get() for k,v in self.settings.items()},mode=self.mode.get())
+        except tk.TclError:pass
         try: size = int(self.settings['marker_size'].get())
         except (ValueError, tk.TclError): size = 6
         for pane in self.panes:
@@ -586,7 +636,6 @@ class ControlPointEditor:
             view.arrow_browse=bool(self.settings['browse_arrows'].get())
             view.canvas.configure(cursor='fleur' if view.pan_mode else 'crosshair')
         self.draw()
-
     def refresh_list(self):
         if not hasattr(self, 'point_tree'): return
         self.refreshing = True; self.point_tree.delete(*self.point_tree.get_children())
@@ -604,6 +653,11 @@ class ControlPointEditor:
         self.refresh_list(); self.populate_properties(); self.refresh_distances(); self.draw()
         self.window.title('360° Control Points' + (' *' if self.document.dirty else '') + ' · Abu Align & Train')
         if self.grid and not self.grid.closed:self.grid.refresh()
+        if self.prediction_browser and not self.prediction_browser.closed:self.prediction_browser.refresh()
+        signature=self.document.signature()
+        if signature!=self.logged_signature:
+            self.audit.event('document_changed',controls=self.controls,active_point=self.active.get());self.logged_signature=signature
+        self.request_scene()
         self.request_3d()
     def tree_selection(self, event):
         values = self.point_tree.selection()
@@ -644,7 +698,6 @@ class ControlPointEditor:
         pixel = next((o['pixel'] for o in point['observations'] if o['shot_id'] == pane['loaded_name']), pane['view'].prediction)
         if pixel: pane['view'].focus(pixel)
         else: self.status.set('No measurement or reliable prediction for this point in this image.')
-
     def new(self):
         if not self.can_edit() or not self.resolve_properties(): return
         if not self.image_dir: self.status.set('Open an alignment or panoramas before adding points.'); return
@@ -730,7 +783,6 @@ class ControlPointEditor:
     def remove_distance(self):
         if not self.resolve_properties(): return
         if self.can_edit() and self.distance_tree.selection(): self.document.checkpoint(); del self.controls['distances'][int(self.distance_tree.selection()[0])]; self.refresh()
-
     def validate_for_alignment(self, payload):
         data = validate_controls(payload)
         if self.image_sizes:
@@ -765,6 +817,7 @@ class ControlPointEditor:
             if self.reconstruction and path.absolute() == self.reconstruction.absolute(): raise ValueError('Controls must not overwrite the reconstruction.')
             payload=self.validate_for_alignment(self.controls);payload['image_sizes']=copy.deepcopy(self.image_sizes)
             atomic_json(path, payload); self.controls_path = path; self.document.mark_saved(); self.refresh()
+            self.audit.event('controls_saved',path=path,points=len(payload['points']),measurements=sum(len(p['observations']) for p in payload['points']))
             self.status.set(f'Controls saved: {path}'); return True
         except Exception as error: self.error('Cannot save controls', error); return False
     def save_as(self):
@@ -800,19 +853,56 @@ class ControlPointEditor:
         if any(p.exists() for p in [controls, report_path]) and not messagebox.askyesno('Existing sidecars', 'Replace existing controls/report sidecars for this output?', parent=self.window): return
         try: atomic_json(controls, payload)
         except Exception as error: self.error('Cannot write controls', error); return
-        source = self.reconstruction; self.set_busy(True); self.status.set('Refining cameras and landmarks… Images stay on this PC.')
+        source=self.reconstruction;backend=str(self.settings['backend'].get())
+        self.audit.event('refine_start',source=source,output=output,controls=controls,backend=backend,max_points=budget,iterations=iterations)
+        self.set_busy(True);self.status.set('Starting isolated refinement process…')
+        command=[sys.executable,'-B',str(Path(__file__).with_name('spherical_refinement.py')),'--input',str(source),'--output',str(output),'--controls',str(controls),'--max-points',str(budget),'--iterations',str(iterations),'--backend',backend]
+        self.launch_worker(command,'refine',output)
+    def launch_worker(self,command,kind,output):
+        self.cancel_requested=False
         def work():
+            report=None;tail=[]
             try:
-                from spherical_refinement import refine
-                self.result_queue.put(('refined', output, refine(source, output, controls, max_points=budget, max_iterations=iterations)))
-            except Exception as error: self.result_queue.put(('refine_error', str(error)))
-        threading.Thread(target=work, daemon=True, name='Abu spherical refinement').start()
+                env=dict(os.environ,OMP_NUM_THREADS='2',OPENBLAS_NUM_THREADS='2',MKL_NUM_THREADS='2',PYTHONUNBUFFERED='1')
+                process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',env=env,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.worker=process
+                if self.cancel_requested:process.terminate()
+                for line in process.stdout:
+                    line=line.rstrip();tail.append(line);tail=tail[-15:]
+                    if line.startswith('ABU_PROGRESS '):
+                        event=json.loads(line[13:]);self.audit.event('solver_progress',**event);self.result_queue.put(('solver_progress',event))
+                    elif line.startswith('ABU_RESULT '):report=json.loads(line[11:])
+                    else:self.audit.event('worker_output',text=line)
+                code=process.wait();self.worker=None
+                if self.cancel_requested:self.audit.event('worker_cancelled',kind=kind);self.result_queue.put(('worker_cancelled',));return
+                if code!=0:raise RuntimeError('Worker exited '+str(code)+'\n'+'\n'.join(tail))
+                if kind=='refine':
+                    if report is None:raise RuntimeError('Refinement worker returned no report.')
+                    self.audit.event('refine_complete',report=report);self.result_queue.put(('refined',output,report))
+                else:
+                    exports=json.loads(output.with_suffix('.exports.json').read_text(encoding='utf-8'));self.audit.event('export_complete',exports=exports);self.result_queue.put(('exports_ready',exports))
+            except Exception as error:
+                self.worker=None;self.audit.error('worker_error',error);self.result_queue.put(('refine_error',str(error)))
+        threading.Thread(target=work,daemon=True,name='Abu control worker monitor').start()
+    def cancel_refinement(self):
+        if not self.busy:return
+        self.cancel_requested=True;self.audit.event('cancel_requested')
+        if self.worker and self.worker.poll() is None:self.worker.terminate()
+        self.status.set('Stopping refinement… Source files are preserved.')
+    def export_current(self):
+        if not self.can_edit():return
+        source=self.last_result or self.reconstruction
+        if not source:self.status.set('Open a refined reconstruction first.');return
+        self.audit.event('export_start',source=source);self.set_busy(True);self.status.set('Exporting sparse cloud and camera alignment CSV…')
+        command=[sys.executable,'-B',str(Path(__file__).with_name('refined_exports.py')),'--input',str(source)]
+        self.launch_worker(command,'export',source)
     def set_busy(self, value):
         self.busy = value
         for widget in self.edit_buttons:widget.configure(state='disabled' if value else 'normal')
         self.refine_button.configure(state='disabled' if value or not self.reconstruction else 'normal')
-        if value: self.progress.pack(side='right', padx=10); self.progress.start(12)
-        else: self.progress.stop(); self.progress.pack_forget()
+        if value:
+            self.cancel_button.pack(side='right',padx=6);self.cancel_button.configure(state='normal');self.progress.pack(side='right',padx=10);self.progress.start(12)
+        else:self.cancel_button.pack_forget();self.progress.stop();self.progress.pack_forget()
     def set_results(self, text):
         self.results_text.configure(state='normal'); self.results_text.delete('1.0', 'end'); self.results_text.insert('1.0', text); self.results_text.configure(state='disabled')
     def open_result(self):
@@ -831,6 +921,7 @@ class ControlPointEditor:
                 if event[2] != pane['generation']: continue
                 pane['loading'] = False
                 if event[0] == 'image_error':
+                    self.audit.event('image_error',image=pane['name'].get(),error=event[3])
                     pane['info'].set('Image unavailable'); pane['view'].overlay = 'Image unavailable · choose matching original images'
                     pane['view'].request_draw(); self.status.set(event[3]); continue
                 _, _, _, name, asset, preserve = event; pane['loaded_name'] = name; pane['view'].set_asset(asset, preserve)
@@ -843,28 +934,38 @@ class ControlPointEditor:
             elif event[0] == 'refined':
                 self.set_busy(False); _, output, report = event; self.last_result = output
                 state = 'Converged' if report['converged'] else 'Evaluation budget reached — inspect before use'
-                self.set_results(f"{state}\n\nAngular RMS\n{report['before_angular_rms_deg']:.5f}° → {report['after_angular_rms_deg']:.5f}°\n\n{report['cameras']} cameras\n{report['optimized_points']} landmarks\n{report['observations']} observations\n{report['seconds']:.1f} seconds\n\n{report['termination']}\n\nScale: {report['scale']}\n\nIndependent checks\n{json.dumps(report['checks'], indent=2) if report['checks'] else 'No independent checks supplied'}\n\nNew alignment\n{output}\n\nReport\n{output.with_suffix('.report.json')}\n\nFitted residual reduction does not prove absolute accuracy.")
+                self.set_results(f"{state}\n\nBackend: {report['backend']}\nDevice: {report.get('device','CPU')}\nSolver peak VRAM: {report.get('peak_solver_vram_mib',0):.1f} MiB\n\nAngular RMS\n{report['before_angular_rms_deg']:.5f}° → {report['after_angular_rms_deg']:.5f}°\n\n{report['cameras']} cameras\n{report['optimized_points']} landmarks\n{report['observations']} observations\n{report['seconds']:.1f} seconds\n\n{report['termination']}\n\nScale: {report['scale']}\n\nIndependent checks\n{json.dumps(report['checks'], indent=2) if report['checks'] else 'No independent checks supplied'}\n\nNew alignment\n{output}\n\nReport\n{output.with_suffix('.report.json')}\n\nExports\n{json.dumps(report.get('exports',{}),indent=2)}\n\nFitted residual reduction does not prove absolute accuracy.")
                 self.right_tabs.select(self.results_page); self.status.set(f'{state}. Saved: {output.name}')
             elif event[0] == 'refine_error':
                 self.set_busy(False); self.set_results('Refinement failed\n\n'+event[1]); self.right_tabs.select(self.results_page); self.status.set('Refinement failed: '+event[1])
+            elif event[0]=='native_scene':
+                if event[1]==self.scene_generation and self.native_3d:
+                    self.scene_key=event[2];self.native_3d.set_data(event[3]);self.native_3d.set_selected(self.active.get())
+            elif event[0]=='solver_progress':
+                info=event[1];phase=info['phase'];iteration=info.get('iteration',info.get('completed'));total=info.get('iterations',info.get('total',''))
+                self.status.set(phase.capitalize()+(' '+str(iteration)+' / '+str(total) if iteration else '')+' · '+str(info.get('device',info.get('backend','')))+' · '+f"{info.get('elapsed',0):.1f}s")
+            elif event[0]=='worker_cancelled':self.set_busy(False);self.status.set('Refinement cancelled. Source files preserved; inspect any completed outputs.')
+            elif event[0]=='exports_ready':
+                self.set_busy(False);self.set_results('Sparse cloud and camera alignment exported\n\n'+json.dumps(event[1],indent=2));self.right_tabs.select(self.results_page);self.status.set('Exports saved beside '+Path(event[1]['reconstruction']).name)
             elif event[0]=='viewer_ready':
                 import webbrowser
-                webbrowser.open(event[1]);self.status.set('Local 3D view: '+event[1]+' · click controls/cameras to select them here.')
-            elif event[0]=='viewer_error':self.status.set('3D view unavailable: '+event[1])
+                self.audit.event('browser_3d_open',url=event[1]);webbrowser.open(event[1]);self.status.set('Local 3D view: '+event[1]+' · click controls/cameras to select them here.')
+            elif event[0]=='viewer_error':self.audit.event('viewer_error',error=event[1]);self.status.set('3D view unavailable: '+event[1])
             elif event[0]=='viewer_select':
                 if self.document.point(event[1]):self.select(event[1])
             elif event[0]=='viewer_camera':self.choose_image(event[1])
+            elif event[0]=='viewer_connected':self.audit.event('browser_3d_connected',client=event[1]);self.status.set('Local browser 3D connected.')
         self.poll_job = self.window.after(60, self.poll)
     def close(self):
         if self.busy: messagebox.showinfo('Refinement running', 'Wait for refinement to finish before closing.', parent=self.window); return
         if not self.unsaved_guard(): return
-        self.closed = True; self.window.after_cancel(self.poll_job)
+        self.audit.event('editor_close');self.closed=True;self.scene_generation+=1;self.window.after_cancel(self.poll_job)
+        if self.native_3d:self.native_3d.close()
+        if self.prediction_browser and not self.prediction_browser.closed:self.prediction_browser.close()
         for guide in self.guides: guide.hide()
         for pane in self.panes: pane['view'].close()
         if self.grid and not self.grid.closed:self.grid.close()
         self.viewer_executor.shutdown(wait=False,cancel_futures=True)
         if self.viewer:self.viewer.close()
         self.executor.shutdown(wait=False, cancel_futures=True); self.window.destroy()
-
-
 def open_editor(parent,on_attach=None): return ControlPointEditor(parent,on_attach)

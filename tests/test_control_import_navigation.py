@@ -94,7 +94,7 @@ class WorkflowTests(unittest.TestCase):
         self.editor.window.geometry('1100x720');self.root.update()
         actions=self.editor.refine_button.master
         for button in actions.winfo_children():
-            if button.winfo_class()=='Button':
+            if button.winfo_class()=='Button' and button!=self.editor.cancel_button:
                 self.assertTrue(button.winfo_ismapped())
                 self.assertGreaterEqual(button.winfo_width(),button.winfo_reqwidth())
     def test_csv_dialog_preview_is_atomic_and_undoable(self):

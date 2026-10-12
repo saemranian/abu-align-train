@@ -1,3 +1,22 @@
+# Abu Align & Train v0.1.4.5: Accelerated responsive 360 refinement, predicted image browsing and embedded GPU 3D
+
+Root cause: the supplied 593-camera report used Python-loop residuals and sparse finite differences in the GUI process, taking 476.98 seconds and exhausting its budget. The blank Viser browser was reproduced: installed 0.2.23 crashes with React error 300 when the hide-share setting changes hook count. No upstream repositories or installed packages were edited.
+
+Changes: vectorized analytic bearing/GCP/distance/scale Jacobians; CUDA float64 sparse damped LM with scaled CG; analytic SciPy CPU path and Auto selection; batched safeguarded retriangulation; compact atomic reconstruction output. Refinement runs in an isolated, cancellable process with bounded CPU worker threads, phase/iteration progress, device and VRAM reporting. Native-frame binary sparse PLY and lossless camera CSV export automatically beside new JSON, and Results can export existing refinements. The requested existing JSON now has verified companions on the user's PC, with no source replacement or uploads.
+
+UI: predicted unmeasured-image list, ranked geometric guidance and focus-on-open; predictions never become measurements automatically. All images are in one virtualized scrolling grid with bounded thumbnails. Added embedded Windows OpenGL navigator with orbit/pan/zoom, fit/presets, focus, camera/control picking and lists, camera axes, visibility and sight lines. Browser view is repaired through local configuration; public share requests are denied on the server instance. Added local per-session JSONL audit for edits, images/imports, settings, worker events, paths, cancellation and full errors; updated Help and user documentation.
+
+Verification: 53 targeted tests passed in 45.14 seconds, covering analytic versus independent derivatives, CPU/CUDA synthetic pose accuracy and GCP/check errors, batched/scalar agreement, isolated worker responsiveness/cancellation, exports, logging, 600-image virtualization and GPU navigator picking. Browser UI visibly renders synthetic cloud/controls after the fix. Native renderer verified NVIDIA RTX 4090/OpenGL 4.6. Actual requested exports verified 156785 sparse points and 593 exact camera centres/quaternions.
+
+Local performance: same input/controls and 10000 automatic landmark budget. Final CUDA 100-iteration run completed in 40.95 seconds including setup, retriangulation and exports; setup 13.58 s, solver 20.32 s. Angular RMS 0.135842 to 0.073880 degrees, versus 0.075988 in the old supplied report. These are differing iteration budgets/timer scopes; all hit limits. No independent survey accuracy or convergence claim. Full details: docs/CONTROL_ACCELERATION_VERIFICATION.md.
+
+Memory hygiene: measured peak solver VRAM 60.32 MiB; no dense Hessian. CUDA cached memory released after solve, isolated worker exits after completion/cancellation. GPU viewer display bounded to 50000 points. Thumbnail cache 128 max, about 7.5 MiB raw RGB, only visible tiles instantiated. Peak host RAM not instrumented. All photos and private outputs stayed local, outside Git.
+
+Primary changed files: spherical_refinement.py, spherical_acceleration.py, refined_exports.py, control_points_workspace.py, control_points_native_3d.py, control_points_3d.py, control_point_predictions.py, control_images_grid.py, control_points_logging.py, control_points_model.py, control_points_csv.py, abu_align_gui.py, align_cli.py. Tests: test_control_acceleration.py, test_control_points_workspace.py, test_control_import_navigation.py. Docs: updated user guide/SPHERICAL_CONTROLS/historical workflow record plus new acceleration verification. Release syncs version headers, launchers, walkthroughs, root/mirror and version snapshots.
+
+
+---
+
 # Abu Align & Train v0.1.4.4: RealityScan CSV import, image browser and local 3D control inspection
 
 Added an undoable RealityScan measurement/local-XYZ CSV importer, projection and dimension checks, explicit column mapping, preview and merge policy. The provided portrait-image export defaults to point names only; its pixels cannot be transferred onto ERP images.

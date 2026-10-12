@@ -193,6 +193,7 @@ class CSVImportDialog:
     def apply(self):
         if not self.editor.can_edit() or not self.preview_import(): return
         self.editor.document.checkpoint();self.editor.controls=self.candidate
+        self.editor.audit.event('csv_import',source=self.table['path'],kind=self.kind.get(),replace=self.replace.get(),skip_unmatched=self.skip.get(),units=self.units.get())
         if not self.editor.selected() and self.candidate['points']: self.editor.active.set(self.candidate['points'][0]['id'])
         self.editor.refresh();self.editor.status.set('CSV imported. Review measurements and save controls; Undo restores the previous document.');self.window.destroy()
 

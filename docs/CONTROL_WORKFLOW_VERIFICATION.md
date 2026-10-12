@@ -1,5 +1,8 @@
 # Expanded manual 360 control workflow verification
 
+This records v0.1.4.4. For the current acceleration, continuous grid and
+embedded 3D workflow, see [the newer verification](CONTROL_ACCELERATION_VERIFICATION.md).
+
 ## Design and scope
 
 The editor supports measurements before registration and inspection/refinement

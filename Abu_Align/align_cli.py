@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.4.4 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.4.5 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1671,7 +1671,8 @@ def main():
     parser.add_argument('--spherical_refine', action='store_true', help='Joint native spherical camera/landmark refinement before packaging')
     parser.add_argument('--control_points', help='Manual landmark, local XYZ GCP, distance and check-point JSON')
     parser.add_argument('--spherical_ba_points', type=int, default=10000, help='Automatic landmark budget for sparse spherical BA')
-    parser.add_argument('--spherical_ba_iterations',type=int,default=40,help='Maximum joint spherical-refinement function evaluations')
+    parser.add_argument('--spherical_ba_iterations',type=int,default=100,help='Joint spherical-refinement iteration/evaluation budget')
+    parser.add_argument('--spherical_ba_backend',choices=['auto','cuda','cpu'],default='auto',help='Analytic spherical BA hardware backend')
     # RealityScan / RealityCapture Options
     parser.add_argument("--rs_gui", action="store_true", default=False, help="Launch interactive RealityScan GUI window instead of running headless in background")
     parser.add_argument("--rs_prior_run", type=str, default=None, help="Custom prior alignment run folder or cameras.csv path to ingest")
@@ -2486,7 +2487,7 @@ def main():
         from spherical_refinement import refine
         from opensfm_engine import opensfm_to_pycolmap
         refined = os.path.join(output_dir, 'refined', 'reconstruction.json')
-        report = refine(source, refined, args.control_points, args.spherical_ba_points,args.spherical_ba_iterations)
+        report = refine(source, refined, args.control_points, args.spherical_ba_points,args.spherical_ba_iterations,args.spherical_ba_backend)
         shutil.copy2(args.control_points,Path(refined).with_suffix('.controls.json'))
         print(f"Spherical refinement: {report['before_angular_rms_deg']:.4f} -> {report['after_angular_rms_deg']:.4f} degrees RMS")
         reconstruction = opensfm_to_pycolmap(refined)
