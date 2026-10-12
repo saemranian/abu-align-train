@@ -1,6 +1,6 @@
 # Manual 360 controls and reproducible evaluation
 
-Open **Prepare → 360° manual control points**. Select one spherical
+Open **Prepare input ▾ → 360° manual control points**. The redesigned workspace has a searchable point list, two independent image views, a Properties/Settings/Results inspector, and a Help tab. See [the user guide](360_CONTROL_POINTS_USER_GUIDE.md). Select one spherical
 reconstruction.json and its original images. Create a named point and click
 the same physical location in each pane. Choose other images to add more
 observations. Wheel zooms, middle-button drag pans, right click removes an
@@ -49,3 +49,6 @@ original-image pixel coordinates. The tracked model excludes loose display
 cloud points that cannot participate in joint BA; their separate PLY remains.
 The default main CLI/desktop DVO route requires the neural backend to initialize.
 Use `--dvo_allow_fallback` only for an explicitly experimental CPU run.
+
+
+Disabled manual points and distance constraints attached to them are excluded from optimization. Controls retain their disabled state on disk. Use Apply properties to commit property edits; Save as keeps separate control-file variants. The workspace includes measured angular residuals and unconfirmed projection guidance. Predictions never become observations automatically.

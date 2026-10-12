@@ -66,6 +66,8 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
         observations.setdefault(point, []).append((shot, pixel, 1.0))
     controls_by_id, checks = {}, []
     for control in controls.get('points', []):
+        if not control.get('enabled', True):
+            continue
         point_id = str(control['id'])
         if point_id in controls_by_id:
             raise ValueError(f'Duplicate control id: {point_id}')
@@ -136,7 +138,9 @@ def refine(input_path, output_path, controls_path=None, max_points=10000, max_it
     measurements = [(point, shot, pixel_bearing(pixel, *cameras[shot][2:]),
                      max(2 * np.pi / cameras[shot][2] * sigma, 1e-8))
                     for point in point_ids for shot, pixel, sigma in observations[point]]
-    distances = controls.get('distances', [])
+    disabled = {str(p['id']) for p in controls.get('points', []) if not p.get('enabled', True)}
+    distances = [d for d in controls.get('distances', []) if d.get('enabled', True)
+                 and str(d['a']) not in disabled and str(d['b']) not in disabled]
     for distance in distances:
         if str(distance['a']) not in point_index or str(distance['b']) not in point_index or float(distance['meters']) <= 0 or float(distance.get('sigma_m', .01)) <= 0:
             raise ValueError('Invalid distance constraint or unknown endpoint')

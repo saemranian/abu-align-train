@@ -1,0 +1,88 @@
+Technical Integration Directive for the 360 Splitter Application Agent
+The implementation specification below is structured as a direct integration directive for the automated software development agent modifying the 360 splitter application.
+Implementation Directive: 360 Splitter Metadata Generation Module
+Context & Critical Technical Architecture: RealityScan 2.2 cannot resolve floating zero-baseline camera rigs or lock relative multi-view rotations via XMP sidecars without pre-existing calibration data1. Writing xcr:Rotation, xcr:Position, xcr:Rig, xcr:RigInstance, or xcr:LockedPoseGroup causes solver failures, component fragmentation, or coordinate pinning1.
+To align 360 cubemaps automatically in RealityScan 2.2, follow the official pipeline developed by Epic Games Slovakia (pano2views)7. The application must lock synthetic pinhole camera intrinsics only8. RealityScan relies on the  physical image overlap provided by the  FOV to resolve relative orientations and world trajectories automatically7.
+1. Equirectangular-to-Pinhole Projection Requirements
+When splitting each equirectangular frame into perspective crops:
+Generate 6 faces per equirectangular capture: front, right, back, left, up, and down8.
+Configure Field of View () to exactly  (horizontal and vertical)7.
+Export as square images (e.g.,  or  pixels)8.
+Angular viewing directions (Yaw, Pitch) for gnomonic projection:
+front: 
+right: 
+back: 
+left: 
+up: 
+down: 
+2. Mathematical Focal Length Function
+Implement the 35mm equivalent focal length computation using the  horizontal gauge standard3:
+
+
+
+Python
+import math
+
+def compute_xcr_focal_length_35mm(fov_degrees: float) -> str:
+    """
+    Computes RealityScan 35mm equivalent focal length for square perspective crops.
+    Formula: f = 18.0 / tan(fov_degrees / 2)
+    """
+    half_angle_rad = math.radians(fov_degrees / 2.0)
+    focal_mm = 18.0 / math.tan(half_angle_rad)
+    return f"{focal_mm:.6f}"
+
+
+3. Metadata Generation Rules
+For every exported image (e.g., {image_stem}.jpg), write {image_stem}.xmp alongside it in the exact same directory2:
+Namespace MUST be xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"2.
+All parameters MUST be written as inline attributes inside <rdf:Description ... />2.
+Intrinsics MUST be locked: xcr:CalibrationPrior="exact", xcr:CalibrationGroup="1", xcr:DistortionGroup="1", xcr:DistortionModel="brown3", with all distortion coefficients set to 0.0000002.
+DO NOT WRITE EXTRINSIC TAGS:
+Do NOT write xcr:Rotation8.
+Do NOT write xcr:Position or <xcr:Position>8.
+Do NOT write xcr:PosePrior8.
+Do NOT write xcr:Coordinates8.
+Do NOT write xcr:PoseAccuracyPosition or xcr:PoseAccuracyRotation8.
+Do NOT write xcr:Rig, xcr:RigInstance, xcr:RigPoseIndex, or xcr:LockedPoseGroup8.
+4. Turnkey Sidecar Generator Module
+Incorporate this module directly into the export stage of the splitting application:
+
+
+
+Python
+from pathlib import Path
+
+def write_realityscan_xmp_sidecar(image_path: Path, fov_degrees: float = 114.0) -> Path:
+    """
+    Writes a RealityScan 2.2-compliant XMP sidecar locking synthetic intrinsics
+    while leaving extrinsics unconstrained for free bundle adjustment.
+    """
+    focal_length_str = compute_xcr_focal_length_35mm(fov_degrees)
+    xmp_path = image_path.with_suffix(".xmp")
+    
+    xmp_payload = (
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1#"\n'
+        '      xcr:Version="3"\n'
+        f'      xcr:FocalLength35mm="{focal_length_str}"\n'
+        '      xcr:Skew="0.000000"\n'
+        '      xcr:AspectRatio="1.000000"\n'
+        '      xcr:PrincipalPointU="0.000000"\n'
+        '      xcr:PrincipalPointV="0.000000"\n'
+        '      xcr:CalibrationPrior="exact"\n'
+        '      xcr:CalibrationGroup="1"\n'
+        '      xcr:DistortionGroup="1"\n'
+        '      xcr:DistortionModel="brown3"\n'
+        '      xcr:DistortionCoeficients="0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"\n'
+        '      xcr:InTexturing="1"\n'
+        '      xcr:InMeshing="1" />\n'
+        '  </rdf:RDF>\n'
+        '</x:xmpmeta>\n'
+    )
+    
+    with open(xmp_path, "w", encoding="utf-8") as file:
+        file.write(xmp_payload)
+        
+    return xmp_path

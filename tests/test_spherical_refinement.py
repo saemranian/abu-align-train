@@ -51,6 +51,12 @@ class TestSphericalRefinement(unittest.TestCase):
             controlled = refine(root/'noisy.json', root/'controlled.json', root/'controls.json', max_iterations=100)
             self.assertLess(controlled['checks'][0]['error_units'], .01)
             self.assertEqual(controlled['observations'], 68)
+            controls['points'].append({'id': 'disabled', 'type': 'gcp', 'enabled': False, 'observations': []})
+            controls['distances'] = [{'a': 'disabled', 'b': '0', 'meters': 100, 'sigma_m': .01}]
+            (root/'disabled.json').write_text(json.dumps(controls))
+            disabled = refine(root/'noisy.json', root/'disabled_result.json', root/'disabled.json', max_iterations=100)
+            self.assertEqual(disabled['observations'], 68)
+            self.assertAlmostEqual(disabled['after_angular_rms_deg'], controlled['after_angular_rms_deg'], places=9)
 
     def test_spherical_seam_and_metric_weighting(self):
         np.testing.assert_allclose(pixel_bearing([0, 256], 1024, 512), pixel_bearing([1024, 256], 1024, 512), atol=1e-12)

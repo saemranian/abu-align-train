@@ -12,6 +12,27 @@ class DesktopTests(unittest.TestCase):
     setUp = test_gui_presets.PresetTests.setUp
     close_root = test_gui_presets.PresetTests.close_root
 
+    def test_manual_controls_menu_opens_new_workspace(self):
+        from tkinter import ttk
+        from unittest.mock import patch
+        def descendants(widget):
+            yield widget
+            for child in widget.winfo_children(): yield from descendants(child)
+        prepare = next(w for w in descendants(self.root) if isinstance(w, tk.Menubutton) and w.cget('text') == 'Prepare input ▾')
+        menu = self.root.nametowidget(prepare.cget('menu'))
+        index = next(i for i in range(menu.index('end')+1) if menu.type(i) == 'command' and menu.entrycget(i, 'label') == '360° manual control points')
+        theme = ttk.Style(self.root).theme_use()
+        from control_points_ui import open_editor
+        opened = []
+        def factory(parent):
+            editor = open_editor(parent); opened.append(editor); return editor
+        with patch('control_points_ui.open_editor', side_effect=factory):
+            menu.invoke(index); self.root.update()
+            dialogs = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]
+            self.assertTrue(any('Control Points' in w.title() for w in dialogs))
+        self.assertEqual(ttk.Style(self.root).theme_use(), theme)
+        for editor in opened: editor.close()
+
     def test_shared_icons_keep_labels_and_follow_disabled_state(self):
         from desktop_ui import button, DISABLED
         from ui_icons import line_icon

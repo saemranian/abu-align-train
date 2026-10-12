@@ -20,11 +20,18 @@ no cubemap conversion is part of these routes.
    fixed-camera invariant, CPU checkpoint export, unique per-run outputs, and
    native COLMAP candidate accessible from the alignment GUI and CLI.
 
-5. Current release: persistent bounded DVO neural observations, stable patch IDs
+5. v0.1.4.2: persistent bounded DVO neural observations, stable patch IDs
    through keyframe removal, final-trajectory spherical triangulation, original
    pixel resolution on export, and a strict CLI/desktop neural-backend gate.
    Untracked visualization cloud points stay in their PLY but are excluded from
    the tracked BA model when usable measurements exist.
+
+6. Current release: redesigned manual-control workspace with point and distance
+   lists, editable properties and measurement uncertainties, undo/redo and dirty
+   guards, asynchronous full-image loading, cursor-centred zoom, pan, precise
+   marker dragging/nudging, seam wrap, focus and projection guidance, configurable
+   refinement budgets, explicit result/convergence reporting, Help and hover
+   guides. Disabled points and their attached distances are inactive in BA.
 
 ## Local acceptance evidence (2026-10-12)
 
