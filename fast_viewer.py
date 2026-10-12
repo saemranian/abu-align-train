@@ -668,22 +668,12 @@ def find_run_assets(run_dir: str) -> Tuple[Optional[str], Optional[str], Optiona
 def load_run_cameras(run_dir: str) -> Tuple[List[Dict], str]:
     """
     Discovers and parses camera poses from any supported Abu Align engine format.
-    Priority:
-    1. 360DVO TUM Trajectory
-    2. COLMAP images.txt
-    3. COLMAP images.bin
-    4. transforms.json
-    5. OpenSfM reconstruction.json
-    6. ACE0 poses_final.txt
-    7. Postshot / RealityCapture cameras.csv
-    Returns (cameras, source_label).
+    Prioritizes formats that preserve image filenames (for photo thumbnails and matching),
+    falling back to robotics trajectory logs.
     """
     _, tum_traj, colmap_images, colmap_bin, tf_json, opensfm_json, ace0_poses = find_run_assets(run_dir)
 
-    if tum_traj:
-        cams = load_cameras_from_tum(tum_traj)
-        if cams: return cams, "360DVO Trajectory (TUM)"
-
+    # 1. COLMAP formats (preserve exact filenames & 6-DoF poses)
     if colmap_images:
         cams = load_cameras_from_colmap_images(colmap_images)
         if cams: return cams, "COLMAP images.txt"
@@ -692,23 +682,31 @@ def load_run_cameras(run_dir: str) -> Tuple[List[Dict], str]:
         cams = load_cameras_from_colmap_bin(colmap_bin)
         if cams: return cams, "COLMAP images.bin"
 
+    # 2. transforms.json (NeRF / 3DGS format with filenames)
     if tf_json:
         cams = load_cameras_from_transforms(tf_json)
         if cams: return cams, "transforms.json"
 
+    # 3. OpenSfM reconstruction.json
     if opensfm_json:
         cams = load_cameras_from_opensfm(opensfm_json)
         if cams: return cams, "OpenSfM reconstruction.json"
 
+    # 4. ACE0 poses
     if ace0_poses:
         cams = load_cameras_from_ace0(ace0_poses)
         if cams: return cams, "ACE0 poses"
 
-    # Fallback to cameras.csv
+    # 5. RealityCapture / Postshot cameras.csv
     for csv_cand in [os.path.join(run_dir, "Postshot_RealityCapture", "cameras.csv"), os.path.join(run_dir, "cameras.csv")]:
         if os.path.isfile(csv_cand):
             cams = load_cameras_from_cameras_csv(csv_cand)
             if cams: return cams, "cameras.csv"
+
+    # 6. 360DVO TUM Trajectory (timestamp-based fallback)
+    if tum_traj:
+        cams = load_cameras_from_tum(tum_traj)
+        if cams: return cams, "360DVO Trajectory (TUM)"
 
     return [], "None"
 

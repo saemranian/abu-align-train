@@ -376,13 +376,31 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
         k2 = float(c_data.get("k2", 0.0))
 
         if proj in ["equirectangular", "spherical"]:
-            cam = pycolmap.Camera(
-                model="EQUIRECTANGULAR",
-                width=w,
-                height=h,
-                params=[],
-                camera_id=cam_id
-            )
+            # PyColmap >= 3.9 / 4.0 EQUIRECTANGULAR model expects [width, height] params
+            try:
+                cam = pycolmap.Camera(
+                    model="EQUIRECTANGULAR",
+                    width=w,
+                    height=h,
+                    params=[float(w), float(h)],
+                    camera_id=cam_id
+                )
+                if not cam.verify_params():
+                    cam = pycolmap.Camera(
+                        model="EQUIRECTANGULAR",
+                        width=w,
+                        height=h,
+                        params=[],
+                        camera_id=cam_id
+                    )
+            except Exception:
+                cam = pycolmap.Camera(
+                    model="EQUIRECTANGULAR",
+                    width=w,
+                    height=h,
+                    params=[],
+                    camera_id=cam_id
+                )
         elif proj in ["fisheye"]:
             cam = pycolmap.Camera(
                 model="OPENCV_FISHEYE",
@@ -410,7 +428,10 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
                 )
 
         if hasattr(rec, "add_camera_with_trivial_rig"):
-            rec.add_camera_with_trivial_rig(cam)
+            try:
+                rec.add_camera_with_trivial_rig(cam)
+            except Exception:
+                rec.add_camera(cam)
         else:
             rec.add_camera(cam)
 
@@ -554,14 +575,18 @@ class OpenSfMEngine:
             "use_exif_size": True,
             "feature_type": self.feature_type,
             "feature_min_frames": self.feature_min_frames,
+            "feature_min_frames_panorama": self.feature_min_frames,
             "feature_process_size": self.feature_process_size,
+            "feature_process_size_panorama": self.feature_process_size,
+            "sift_nfeatures": self.feature_min_frames,
             "matching_order_neighbors": self.matching_order_neighbors,
             "matching_gps_distance": 150,
             "matching_gps_neighbors": 8,
             "matcher_type": actual_matcher,
             "bundle_interval": self.bundle_interval,
             "optimize_camera_parameters": self.optimize_camera_parameters,
-            "processes": max(1, os.cpu_count() - 2) if os.cpu_count() else 4
+            "processes": max(1, os.cpu_count() - 2) if os.cpu_count() else 4,
+            "read_processes": min(8, max(1, (os.cpu_count() or 4) - 2)),
         }
         with open(os.path.join(self.output_dir, "config.yaml"), "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, default_flow_style=False)
@@ -796,6 +821,12 @@ class OpenSfMEngine:
                 ply_source=found_ply or (os.path.join(target_3dgs_dir, "points.ply") if os.path.isfile(os.path.join(target_3dgs_dir, "points.ply")) else None),
                 output_ply_dest=pts_path
             )
+
+            # Also export RealityCapture / RealityScan cameras.csv for universal interoperability and 360 splitter
+            rc_csv_3dgs = os.path.join(target_3dgs_dir, "cameras.csv")
+            export_opensfm_to_realitycapture_csv(rec_json, rc_csv_3dgs)
+            rc_csv_out = os.path.join(self.output_dir, "cameras.csv")
+            export_opensfm_to_realitycapture_csv(rec_json, rc_csv_out)
 
         return True
 
@@ -1787,6 +1818,63 @@ def opensfm_to_transforms_json(
                 pass
 
     return True, f"Generated transforms.json (EQUIRECTANGULAR, {len(frames)} frames) at {output_transforms_file}"
+
+
+def export_opensfm_to_realitycapture_csv(reconstruction_json_path: str, output_csv_path: str) -> bool:
+    """
+    Converts OpenSfM reconstruction.json into RealityCapture / RealityScan standard cameras.csv.
+    Format: #name,x,y,alt,yaw,pitch,roll,f_35mm,px_norm,py_norm,k1,k2,k3,k4,t1,t2
+    """
+    if not os.path.isfile(reconstruction_json_path):
+        return False
+    try:
+        with open(reconstruction_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) > 0:
+            rec = data[0]
+        elif isinstance(data, dict):
+            rec = data
+        else:
+            return False
+
+        shots = rec.get("shots", {})
+        if not shots:
+            return False
+
+        from panoramic_splitter import rc_axes_to_euler, format_rc_csv_line, RC_CSV_HEADER
+
+        rows = [RC_CSV_HEADER]
+        for shot_id, shot_data in sorted(shots.items()):
+            r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
+            t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
+            R_w2c, _ = cv2.Rodrigues(r_vec)
+            R_c2w = R_w2c.T
+            C = -R_w2c.T @ t_vec
+            fwd = R_c2w @ np.array([0.0, 0.0, 1.0])
+            up = R_c2w @ np.array([0.0, -1.0, 0.0])
+            yaw, pitch, roll = rc_axes_to_euler(fwd, up)
+            pose = {
+                "x": float(C[0]),
+                "y": float(C[1]),
+                "alt": float(C[2]),
+                "yaw": float(yaw),
+                "pitch": float(pitch),
+                "roll": float(roll),
+                "f_35mm": 35.0,
+                "px_norm": 0.0,
+                "py_norm": 0.0,
+                "k1": 0.0,
+                "k2": 0.0
+            }
+            rows.append(format_rc_csv_line(shot_id, pose))
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_csv_path)), exist_ok=True)
+        with open(output_csv_path, "w", encoding="utf-8") as cf:
+            cf.writelines(rows)
+        return True
+    except Exception as e:
+        print(f"[OpenSfM Warning] Failed to export RealityCapture CSV: {e}")
+        return False
 
 
 def ensure_opensfm_metadata(dataset_dir: str) -> bool:

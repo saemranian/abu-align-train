@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.3.5 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.3.6 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1732,6 +1732,7 @@ def main():
     parser.add_argument("--split_format", choices=["jpg", "png"], default="jpg", help="Split image output format (default: jpg)")
     parser.add_argument("--split_quality", type=int, default=95, help="JPEG quality for split images (default: 95)")
     parser.add_argument("--split_only", action="store_true", help="Perform panoramic splitting into virtual camera rig and exit without aligning")
+    parser.add_argument("--split_trajectory", "--split_prior", type=str, default=None, help="Path to alignment results (OpenSfM reconstruction.json, cameras.csv, or results directory) to compound into pinhole poses")
     # Phase 4: SAM 2 AI Subject Masking & Temporal Tracking
     parser.add_argument("--sam2_mask", action="store_true", help="Launch interactive SAM 2 AI Masking Studio or run sequence masking")
     parser.add_argument("--sam2_model", choices=["tiny", "small", "base_plus", "large"], default="tiny", help="SAM 2 model architecture (default: tiny)")
@@ -1959,6 +1960,22 @@ def main():
 
         from panoramic_splitter import split_panorama_dataset
         rig_out_dir = os.path.join(output_dir, f"rig_{split_mode}_frames")
+        split_traj = getattr(args, "split_trajectory", None)
+        if not split_traj:
+            cand_priors = [
+                os.path.join(output_dir, "reconstruction.json"),
+                os.path.join(output_dir, "opensfm_workspace", "reconstruction.json"),
+                os.path.join(output_dir, "cameras.csv"),
+                os.path.join(output_dir, "transforms.json"),
+                os.path.join(scan_dir, "cameras.csv"),
+                os.path.join(scan_dir, "360dvo_trajectory.txt"),
+            ]
+            for cp in cand_priors:
+                if os.path.isfile(cp):
+                    split_traj = cp
+                    print(f"      * [360 RIG PROJECTOR] Auto-detected alignment prior: {os.path.basename(cp)}")
+                    break
+
         res = split_panorama_dataset(
             input_dir=scan_dir,
             output_dir=rig_out_dir,
@@ -1969,6 +1986,7 @@ def main():
             image_format=split_fmt,
             quality=split_qual,
             export_transforms_json=True,
+            dvo_trajectory_csv=split_traj,
             progress_callback=lambda cur, tot, name: print(f"        Splitting panorama {cur}/{tot}: {name}", end="\r"),
         )
         print()
@@ -2236,7 +2254,11 @@ def main():
                 if not os.path.isfile(rec_json):
                     rec_json = os.path.join(opensfm.output_dir, "opensfm_workspace", "reconstruction.json")
 
-                reconstruction = opensfm_to_pycolmap(rec_json)
+                try:
+                    reconstruction = opensfm_to_pycolmap(rec_json)
+                except Exception as ex_pyc:
+                    print(f"      * [OpenSfM Warning] Direct pycolmap conversion error: {ex_pyc}")
+                    reconstruction = None
                 if reconstruction is None or reconstruction.num_reg_images() == 0:
                     import pycolmap
                     colmap_out = os.path.join(opensfm.output_dir, "colmap")

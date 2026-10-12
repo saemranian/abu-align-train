@@ -79,7 +79,12 @@ def scene_bounds(points):
     if not valid:
         return np.zeros(3), 1.0
     coords = np.concatenate(valid)
-    low, high = coords.min(0), coords.max(0)
+    if len(coords) > 200:
+        # Use robust percentiles to prevent distant sky/nadir outliers from inflating the scene
+        low = np.percentile(coords, 1.5, axis=0)
+        high = np.percentile(coords, 98.5, axis=0)
+    else:
+        low, high = coords.min(0), coords.max(0)
     return (low+high)*0.5, max(float(np.linalg.norm(high-low)), 0.01)
 
 
@@ -137,17 +142,20 @@ class InspectionWorkspace:
                     'during registration. Scene units are not necessarily meters. Source files are never changed.')
             self.comparison = gui.add_markdown('Choose a different run for B to compare.')
             self.refresh = gui.add_button('Refresh available runs', icon=Icon.REFRESH)
-        with gui.add_folder('Scene layers', expand_by_default=False):
+        with gui.add_folder('Scene layers', expand_by_default=True):
             self.points = gui.add_checkbox('Point clouds', True)
             self.cameras = gui.add_checkbox('Camera frustums', True)
+            self.stations = gui.add_checkbox('Camera stations (nodes)', True,
+                hint='Discrete node marker at every single camera frame position along the path.')
+            self.frustum_density = gui.add_dropdown('Frustum display', ('All frames', 'Sampled (max 250)'), initial_value='All frames')
             self.camera_thumbs = gui.add_checkbox('Photo planes', False)
             self.paths = gui.add_checkbox('Camera trajectory', True, hint='Connects camera centers in file order; not an inferred capture path.')
             self.grid = gui.add_checkbox('Ground grid', False)
             self.point_size = gui.add_number('Point size', initial_value=0.004, min=0.000001, max=1.0, step=0.000001, hint='Scene units. Values down to 0.000001 are supported.')
-            self.camera_size = gui.add_slider('Camera size', 0.2, 3.0, 0.1, 1.0)
+            self.camera_size = gui.add_slider('Camera size', 0.1, 4.0, 0.1, 1.0)
             self.color = gui.add_dropdown('Point color', ('Original', 'Layer color', 'B distance to A'), initial_value='Original')
             self.budget = gui.add_dropdown('Points per run', ('100,000', '300,000', '1,000,000'), initial_value='300,000')
-            self.trim = gui.add_checkbox('Hide outer 1% of points', False,
+            self.trim = gui.add_checkbox('Hide outer 1% of points', True,
                 hint='Preview only. Off preserves all finite points before display sampling.')
         with gui.add_folder('Inspect a camera', expand_by_default=False):
             self.camera = gui.add_dropdown('Camera', ('No cameras',))
@@ -161,7 +169,8 @@ class InspectionWorkspace:
             self.details = gui.add_markdown('')
 
         for control in (self.a, self.b, self.mode, self.registration, self.links, self.points,
-                        self.cameras, self.camera_thumbs, self.paths, self.grid, self.point_size, self.camera_size,
+                        self.cameras, self.stations, self.frustum_density, self.camera_thumbs,
+                        self.paths, self.grid, self.point_size, self.camera_size,
                         self.color, self.budget, self.trim):
             control.on_update(self.comparison_changed if control is self.b else self.color_changed if control is self.color else self.update)
         self.profile.on_click(self.apply_profile)
@@ -176,13 +185,21 @@ class InspectionWorkspace:
         self.camera.on_update(self.inspect_camera)
         self.camera_actions.on_click(self.camera_action)
         self.open_photo_btn.on_click(self.open_selected_photo)
-        server.on_client_connect(lambda client: self.set_view(client, 'Fit'))
+
+        def _on_client(client):
+            has_cameras = any(len(l.get('cameras', [])) for l in self.layers.values())
+            if has_cameras:
+                self.fit_trajectory(client)
+            else:
+                self.set_view(client, 'Fit')
+        server.on_client_connect(_on_client)
         self.update()
 
     def apply_profile(self, event=None):
         profile = self.profile.value
         self.points.value = profile != 'Cameras'
         self.cameras.value = profile != 'Geometry'
+        self.stations.value = profile != 'Geometry'
         self.paths.value = profile != 'Geometry'
         self.update()
         self.navigation_info.content = f'**{profile}** · viewpoint preserved. Fit frames visible layers.'
@@ -290,9 +307,22 @@ class InspectionWorkspace:
             if visible:
                 if self.points.value:
                     bounds.append(sampled)
-                if self.cameras.value or self.paths.value:
+                if self.cameras.value or self.paths.value or (getattr(self, 'stations', None) and self.stations.value):
                     bounds.append(positions)
             _, span = scene_bounds([sampled, positions])
+
+            # Calculate robust camera frustum & station node scale proportional to trajectory
+            if len(positions) > 1:
+                traj_span = float(np.linalg.norm(positions.max(0) - positions.min(0)))
+                steps = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+                valid_steps = steps[steps > 0.001]
+                med_step = float(np.median(valid_steps)) if len(valid_steps) else 0.1
+                cam_base_scale = min(max(med_step * 1.6, traj_span * 0.02), traj_span * 0.08, 0.45)
+            elif len(positions) == 1:
+                cam_base_scale = 0.2
+            else:
+                cam_base_scale = min(span * 0.02, 0.5)
+
             point_colors = tint if self.mode.value == 'Overlay' or self.color.value == 'Layer color' else colors[indices]
             if key == 'B' and self.color.value == 'B distance to A':
                 distance, reference_count = cloud_distances(self.layers['A']['points'], sampled)
@@ -314,8 +344,16 @@ class InspectionWorkspace:
                 self.handles.append(self.server.scene.add_line_segments(f'/inspection/{key}/path',
                     np.stack((positions[:-1], positions[1:]), axis=1), tint, line_width=2,
                     visible=visible and self.paths.value))
+            # Discrete camera station markers (all registered frames as discrete nodes along trajectory)
+            if len(positions) and getattr(self, 'stations', None):
+                node_size = max(cam_base_scale * 0.3 * self.camera_size.value, 0.015)
+                self.handles.append(self.server.scene.add_point_cloud(f'/inspection/{key}/stations',
+                    positions,
+                    np.tile(tint, (len(positions), 1)),
+                    point_size=node_size, point_shape='circle',
+                    visible=visible and self.stations.value))
             run_path = self.runs.get(self.a.value if key == 'A' else self.b.value, '')
-            step = max(1, int(np.ceil(len(cameras)/250)))
+            step = 1 if (getattr(self, 'frustum_density', None) and self.frustum_density.value == 'All frames') else max(1, int(np.ceil(len(cameras)/250)))
             for i, camera in enumerate(cameras):
                 name = f'{key} · {i+1:04d} · {camera["name"]}'
                 if visible:
@@ -326,7 +364,7 @@ class InspectionWorkspace:
                 cache_key = (cam_name, run_path)
                 cached_thumb = self._thumb_cache.get(cache_key)
                 handle = self.server.scene.add_camera_frustum(f'/inspection/{key}/camera/{i}',
-                    fov=np.radians(60), aspect=1.5, scale=span*.018*self.camera_size.value,
+                    fov=np.radians(60), aspect=1.5, scale=cam_base_scale * self.camera_size.value,
                     color=tint, position=camera['pos'], wxyz=camera['wxyz'],
                     image=cached_thumb if self.camera_thumbs.value else None, format='jpeg',
                     visible=visible and self.cameras.value)
@@ -334,9 +372,10 @@ class InspectionWorkspace:
                 self.handles.append(handle)
                 if self.camera_thumbs.value and cache_key not in self._thumb_cache and cam_name:
                     self._thumb_executor.submit(self._fetch_thumbnail_and_update, cam_name, run_path, handle)
+            frustums_rendered = len(range(0, len(cameras), step))
             details.append(f'**{key} · {self.a.value if key == "A" else self.b.value}**\n\n'
                            f'{len(sampled):,} displayed / {len(layer["points"]):,} finite points · '
-                           f'{len(cameras)} cameras · up to 250 frustums\n\n'
+                           f'**{len(cameras)} cameras aligned** ({frustums_rendered} frustums rendered)\n\n'
                            f'Camera source: {layer["source"]}\n\nCloud: `{layer["asset"]}`')
         self.center, self.span = scene_bounds(bounds)
         self.handles.append(self.server.scene.add_grid('/inspection/grid', width=self.span*2, height=self.span*2,

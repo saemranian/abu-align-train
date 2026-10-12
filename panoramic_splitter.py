@@ -382,13 +382,20 @@ def rc_axes_to_euler(fwd: np.ndarray, up: np.ndarray) -> Tuple[float, float, flo
     return round(yaw, 4), round(pitch, 4), round(roll, 4)
 
 
-def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
+def load_alignment_trajectory(trajectory_path: str) -> Dict[str, Any]:
     """
-    Loads 360DVO camera positions and orientations from cameras.csv or 360dvo_trajectory.txt.
-    Supports RealityCapture standard CSV format and robotics TUM trajectory format.
+    Loads camera positions and orientations from any supported photogrammetry / alignment engine format:
+    1. OpenSfM reconstruction.json (native Mapillary OpenSfM format)
+    2. RealityScan / RealityCapture standard cameras.csv
+    3. Nerfstudio transforms.json
+    4. Robotics TUM trajectory format (360dvo_trajectory.txt)
+    5. COLMAP sparse reconstruction (images.txt)
+    6. Directory containing any of the above files
+
     Returns:
         {
             "count": int,
+            "engine": str,
             "poses": List[Dict],
             "by_name": Dict[str, Dict],
             "by_stem": Dict[str, Dict],
@@ -397,15 +404,136 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
     """
     result = {
         "count": 0,
+        "engine": "none",
         "poses": [],
         "by_name": {},
         "by_stem": {},
         "by_idx": {},
     }
-    if not trajectory_path or not os.path.isfile(trajectory_path):
+    if not trajectory_path:
+        return result
+
+    # If directory provided, auto-discover alignment outputs
+    if os.path.isdir(trajectory_path):
+        candidates = [
+            os.path.join(trajectory_path, "reconstruction.json"),
+            os.path.join(trajectory_path, "opensfm_workspace", "reconstruction.json"),
+            os.path.join(trajectory_path, "opensfm", "reconstruction.json"),
+            os.path.join(trajectory_path, "3dgs_dataset", "opensfm", "reconstruction.json"),
+            os.path.join(trajectory_path, "cameras.csv"),
+            os.path.join(trajectory_path, "Postshot_RealityCapture", "cameras.csv"),
+            os.path.join(trajectory_path, "transforms.json"),
+            os.path.join(trajectory_path, "3dgs_dataset", "transforms.json"),
+            os.path.join(trajectory_path, "360dvo_trajectory.txt"),
+            os.path.join(trajectory_path, "sparse", "0", "images.txt"),
+            os.path.join(trajectory_path, "sparse", "images.txt"),
+        ]
+        found = None
+        for cand in candidates:
+            if os.path.isfile(cand) and os.path.getsize(cand) > 10:
+                found = cand
+                break
+        if found:
+            trajectory_path = found
+        else:
+            return result
+
+    if not os.path.isfile(trajectory_path):
         return result
 
     try:
+        lower_path = trajectory_path.lower()
+        # 1. JSON formats: OpenSfM reconstruction.json OR Nerfstudio transforms.json
+        if lower_path.endswith(".json"):
+            with open(trajectory_path, "r", encoding="utf-8", errors="replace") as f:
+                json_data = json.load(f)
+
+            # Case A: OpenSfM reconstruction.json (list or dict with "shots")
+            rec_obj = None
+            if isinstance(json_data, list) and len(json_data) > 0 and isinstance(json_data[0], dict) and "shots" in json_data[0]:
+                rec_obj = json_data[0]
+            elif isinstance(json_data, dict) and "shots" in json_data:
+                rec_obj = json_data
+
+            if rec_obj is not None:
+                shots = rec_obj.get("shots", {})
+                result["engine"] = "opensfm"
+                idx = 0
+                for shot_id, shot_data in sorted(shots.items()):
+                    r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
+                    t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
+                    R_w2c, _ = cv2.Rodrigues(r_vec)
+                    R_c2w = R_w2c.T
+                    C = -R_w2c.T @ t_vec
+                    fwd = R_c2w @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                    up = R_c2w @ np.array([0.0, -1.0, 0.0], dtype=np.float64)
+                    yaw, pitch, roll = rc_axes_to_euler(fwd, up)
+
+                    c2w = np.eye(4, dtype=np.float64)
+                    c2w[:3, :3] = R_c2w
+                    c2w[:3, 3] = C
+
+                    rec = {
+                        "name": shot_id,
+                        "x": float(C[0]),
+                        "y": float(C[1]),
+                        "alt": float(C[2]),
+                        "yaw": float(yaw),
+                        "pitch": float(pitch),
+                        "roll": float(roll),
+                        "f_35mm": 35.0,
+                        "c2w": c2w,
+                        "R_c2w": R_c2w,
+                        "C_world": C,
+                        "index": idx,
+                        "engine": "opensfm",
+                    }
+                    result["poses"].append(rec)
+                    result["by_name"][shot_id] = rec
+                    result["by_name"][os.path.basename(shot_id)] = rec
+                    result["by_stem"][Path(shot_id).stem] = rec
+                    result["by_idx"][idx] = rec
+                    idx += 1
+                result["count"] = len(result["poses"])
+                return result
+
+            # Case B: Nerfstudio transforms.json
+            if isinstance(json_data, dict) and "frames" in json_data:
+                result["engine"] = "nerfstudio"
+                idx = 0
+                for frame in json_data["frames"]:
+                    fpath = frame.get("file_path", "")
+                    name = os.path.basename(fpath)
+                    mat = np.array(frame.get("transform_matrix", np.eye(4)), dtype=np.float64)
+                    R_c2w = mat[:3, :3] @ np.diag([1.0, -1.0, -1.0])
+                    C = mat[:3, 3]
+                    fwd = R_c2w @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                    up = R_c2w @ np.array([0.0, -1.0, 0.0], dtype=np.float64)
+                    yaw, pitch, roll = rc_axes_to_euler(fwd, up)
+                    rec = {
+                        "name": name,
+                        "x": float(C[0]),
+                        "y": float(C[1]),
+                        "alt": float(C[2]),
+                        "yaw": float(yaw),
+                        "pitch": float(pitch),
+                        "roll": float(roll),
+                        "f_35mm": 35.0,
+                        "c2w": mat,
+                        "R_c2w": R_c2w,
+                        "C_world": C,
+                        "index": idx,
+                        "engine": "nerfstudio",
+                    }
+                    result["poses"].append(rec)
+                    result["by_name"][name] = rec
+                    result["by_stem"][Path(name).stem] = rec
+                    result["by_idx"][idx] = rec
+                    idx += 1
+                result["count"] = len(result["poses"])
+                return result
+
+        # 2. Text / CSV / TUM formats
         with open(trajectory_path, "r", encoding="utf-8", errors="replace") as f:
             lines = [l.strip() for l in f if l.strip()]
 
@@ -416,6 +544,7 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
         is_csv = "," in lines[0] or first_line.startswith("#name") or first_line.startswith("name") or first_line.startswith("#image")
 
         if is_csv:
+            result["engine"] = "realitycapture"
             start_row = 1 if (first_line.startswith("#") or "name" in first_line or "yaw" in first_line) else 0
             idx = 0
             for line in lines[start_row:]:
@@ -442,6 +571,56 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
                             "roll": roll,
                             "f_35mm": f_35mm,
                             "index": idx,
+                            "engine": "realitycapture",
+                        }
+                        result["poses"].append(rec)
+                        result["by_name"][name] = rec
+                        result["by_name"][os.path.basename(name)] = rec
+                        result["by_stem"][Path(name).stem] = rec
+                        result["by_idx"][idx] = rec
+                        idx += 1
+                    except (ValueError, IndexError):
+                        continue
+        elif lower_path.endswith("images.txt") or ("qw" in first_line and "tx" in first_line):
+            # COLMAP sparse reconstruction images.txt
+            result["engine"] = "colmap"
+            idx = 0
+            for line in lines:
+                if line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 10 and not line.endswith(".txt"):
+                    try:
+                        qw, qx, qy, qz = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                        tx, ty, tz = float(parts[5]), float(parts[6]), float(parts[7])
+                        name = parts[9]
+                        R_w2c = np.array([
+                            [1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy - qz*qw), 2.0*(qx*qz + qy*qw)],
+                            [2.0*(qx*qy + qz*qw), 1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz - qx*qw)],
+                            [2.0*(qx*qz - qy*qw), 2.0*(qy*qz + qx*qw), 1.0 - 2.0*(qx*qx + qy*qy)]
+                        ], dtype=np.float64)
+                        R_c2w = R_w2c.T
+                        C = -R_w2c.T @ np.array([tx, ty, tz], dtype=np.float64)
+                        fwd = R_c2w @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                        up = R_c2w @ np.array([0.0, -1.0, 0.0], dtype=np.float64)
+                        yaw, pitch, roll = rc_axes_to_euler(fwd, up)
+                        c2w = np.eye(4, dtype=np.float64)
+                        c2w[:3, :3] = R_c2w
+                        c2w[:3, 3] = C
+                        rec = {
+                            "name": name,
+                            "x": float(C[0]),
+                            "y": float(C[1]),
+                            "alt": float(C[2]),
+                            "yaw": float(yaw),
+                            "pitch": float(pitch),
+                            "roll": float(roll),
+                            "f_35mm": 35.0,
+                            "c2w": c2w,
+                            "R_c2w": R_c2w,
+                            "C_world": C,
+                            "index": idx,
+                            "engine": "colmap",
                         }
                         result["poses"].append(rec)
                         result["by_name"][name] = rec
@@ -453,6 +632,7 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
                         continue
         else:
             # TUM Trajectory format: timestamp tx ty tz qx qy qz qw
+            result["engine"] = "tum"
             M_world = np.array([
                 [1.0,  0.0,  0.0],
                 [0.0,  0.0,  1.0],
@@ -470,7 +650,6 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
                         tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
                         qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
 
-                        # Quat to matrix c2w
                         norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
                         if norm > 1e-12:
                             qx /= norm; qy /= norm; qz /= norm; qw /= norm
@@ -497,6 +676,7 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
                             "f_35mm": 35.0,
                             "timestamp": t,
                             "index": idx,
+                            "engine": "tum",
                         }
                         result["poses"].append(rec)
                         result["by_name"][name] = rec
@@ -507,10 +687,46 @@ def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
                         continue
 
         result["count"] = len(result["poses"])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Trajectory Parser Warning] Failed to parse trajectory from {trajectory_path}: {e}")
 
     return result
+
+
+def load_dvo_trajectory(trajectory_path: str) -> Dict[str, Any]:
+    """Alias for load_alignment_trajectory for full backward compatibility."""
+    return load_alignment_trajectory(trajectory_path)
+
+
+def compute_pinhole_c2w(
+    pano_pose: Optional[Dict[str, Any]],
+    comp_pose: Optional[Dict[str, Any]],
+    splitter: Any,
+    cam_name: str
+) -> np.ndarray:
+    """
+    Computes 4x4 camera-to-world (c2w) matrix in Nerfstudio / 3DGS coordinates
+    (+X right, +Y up, -Z back) for a virtual pinhole camera mounted on a panorama rig.
+    Compounds the panorama's world pose with the rig camera offset.
+    """
+    if pano_pose is not None and "R_c2w" in pano_pose and "C_world" in pano_pose:
+        R_pinhole_c2w = pano_pose["R_c2w"] @ splitter.rotations[cam_name]
+        R_ns = R_pinhole_c2w @ np.diag([1.0, -1.0, -1.0])
+        c2w = np.eye(4, dtype=np.float64)
+        c2w[:3, :3] = R_ns
+        c2w[:3, 3] = pano_pose["C_world"]
+        return c2w
+    elif comp_pose is not None and "R" in comp_pose:
+        R_rc = np.array(comp_pose["R"], dtype=np.float64).reshape((3, 3))
+        # In RealityCapture, rows are [right, down, fwd]
+        # In Nerfstudio (+X right, +Y up, -Z back):
+        R_ns = R_rc.T @ np.diag([1.0, -1.0, -1.0])
+        c2w = np.eye(4, dtype=np.float64)
+        c2w[:3, :3] = R_ns
+        c2w[:3, 3] = [comp_pose["x"], comp_pose["y"], comp_pose["alt"]]
+        return c2w
+    else:
+        return splitter.get_c2w_matrix(cam_name)
 
 
 def compound_realitycapture_pose(
@@ -1179,9 +1395,9 @@ def split_panorama_dataset(
         rig = get_horizontal_ring_rig(num_cameras=num_cameras, fov_deg=fov_deg)
         rig_title = f"{num_cameras}-Camera Horizontal Ring"
 
-    # Ingest 360DVO trajectory prior if provided
+    # Ingest alignment / trajectory prior if provided (OpenSfM, RealityCapture, 360DVO, Nerfstudio, COLMAP)
     traj_data = None
-    if dvo_trajectory_csv and os.path.isfile(dvo_trajectory_csv):
+    if dvo_trajectory_csv and (os.path.isfile(dvo_trajectory_csv) or os.path.isdir(dvo_trajectory_csv)):
         traj_data = load_dvo_trajectory(dvo_trajectory_csv)
 
     # RealityScan CSV row collections:
@@ -1367,7 +1583,7 @@ def split_panorama_dataset(
                                 xf.write(xmp_xml)
 
                         if export_transforms_json:
-                            c2w = splitter.get_c2w_matrix(cam_name)
+                            c2w = compute_pinhole_c2w(pano_pose, comp_pose, splitter, cam_name)
                             transforms_frames.append({
                                 "file_path": rel_path_root,
                                 "transform_matrix": c2w.tolist(),
@@ -1542,7 +1758,7 @@ def split_panorama_dataset(
                             xf.write(xmp_xml)
 
                     if export_transforms_json:
-                        c2w = splitter.get_c2w_matrix(cam_name)
+                        c2w = compute_pinhole_c2w(pano_pose, comp_pose, splitter, cam_name)
                         transforms_frames.append({
                             "file_path": rel_path_root,
                             "transform_matrix": c2w.tolist(),
@@ -1792,7 +2008,7 @@ def main():
     parser.add_argument("--rig-id", type=str, default="cubemap_rig", help="Rig identifier in XMP metadata (for RealityScan Rig Parser)")
     parser.add_argument("--xmp-pose-prior", type=str, default="locked", choices=["approximate", "locked", "exact", "initial"], help="PosePrior in XMP metadata")
     parser.add_argument("--flat-images", action="store_true", help="Export flat images/ layout instead of per-perspective subfolders")
-    parser.add_argument("--dvo-trajectory", type=str, default=None, help="Path to 360DVO cameras.csv or trajectory.txt prior")
+    parser.add_argument("--dvo-trajectory", "--alignment-prior", "--trajectory", dest="dvo_trajectory", type=str, default=None, help="Path to alignment results (OpenSfM reconstruction.json, 360DVO cameras.csv, transforms.json, or results folder)")
     parser.add_argument("--override-orientations", action="store_true", help="Override trajectory orientations with flat identity rig angles (yaw=0, pitch=90) instead of compounding true 3D rotations")
     parser.add_argument("--mask-dir", type=str, default=None, help="Directory of equirectangular mask images or mask video")
     parser.add_argument("--no-auto-mask", action="store_true", help="Disable auto-detection of mask folder in dataset")
@@ -1821,7 +2037,7 @@ def main():
         print(f"[*] Distortion (k1):   {args.distortion_k1}")
     print(f"[*] Format & Quality:  {args.format.upper()} (quality {args.quality})")
     if args.dvo_trajectory:
-        print(f"[*] 360DVO Trajectory: {args.dvo_trajectory}")
+        print(f"[*] Alignment Prior:   {args.dvo_trajectory}")
     if not args.no_xmp:
         print(f"[*] RealityScan Rig XMP: RigId='{args.rig_id}', PosePrior='{args.xmp_pose_prior}'")
     if args.mask_dir:

@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.3.5
+Abu Align & Train Version 0.1.3.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.3.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.3.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2377,10 +2377,10 @@ class AbuAlignApp:
 
         tk.Button(r2, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=8, command=browse_out_folder).pack(side=tk.RIGHT)
 
-        # Row 3: 360DVO Trajectory Prior (cameras.csv)
+        # Row 3: Alignment / Trajectory Prior (OpenSfM, 360DVO, RealityCapture, Nerfstudio)
         r3 = tk.Frame(paths_card, bg=self.panel_bg)
         r3.pack(fill=tk.X, pady=2)
-        tk.Label(r3, text="360DVO Prior:", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
+        tk.Label(r3, text="Align Prior:", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, width=11, anchor="w").pack(side=tk.LEFT)
         dvo_entry = tk.Entry(r3, textvariable=dvo_csv_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, relief=tk.FLAT)
         dvo_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4), ipady=2)
 
@@ -2388,8 +2388,14 @@ class AbuAlignApp:
             init_dir = in_var.get() if os.path.isdir(in_var.get()) else os.path.dirname(in_var.get())
             f = filedialog.askopenfilename(
                 initialdir=init_dir,
-                title="Select 360DVO cameras.csv or 360dvo_trajectory.txt",
-                filetypes=[("360DVO Trajectory", "cameras.csv *.csv *.txt"), ("All Files", "*.*")]
+                title="Select Alignment Prior (OpenSfM reconstruction.json, cameras.csv, transforms.json)",
+                filetypes=[
+                    ("All Alignment Priors", "*.json *.csv *.txt"),
+                    ("OpenSfM Reconstruction", "reconstruction.json *.json"),
+                    ("RealityCapture / 360DVO", "cameras.csv *.csv *.txt"),
+                    ("Nerfstudio Transforms", "transforms.json *.json"),
+                    ("All Files", "*.*")
+                ]
             )
             if f:
                 dvo_csv_var.set(f)
@@ -2401,7 +2407,9 @@ class AbuAlignApp:
                 return
             src_dir = src if os.path.isdir(src) else os.path.dirname(src)
             candidates = [
+                os.path.join(src_dir, "reconstruction.json"),
                 os.path.join(src_dir, "cameras.csv"),
+                os.path.join(src_dir, "transforms.json"),
                 os.path.join(src_dir, "360dvo_trajectory.txt"),
                 os.path.join(src_dir, "Postshot_RealityCapture", "cameras.csv"),
             ]
@@ -2410,6 +2418,10 @@ class AbuAlignApp:
                 for sub in sorted(os.listdir(res_dir), reverse=True):
                     sub_p = os.path.join(res_dir, sub)
                     if os.path.isdir(sub_p):
+                        candidates.append(os.path.join(sub_p, "opensfm_workspace", "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "3dgs_dataset", "opensfm", "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "3dgs_dataset", "transforms.json"))
                         candidates.append(os.path.join(sub_p, "cameras.csv"))
                         candidates.append(os.path.join(sub_p, "Postshot_RealityCapture", "cameras.csv"))
                         candidates.append(os.path.join(sub_p, "360dvo_trajectory.txt"))
@@ -2419,6 +2431,10 @@ class AbuAlignApp:
                 for sub in sorted(os.listdir(p_res_dir), reverse=True):
                     sub_p = os.path.join(p_res_dir, sub)
                     if os.path.isdir(sub_p):
+                        candidates.append(os.path.join(sub_p, "opensfm_workspace", "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "3dgs_dataset", "opensfm", "reconstruction.json"))
+                        candidates.append(os.path.join(sub_p, "3dgs_dataset", "transforms.json"))
                         candidates.append(os.path.join(sub_p, "cameras.csv"))
                         candidates.append(os.path.join(sub_p, "Postshot_RealityCapture", "cameras.csv"))
                         candidates.append(os.path.join(sub_p, "360dvo_trajectory.txt"))
@@ -2432,10 +2448,10 @@ class AbuAlignApp:
         tk.Button(r3, text="🔍 Auto-detect", font=("Segoe UI", 8), bg="#059669", fg="#ffffff", relief=tk.FLAT, padx=6, command=auto_detect_dvo_trajectory).pack(side=tk.LEFT, padx=(0, 3))
         tk.Button(r3, text="Browse...", font=("Segoe UI", 8), bg=self.panel_border, fg="#ffffff", relief=tk.FLAT, padx=6, command=browse_dvo_csv).pack(side=tk.LEFT)
 
-        # 360DVO Prior Telemetry Badge
+        # Alignment / Trajectory Prior Telemetry Badge
         dvo_badge_lbl = tk.Label(
             paths_card,
-            text="(Optional) Ingest 360DVO trajectory prior for metric georeferenced camera positions.",
+            text="(Optional) Ingest alignment results (OpenSfM, 360DVO, RealityCapture) for metric georeferenced camera positions.",
             font=("Segoe UI", 8),
             fg=self.text_secondary,
             bg=self.bg_dark,
@@ -2448,22 +2464,23 @@ class AbuAlignApp:
 
         def update_dvo_badge():
             path_val = dvo_csv_var.get().strip()
-            if path_val and os.path.isfile(path_val):
-                traj = ps.load_dvo_trajectory(path_val)
+            if path_val and (os.path.isfile(path_val) or os.path.isdir(path_val)):
+                traj = ps.load_alignment_trajectory(path_val)
                 n = traj.get("count", 0)
+                engine_name = traj.get("engine", "Alignment").upper()
                 if n > 0:
                     dvo_badge_lbl.config(
-                        text=f"✓ 360DVO Trajectory: Loaded {n:,} camera positions (X, Y, Alt, Yaw, Pitch, Roll ready for compounding)",
+                        text=f"✓ {engine_name} Prior: Loaded {n:,} camera positions (X, Y, Alt, Yaw, Pitch, Roll ready for compounding)",
                         fg="#10b981"
                     )
                 else:
                     dvo_badge_lbl.config(
-                        text=f"⚠ 360DVO Trajectory: File found but contains 0 valid camera records.",
+                        text=f"⚠ Alignment Prior: File/folder found but contains 0 valid camera records.",
                         fg="#f59e0b"
                     )
             else:
                 dvo_badge_lbl.config(
-                    text="(Optional) Ingest 360DVO trajectory prior for metric georeferenced camera positions.",
+                    text="(Optional) Ingest alignment results (OpenSfM, 360DVO, RealityCapture) for metric georeferenced camera positions.",
                     fg=self.text_secondary
                 )
 
@@ -4610,7 +4627,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.3.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.3.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5169,7 +5186,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.3.5 - {title}")
+        doc_win.title(f"Abu Align v0.1.3.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5796,7 +5813,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.3.5\n"
+            "Abu Align & Train - Version 0.1.3.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
