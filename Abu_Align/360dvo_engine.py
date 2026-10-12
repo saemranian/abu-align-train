@@ -729,9 +729,22 @@ def run_360dvo_reconstruction(
     os.makedirs(output_dir, exist_ok=True)
 
     sample_img = cv2.imread(image_paths[0])
+    if sample_img is None:
+        raise ValueError(f"Unreadable input image: {image_paths[0]}")
     h, w = sample_img.shape[:2]
     trajectory_txt = os.path.join(output_dir, "360dvo_trajectory.txt")
     ply_out = os.path.join(output_dir, "360dvo_points.ply")
+    from run_manifest import write_manifest, file_hash
+    runner_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dvo_gpu_runner.py")
+    manifest_path = os.path.join(output_dir, "run_manifest.json")
+    settings = {"patches": patches_per_frame, "ba_window": local_ba_window, "scale": metric_scale,
+                "dense": dense_cloud, "lifetime": patch_lifetime, "final_ba": final_ba_iters,
+                "grad_bias": gradient_bias, "keyframe_thresh": keyframe_thresh,
+                "polar_mask": polar_mask_pct, "load_res": load_res,
+                "runner_sha256": file_hash(runner_src),
+                "weights_sha256": file_hash(weights_path) if weights_path and os.path.isfile(weights_path) else None}
+    manifest = write_manifest(image_paths, manifest_path, "360dvo", settings,
+                              runtime_path=wsl_bridge.win_to_wsl_path if wsl_bridge else None)
 
     # -------------------------------------------------------------
     # Multi-Tier Smart Cache for 360DVO (.abu_cache)
@@ -762,6 +775,7 @@ def run_360dvo_reconstruction(
             "lifetime": patch_lifetime,
             "final_ba": final_ba_iters,
             "grad_bias": gradient_bias,
+            "manifest": manifest["fingerprint"],
         }
     )
 
@@ -822,11 +836,12 @@ def run_360dvo_reconstruction(
         wsl_out_dir = wsl_bridge.win_to_wsl_path(output_dir)
 
         # Synchronize optimized host runner wrapper to WSL
-        runner_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scratch", "abu_360dvo_runner.py")
+        runner_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dvo_gpu_runner.py")
         if os.path.isfile(runner_src):
             try:
                 wsl_runner_src = wsl_bridge.win_to_wsl_path(runner_src)
-                wsl_bridge.run_command_in_wsl(f"cp '{wsl_runner_src}' '{wsl_bridge.WSL_360DVO_DIR}/abu_360dvo_runner.py'")
+                # Execute the version-controlled wrapper directly; do not copy stale code to the upstream repo.
+                pass
             except Exception:
                 pass
 
@@ -836,8 +851,11 @@ def run_360dvo_reconstruction(
 
         wsl_cmd = (
             f"cd {wsl_bridge.WSL_360DVO_DIR} && "
-            f"{wsl_bridge.WSL_PYTHON} abu_360dvo_runner.py "
-            f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride {stride} "
+            f"{wsl_bridge.WSL_PYTHON} '{wsl_bridge.win_to_wsl_path(runner_src)}' "
+            f"--imagedir '{wsl_img_dir}' --output_dir '{wsl_out_dir}' --stride 1 "
+            f"--manifest '{wsl_bridge.win_to_wsl_path(manifest_path)}' --polar_mask {polar_mask_pct} "
+            f"--network '{wsl_bridge.win_to_wsl_path(weights_path) if weights_path and os.path.isfile(weights_path) else wsl_bridge.WSL_360DVO_DIR + '/360dvo.pth'}' "
+            f"--config '{wsl_bridge.WSL_360DVO_DIR}/config/360.yaml' "
             f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale} "
             f"--patch_lifetime {patch_lifetime} --final_ba_iters {final_ba_iters} --keyframe_thresh {keyframe_thresh} "
             f"--load_res {load_res} "
@@ -862,6 +880,9 @@ def run_360dvo_reconstruction(
         if ret == 0 and os.path.isfile(trajectory_txt):
             log("[SUCCESS] 360DVO Native GPU Odometry Trajectory computed successfully.")
             img_basenames = [os.path.basename(p) for p in image_paths]
+            pose_lines = [line for line in open(trajectory_txt, encoding="utf-8") if line.strip() and not line.startswith("#")]
+            if len(pose_lines) != len(img_basenames):
+                raise RuntimeError("360DVO returned a different frame count than the selected manifest")
             sparse_0 = os.path.join(output_dir, "sparse", "0")
 
             if os.path.isfile(ply_out):
@@ -972,7 +993,10 @@ def run_360dvo_reconstruction(
         else:
             log("[WARNING] WSL2 360DVO execution did not produce trajectory. Falling back to internal estimator...")
 
-    log("[*] Running 360DVO Spherical Visual Odometry Estimator...")
+    log("[WARNING] Neural 360DVO unavailable: using Abu's experimental CPU spherical estimator; accuracy is not equivalent.")
+    manifest["backend"] = "experimental_cpu_fallback"
+    with open(manifest_path, "w", encoding="utf-8") as stream:
+        json.dump(manifest, stream, indent=2)
     log(f"    * Sphere Dimension: {w} x {h} (2:1 Equirectangular)")
     log("    * Tangent Plane Patch Sampling on S² Manifold: Active")
 

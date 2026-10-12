@@ -179,9 +179,9 @@ def run_command_in_wsl(
 
     # Build full bash invocation that activates abu_linux PATH and library path
     path_prep = (
-        f"export PATH='{WSL_CONDA_ENV}/bin:/usr/local/cuda/bin:/usr/bin:/bin:$PATH' && "
-        f"export LD_LIBRARY_PATH='{WSL_CONDA_ENV}/lib/python3.10/site-packages/torch/lib:{WSL_CONDA_ENV}/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' && "
-        f"export PYTHONIOENCODING=utf-8 && export LC_ALL=C.UTF-8 && export LANG=C.UTF-8"
+        f"export PATH='{WSL_CONDA_ENV}/bin:/usr/local/cuda/bin:/usr/bin:/bin':\"$PATH\" && "
+        f"export LD_LIBRARY_PATH='{WSL_CONDA_ENV}/lib/python3.10/site-packages/torch/lib:{WSL_CONDA_ENV}/lib:/usr/local/cuda/lib64':\"${{LD_LIBRARY_PATH:-}}\" && "
+        f"export PYTHONIOENCODING=utf-8 && export PYTHONUNBUFFERED=1 && export LC_ALL=C.UTF-8 && export LANG=C.UTF-8"
     )
 
     if extra_env:

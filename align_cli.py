@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.3.7 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.3.9 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1937,6 +1937,10 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
     print(f"      * Target Output: {output_dir}")
+    if args.engine in ["opensfm", "360dvo", "dvo"]:
+        from run_manifest import write_manifest
+        write_manifest(image_paths, os.path.join(output_dir, "run_manifest.json"), args.engine,
+                       {"stride": args.stride, "max_frames": args.max_frames, "projection": args.projection})
     print()
 
     # 360° Multi-Camera Rig Projector & Panoramic Splitter (Phase 3)
