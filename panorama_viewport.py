@@ -82,6 +82,8 @@ class PanoramaViewport:
         self.closed = False
         self.last_render_pixels = 0
         self.on_measure, self.on_select = on_measure, on_select
+        self.on_image_navigation=None
+        self.arrow_browse=True
         self.on_navigation, self.on_focus = on_navigation, on_focus
         self.canvas.bind('<Configure>', self.resize)
         self.canvas.bind('<MouseWheel>', self.wheel)
@@ -100,7 +102,7 @@ class PanoramaViewport:
         self.canvas.bind('<KeyRelease-space>', self.space_up)
         self.canvas.bind('<FocusOut>', lambda e: self.space_up(e))
         for key in ['Left', 'Right', 'Up', 'Down']:
-            self.canvas.bind(f'<{key}>', self.nudge)
+            self.canvas.bind(f'<{key}>', self.arrow)
         self.canvas.bind('<f>', lambda e: self.fit())
         self.canvas.bind('<Key-1>', lambda e: self.actual())
 
@@ -198,6 +200,11 @@ class PanoramaViewport:
         pixel = [(marker[0]+dx) % self.transform.image_width,
                  min(self.transform.image_height-1e-6, max(0, marker[1]+dy))]
         self.on_measure(pixel, False); return 'break'
+    def arrow(self,event):
+        # Plain arrows browse; modifier arrows retain precise marker nudging.
+        if self.arrow_browse and event.keysym in ['Left','Right'] and not (event.state & (1|4|8)) and self.on_image_navigation:
+            self.on_image_navigation(-1 if event.keysym=='Left' else 1);return 'break'
+        return self.nudge(event)
 
     def draw(self):
         if self.render_job:

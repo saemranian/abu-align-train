@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.4.3", 9, muted=True)
+    app.version_label = label(header, "v0.1.4.4", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button
@@ -535,7 +535,7 @@ def build_workspace(app, tooltip):
     prepare_menu.add_command(label="📂 FileSift (Cross-Folder File Matcher)", command=app._open_file_sift_dialog)
     prepare_menu.add_command(label="🏷️ Renamer (Sequence Naming)", command=app._open_renamer_dialog)
     prepare_menu.add_command(label="🎞️ Frame Picker (Decimate Frames)", command=app._open_frame_picker_dialog)
-    prepare_menu.add_command(label="360° manual control points", command=lambda: __import__('control_points_ui').open_editor(root))
+    prepare_menu.add_command(label="360° manual control points", command=lambda: __import__('control_points_ui').open_editor(root,on_attach=app._attach_control_points))
     prepare.configure(menu=prepare_menu)
     prepare.pack(side="right", padx=8)
 
@@ -718,6 +718,13 @@ def build_workspace(app, tooltip):
     app.align_dynamic_container.pack(fill="both", expand=True)
     app._build_align_panels()
     cache = tk.Frame(align, bg=SURFACE)
+    controls=tk.Frame(align,bg=SURFACE);controls.pack(fill='x',pady=(8,0))
+    tk.Checkbutton(controls,text='Apply manual 360 controls after initial alignment',variable=app.controls_enabled_var).pack(anchor='w')
+    row=tk.Frame(controls,bg=SURFACE);row.pack(fill='x',pady=5)
+    entry=tk.Entry(row,textvariable=app.controls_file_var);style_entry(entry);entry.pack(side='left',fill='x',expand=True)
+    button(row,'Choose controls',app._browse_control_points).pack(side='left',padx=8)
+    button(row,'Clear',lambda:(app.controls_enabled_var.set(False),app.controls_file_var.set(''))).pack(side='left')
+    tooltip(entry,'Saved control_points.json for this dataset. Main Align runs OpenSfM, 360DVO or native COLMAP first, then joint spherical refinement before exports/training. These controls are not engine initialization seeds.')
     cache.pack(fill="x", pady=(10, 0))
     tk.Checkbutton(cache, text="Reuse cached results", variable=app.cache_var).pack(side="left")
     button(cache, "Clear cache", app._clear_dataset_cache).pack(side="left", padx=14)

@@ -18,14 +18,17 @@ TYPES = {'tie': 'Tie point', 'gcp': 'Ground control', 'check': 'Check point'}
 
 HELP = '''360° CONTROL POINTS — WORKFLOW
 
-1. OPEN AN ALIGNMENT
-Choose Open alignment and select an OpenSfM, neural 360DVO or native spherical COLMAP reconstruction.json. Choose the matching original panorama folder. Work on one reconstruction component; image dimensions must match its cameras.
+1. CHOOSE YOUR STARTING POINT
+Before alignment: Open panoramas loads original full 2:1 equirectangular images. You can create, import, measure and save points without camera poses. Predictions, residuals, 3D and Refine become available after opening an alignment for those same images; prepared measurements are retained.
+After alignment: Open alignment selects an OpenSfM, neural 360DVO or native spherical COLMAP reconstruction.json and its original panorama folder. Work on one reconstruction component; image dimensions must match its cameras.
 
 2. CREATE AND MEASURE
 Add point (Ctrl+N) creates a named tie point immediately. In Place points mode, click the same physical feature in both images. Use the image selectors or Previous/Next buttons to add more views. Aim for 3–6 well-separated views with translation and clear parallax. Distribute control points throughout the scene.
 
 3. NAVIGATE PRECISELY
-Wheel: zoom around the cursor. Middle-drag or Space + left-drag: pan. Fit / F: entire panorama. 1:1 / 1: original pixel size. Drag an existing marker to adjust it. Arrows nudge the selected measurement by 1 px; Ctrl+Arrow by 0.1 px; Shift+Arrow by 10 px. Right-click a marker removes its measurement. Ctrl+Z / Ctrl+Y undo and redo.
+Wheel: zoom around the cursor. Middle-drag or Space + left-drag: pan. Fit / F: entire panorama. 1:1 / 1: original pixel size. Drag an existing marker to adjust it. Left/Right browse images in the active pane; Alt+Left/Right also browse. Ctrl+Arrow nudges 0.1 px; Shift+Arrow nudges 10 px. Disable arrow browsing in Settings for plain-arrow 1 px nudging. Text fields retain normal typing keys. Right-click a marker removes its measurement. Ctrl+Z / Ctrl+Y undo and redo.
+
+Image grid shows paged thumbnails. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. Thumbnail markers show existing measurements.
 
 Wrap panorama seam allows close-up panning across the left/right boundary. Latitude stays bounded. Pixel display uses nearest-pixel rendering for precise inspection. Marker coordinates always refer to original image pixels regardless of display zoom. Both image panes navigate independently; linked zoom synchronizes pixel scale only.
 
@@ -42,11 +45,17 @@ Apply properties validates the name, type, coordinates, enabled state and survey
 6. ADD A KNOWN DISTANCE (OPTIONAL)
 In Distances, select two different enabled, measured tie/ground-control points. Enter the independently measured distance and uncertainty in metres, then Add distance. A distance establishes scale. Check points cannot be distance endpoints because they are not optimized.
 
-7. SAVE AND REFINE
-Ctrl+S saves portable control_points.json. Set the automatic-landmark and solver-evaluation budgets in Settings, then Refine alignment. Manual optimization points are always retained. Larger budgets need more CPU time and RAM. Refinement runs in the background with edits locked for a consistent snapshot. It writes a new reconstruction, the exact controls used and a report. Source photos and reconstruction remain unchanged.
+7. IMPORT REALITYSCAN CSV (OPTIONAL)
+Import CSV opens a preview with column mapping before any edits are applied. Image measurements use image path, point name, X pixel, Y pixel, optionally image uncertainty. CSV, semicolon, tab and quoted space-separated files are supported. Basenames must uniquely match the original panoramas, with the same projection and pixel dimensions. Never transfer perspective, cropped or resized image pixels onto a panorama. Use Point names only for such exports and re-mark their features on the panoramas.
+Local survey XYZ uses point name, X, Y, Z and optionally survey uncertainty. Choose Ground control or Check point and the source units. Geographic latitude/longitude requires conversion outside this tool. Keep existing values is the default; Replace existing values is explicit. One import is one undo step; review unmatched rows and errors before applying.
 
-8. INSPECT RESULTS
+8. SAVE AND CHOOSE AN ALIGNMENT ACTION
+Ctrl+S saves portable control_points.json. Set the automatic-landmark and solver-evaluation budgets in Settings, then Refine alignment. Manual optimization points are always retained. Larger budgets need more CPU time and RAM. Refinement runs in the background with edits locked for a consistent snapshot. It writes a new reconstruction, the exact controls used and a report. Source photos and reconstruction remain unchanged.
+Refine alignment operates on the alignment currently open in this editor. To run the full pipeline, Use with main Align saves and attaches the controls to the main window. There, keep Apply manual 360 controls after initial alignment checked, choose the desired supported engine, and press the main Align button. Initial registration runs first, followed by spherical control refinement and exports using the refined poses. The CLI validates selected images and captures an immutable copy of the controls before inference. Controls are not initialization seeds and do not merge disconnected components. Attaching controls does not start alignment automatically.
+
+9. INSPECT RESULTS AND 3D
 Results reports angular RMS before/after, solver convergence, independent check errors and output paths. Reaching the evaluation limit is not convergence. Reduced fitted residual is not proof of absolute accuracy. Open result inspects the new alignment with the same controls; it does not automatically replace or export the application's training package.
+3D view opens a local browser viewer of the sparse cloud, camera centres and triangulated controls. Click a control to select it in the editor, or a camera to open its image. Show selected-point sight lines and toggle labels or cloud visibility. Raw survey XYZ is not placed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. Points without reliable triangulation are listed. This is inspection of the currently open alignment, not an automatic live preview of a new solve.
 
 PREDICTIONS ARE GUIDANCE, NOT MEASUREMENTS
 A dashed blue marker predicts the selected point using at least two consistent measurements and the current alignment. It is never saved automatically. Find the actual feature and click it yourself. Predictions are suppressed when triangulation is unreliable or residuals are high. Avoid repeated patterns, reflections, moving objects, sky and stitching artefacts.
@@ -59,7 +68,9 @@ Ctrl+O  Open alignment     Ctrl+N  Add point     Ctrl+S  Save controls
 Ctrl+Z  Undo               Ctrl+Y  Redo
 F       Fit image         1       Original pixel scale
 Space + drag / middle drag  Pan
-Arrows  1 px    Ctrl+Arrows 0.1 px    Shift+Arrows 10 px
+Left/Right  Browse images    Alt+Left/Right  Browse images
+Ctrl+Arrows 0.1 px nudge     Shift+Arrows 10 px nudge
+Plain arrows 1 px nudge when arrow browsing is disabled
 '''
 
 
@@ -94,12 +105,14 @@ class HoverGuide:
 
 
 class ControlPointEditor:
-    def __init__(self, parent):
+    def __init__(self, parent, on_attach=None):
         self.window = tk.Toplevel(parent); self.window.title('360° Control Points · Abu Align & Train')
         self.window.geometry('1580x940'); self.window.minsize(1100, 720); self.window.configure(bg=BG)
         self.document = ControlDocument(); self.active = tk.StringVar(master=self.window)
         self.reconstruction = self.image_dir = self.component = self.controls_path = None
         self.cameras = {}; self.image_names = []; self.closed = self.busy = False; self.last_result = None
+        self.image_sizes={};self.on_attach=on_attach;self.grid=None;self.viewer=None;self.viewer_future=None
+        self.viewer_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='Abu control 3D');self.viewer_generation=0;self.viewer_key=None
         self.result_queue = queue.Queue(); self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='Abu panorama')
         self.focused = 0; self.guides = []; self.edit_buttons = []; self.pending = self.populating = False
         self.status = tk.StringVar(master=self.window, value='Open an alignment, add a point, then mark the same feature in multiple images.')
@@ -107,12 +120,13 @@ class ControlPointEditor:
         self.mode = tk.StringVar(master=self.window, value='Place points')
         self.settings = {k: tk.Variable(master=self.window, value=v) for k, v in {
             'max_points': 10000, 'iterations': 40, 'sigma_px': 1., 'marker_size': 6,
-            'wrap': False, 'preserve_zoom': True, 'linked_zoom': False, 'predictions': True, 'pixelated': False, 'other_labels': False}.items()}
+            'wrap': False, 'preserve_zoom': True, 'linked_zoom': False, 'predictions': True, 'pixelated': False, 'other_labels': False, 'browse_arrows':True}.items()}
         self.build(); self.window.protocol('WM_DELETE_WINDOW', self.close)
         self.tabs.enable_traversal()
         self.style_dropdowns(self.window)
         for sequence, command in [('<Control-o>', self.open), ('<Control-n>', self.new), ('<Control-s>', self.save), ('<Control-z>', self.undo), ('<Control-y>', self.redo)]:
             self.window.bind(sequence, lambda e, c=command: self.shortcut(e, c))
+        self.window.bind('<Left>',lambda e:self.window_arrow(e,-1));self.window.bind('<Right>',lambda e:self.window_arrow(e,1))
         self.poll_job = self.window.after(60, self.poll)
     @property
     def controls(self): return self.document.data
@@ -202,15 +216,22 @@ class ControlPointEditor:
         self.label(header, 'Native panorama alignment', muted=True).pack(side='left', padx=18)
         self.button(header, 'Help', lambda: self.tabs.select(self.help_page), 'Open the complete workflow and navigation shortcuts.').pack(side='right')
         toolbar = tk.Frame(self.window, bg=BG, padx=18); toolbar.pack(fill='x', pady=(0, 10))
+        project=tk.Menubutton(header,text='Project ▾',bg=FIELD,fg=TEXT,relief='flat',padx=10,pady=6,font=('Segoe UI',9))
+        menu=tk.Menu(project,tearoff=False,bg=PANEL,fg=TEXT)
+        for name,command in [('Open alignment',self.open),('Open panoramas (before alignment)',self.open_images),('Load controls JSON',self.load),('Import RealityScan CSV',self.import_csv),('Save controls',self.save),('Save controls as…',self.save_as)]:menu.add_command(label=name,command=command)
+        project.configure(menu=menu);project.pack(side='right',padx=8)
         for text, command, tip in [('Open alignment', self.open, 'Select a spherical reconstruction.json and its original panorama folder. Ctrl+O.'),
-            ('Load controls', self.load, 'Load previously saved points and distances belonging to this alignment.'),
+            ('Open panoramas',self.open_images,'Prepare measurements before initial alignment. This loads images without inventing camera poses.'),
+            ('Import CSV',self.import_csv,'Import RealityScan image measurements, local XYZ coordinates, or point names with a preview and explicit column mapping.'),
             ('Save controls', self.save, 'Save portable control_points.json with measurements and uncertainties. Ctrl+S.'),
-            ('Save as…', self.save_as, 'Save a separate copy of the controls without replacing the existing control file.'),
             ('Undo', self.undo, 'Undo the last point, measurement, property or distance edit. Ctrl+Z.'),
             ('Redo', self.redo, 'Restore an undone edit. Ctrl+Y.')]: self.button(toolbar, text, command, tip, edit=True).pack(side='left', padx=(0, 6))
-        self.refine_button = self.button(toolbar, 'Refine alignment', self.refine, 'Jointly optimize cameras and landmarks into a new alignment and report. Source files stay unchanged.', primary=True)
+        actions=tk.Frame(self.window,bg=BG,padx=18);actions.pack(fill='x',pady=(0,8))
+        self.refine_button = self.button(actions, 'Refine alignment', self.refine, 'Jointly optimize cameras and landmarks into a new alignment and report. Source files stay unchanged.', primary=True)
         self.refine_button.pack(side='right')
-        context = self.label(self.window, variable=self.context, muted=True, padx=18); context.pack(fill='x', pady=(0, 8))
+        if self.on_attach:
+            self.button(actions,'Use with main Align',self.attach_to_main,'Save and attach these controls to the main application. Main Align runs initial registration, then applies control refinement.',edit=True).pack(side='right',padx=6)
+        context = self.label(actions, variable=self.context, muted=True); context.pack(side='left',fill='x',expand=True)
         self.guide(context, 'Alignment input', 'Open an alignment to see its full source path.'); self.context_guide = self.guides[-1]
         self.tabs = ttk.Notebook(self.window, style='CP.TNotebook'); self.tabs.pack(fill='both', expand=True, padx=12)
         self.workspace = tk.Frame(self.tabs, bg=BG); self.help_page = tk.Frame(self.tabs, bg=PANEL)
@@ -262,8 +283,10 @@ class ControlPointEditor:
                 bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT, font=('Segoe UI', 9))
             radio.pack(side='left'); self.guide(radio, title, 'Place points: click a measurement or drag a marker. Pan: left-drag moves the image without placing points.')
         self.button(tools, 'Fit both', lambda: [p['view'].fit() for p in self.panes], 'Fit both complete panoramas.').pack(side='right')
+        self.button(tools,'Image grid',self.open_grid,'Browse paged thumbnails, filter by measurements and open an image in either pane.').pack(side='right',padx=4)
+        self.button(tools,'3D view',self.open_3d,'Open local WebGL inspection of the sparse cloud, camera centres and triangulated control points. Requires an alignment.').pack(side='right',padx=4)
         hint = self.label(tools, 'Wheel: zoom · Space + drag: pan', muted=True); hint.pack(side='right', padx=8)
-        tools.bind('<Configure>', lambda e: hint.pack(side='right', padx=8) if e.width > 620 else hint.pack_forget())
+        tools.bind('<Configure>', lambda e: hint.pack(side='right', padx=8) if e.width > 830 else hint.pack_forget())
         frames = tk.PanedWindow(parent, orient='horizontal', bg=BG, sashwidth=6, bd=0); frames.pack(fill='both', expand=True)
         self.panes = []
         for index, title in enumerate(['LEFT VIEW', 'RIGHT VIEW']):
@@ -283,6 +306,9 @@ class ControlPointEditor:
             view = PanoramaViewport(frame, lambda pixel, remove, p=pane: self.measure(p, pixel, remove), self.select,
                                      lambda v, p=pane: self.view_navigation(p), lambda v, i=index: self.set_focus(i))
             pane['view'] = view
+            view.on_image_navigation=lambda direction,p=pane:self.navigate(p,direction)
+            view.canvas.bind('<Alt-Left>',lambda e,p=pane:self.navigate_key(p,-1))
+            view.canvas.bind('<Alt-Right>',lambda e,p=pane:self.navigate_key(p,1))
             for label, command, tip in [('Fit', view.fit, 'Show the entire panorama. Shortcut F in this view.'), ('1:1', view.actual, 'Original pixel scale. Shortcut 1.'),
                                         ('Focus point', lambda p=pane: self.focus_point(p), 'Centre on the selected measurement or unconfirmed prediction at close zoom.')]:
                 self.button(nav, label, command, tip).pack(side='left', padx=(0, 4))
@@ -349,6 +375,9 @@ class ControlPointEditor:
             widget = tk.Checkbutton(parent, text=title, variable=self.settings[key], command=self.update_view_settings, bg=PANEL, fg=TEXT,
                 selectcolor=FIELD, activebackground=PANEL, activeforeground=TEXT, wraplength=260, justify='left', anchor='w', font=('Segoe UI', 9))
             widget.pack(fill='x', pady=5); self.guide(widget, title, tip)
+        arrows=tk.Checkbutton(parent,text='Left/right arrows browse images',variable=self.settings['browse_arrows'],command=self.update_view_settings,
+            bg=PANEL,fg=TEXT,selectcolor=FIELD,activebackground=PANEL,activeforeground=TEXT)
+        arrows.pack(anchor='w',pady=5);self.guide(arrows,'Arrow navigation','Plain left/right browses the active image pane. Switch off for 1 px horizontal marker nudging. Ctrl+arrows nudge 0.1 px; Shift+arrows 10 px. Alt+left/right always browses.')
         labels = tk.Checkbutton(parent, text='Label other points', variable=self.settings['other_labels'], command=self.update_view_settings,
             bg=PANEL, fg=TEXT, selectcolor=FIELD, activebackground=PANEL, activeforeground=TEXT)
         labels.pack(anchor='w', pady=5); self.guide(labels, 'Other point labels', 'The active point is always labelled. Other names appear on hover; enable this to show every name, which can clutter dense areas.')
@@ -393,36 +422,137 @@ class ControlPointEditor:
             cameras[name] = (Rotation.from_rotvec(r).as_matrix(), t, width, height)
         return component, cameras
     def open(self):
-        if not self.can_edit() or not self.unsaved_guard(): return
+        if not self.can_edit() or not self.resolve_properties(): return
         path = filedialog.askopenfilename(parent=self.window, title='Open spherical reconstruction.json', filetypes=[('Reconstruction JSON', '*.json')])
         if not path: return
         try:
             component, cameras = self.read_alignment(path)
-            directory = next((p for p in [Path(path).parent/'images', Path(path).parent.parent/'images'] if p.is_dir() and all((p/n).is_file() for n in component['shots'])), None)
+            candidates=[Path(path).parent/'images',Path(path).parent.parent/'images']
+            if self.image_dir and self.reconstruction is None:
+                # The intended next step from photos-only preparation is opening
+                # a result for those exact originals; no new pose is invented.
+                candidates.insert(0,self.image_dir)
+            directory = next((p for p in candidates if p.is_dir() and all((p/n).is_file() for n in component['shots'])), None)
             if directory is None:
                 value = filedialog.askdirectory(parent=self.window, title='Choose matching original panoramas')
                 if not value: return
                 directory = Path(value)
             missing = [n for n in component['shots'] if not (directory/n).is_file()]
             if missing: raise ValueError(f'{len(missing)} registered images missing. First: {missing[0]}')
-            self.document = ControlDocument(); self.controls_path = None; self.active.set(''); self.pending = False
+            keep=bool(self.controls['points']) and self.image_dir is not None and directory.absolute()==self.image_dir.absolute()
+            if keep:
+                for point in self.controls['points']:
+                    for observation in point['observations']:
+                        name=observation['shot_id']
+                        if name not in cameras or list(cameras[name][2:])!=list(self.image_sizes.get(name,[])):keep=False
+            if not keep:
+                if not self.unsaved_guard():return
+                self.document = ControlDocument(); self.controls_path = None; self.active.set(''); self.pending = False
             self.install_alignment(path, component, cameras, directory); self.status.set('Alignment loaded. Add a point and mark the same feature in multiple views.')
+            if keep:self.status.set('Alignment loaded for the same original panoramas. Existing controls retained; inspect them in 2D or 3D.')
         except Exception as error: self.error('Cannot open alignment', error)
     def install_alignment(self, path, component, cameras, directory):
+        self.viewer_generation+=1;self.viewer_key=None
         self.reconstruction, self.component, self.cameras, self.image_dir = Path(path), component, cameras, Path(directory)
         self.image_names = sorted(component['shots']); self.context.set(f'{Path(path).name} · {len(self.image_names)} panoramas · {Path(path).parent.name}')
+        self.image_sizes={name:list(camera[2:]) for name,camera in cameras.items()}
         self.context_guide.text = str(Path(path))
         for index, pane in enumerate(self.panes):
             pane['choice']['values'] = self.image_names; pane['name'].set(self.image_names[min(index, len(self.image_names)-1)]); self.show(pane, preserve=False)
         self.refresh()
+        self.refine_button.configure(state='normal' if not self.busy else 'disabled')
+        if self.grid and not self.grid.closed:self.grid.refresh(reset=True)
+    def open_images(self):
+        if not self.can_edit() or not self.unsaved_guard():return
+        folder=filedialog.askdirectory(parent=self.window,title='Choose original 2:1 panoramas (before alignment)')
+        if not folder:return
+        try:
+            from PIL import Image
+            paths=sorted(p for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() in {'.jpg','.jpeg','.png','.tif','.tiff','.bmp','.webp'})
+            if not paths:raise ValueError('No panorama images found.')
+            sizes={}
+            for path in paths:
+                with Image.open(path) as image:
+                    if image.width!=2*image.height:raise ValueError(f'{path.name} is not a full 2:1 panorama. Choose original equirectangular images.')
+                    sizes[path.name]=list(image.size)
+            self.document=ControlDocument();self.active.set('');self.controls_path=None;self.pending=False
+            self.reconstruction=self.component=None;self.cameras={};self.image_dir=Path(folder);self.image_names=list(sizes);self.image_sizes=sizes
+            self.viewer_generation+=1;self.viewer_key=None
+            self.context.set(f'{len(sizes)} panoramas · Measurements only · Run main Align before refinement')
+            self.context_guide.text=str(self.image_dir)
+            for index,pane in enumerate(self.panes):pane['choice']['values']=self.image_names;pane['name'].set(self.image_names[min(index,len(self.image_names)-1)]);self.show(pane,preserve=False)
+            self.refresh();self.refine_button.configure(state='disabled');self.status.set('Mark/import controls, save them, then Use with main Align. Initial engine registration happens before control refinement.')
+            if self.grid and not self.grid.closed:self.grid.refresh(reset=True)
+            if self.viewer:self.viewer.close();self.viewer=None;self.viewer_key=None
+        except Exception as error:self.error('Cannot open panoramas',error)
+    def import_csv(self):
+        if not self.can_edit() or not self.resolve_properties():return
+        if not self.image_dir:self.status.set('Open an alignment or original panoramas first.');return
+        path=filedialog.askopenfilename(parent=self.window,title='Import RealityScan control points',filetypes=[('CSV or text','*.csv *.txt *.tsv'),('All files','*.*')])
+        if not path:return
+        try:
+            from control_points_csv import CSVImportDialog
+            CSVImportDialog(self,path)
+        except Exception as error:self.error('Cannot open CSV',error)
+    def attach_to_main(self):
+        if not self.on_attach or not self.image_dir or not self.can_edit():return
+        if not self.resolve_properties():return
+        try:
+            payload=self.refinement_payload()
+            if not any(p.get('enabled',True) for p in payload['points']):raise ValueError('Add enabled points with measurements before attaching controls.')
+            budget,iterations=int(self.settings['max_points'].get()),int(self.settings['iterations'].get())
+            if not 1<=budget<=50000 or not 5<=iterations<=500:raise ValueError('Check refinement budgets in Settings.')
+            if not self.save():return
+            self.on_attach(str(self.controls_path),str(self.image_dir),budget,iterations)
+            self.status.set('Controls attached. Use the main Align button for initial registration followed by refinement. This window’s Refine button updates an existing alignment only.')
+        except Exception as error:self.error('Cannot attach controls',error)
+    def open_grid(self):
+        if not self.image_names:self.status.set('Open panoramas or an alignment first.');return
+        if self.grid and not self.grid.closed:self.grid.refresh();self.grid.window.lift();return
+        from control_images_grid import ImageGrid
+        self.grid=ImageGrid(self)
+    def choose_image(self,name,index=None):
+        if name not in self.image_sizes:return
+        index=self.focused if index is None else index;self.focused=index;pane=self.panes[index];pane['name'].set(name);self.show(pane)
+    def navigate_key(self,pane,direction):self.navigate(pane,direction);return 'break'
+    def window_arrow(self,event,direction):
+        if isinstance(event.widget,(tk.Entry,ttk.Combobox,tk.Spinbox,tk.Text,ttk.Treeview,tk.Canvas)) or event.state & (1|4|8):return
+        if bool(self.settings['browse_arrows'].get()):self.navigate(self.panes[self.focused],direction);return 'break'
+    def open_3d(self):
+        if not self.component:self.status.set('3D inspection needs an aligned reconstruction; photos-only mode has no cloud or camera poses.');return
+        self.request_3d(open_browser=True)
+    def request_3d(self,open_browser=False):
+        if not self.component or self.closed or not (self.viewer or open_browser):return
+        key=(str(self.reconstruction),self.document.signature())
+        if self.viewer and key==self.viewer_key:
+            self.viewer.set_selected(self.active.get())
+            if open_browser:self.result_queue.put(('viewer_ready',self.viewer.url))
+            return
+        self.viewer_generation+=1;generation=self.viewer_generation
+        if self.viewer_future:self.viewer_future.cancel()
+        component=self.component;controls=copy.deepcopy(self.controls);cameras=self.cameras;selected=self.active.get()
+        def work():
+            if self.closed or generation!=self.viewer_generation:return
+            try:
+                if self.viewer is None:
+                    from control_points_3d import ControlSceneViewer
+                    self.viewer=ControlSceneViewer(self.result_queue)
+                if self.closed or generation!=self.viewer_generation:self.viewer.close();self.viewer=None;return
+                self.viewer.update(component,controls,cameras,selected)
+                if generation==self.viewer_generation:self.viewer_key=key
+                if open_browser and not self.closed and generation==self.viewer_generation:self.result_queue.put(('viewer_ready',self.viewer.url))
+            except Exception as error:
+                if not self.closed and generation==self.viewer_generation:self.result_queue.put(('viewer_error',str(error)))
+        self.viewer_future=self.viewer_executor.submit(work)
+        if open_browser:self.status.set('Preparing local 3D view…')
     def show(self, pane, preserve=None):
-        if not self.image_dir or pane['name'].get() not in self.cameras: self.status.set('Select an exact registered image.'); return
+        if not self.image_dir or pane['name'].get() not in self.image_sizes: self.status.set('Select an exact image from the catalog.'); return
         name = pane['name'].get(); pane['generation'] += 1; generation = pane['generation']
         if pane['future']: pane['future'].cancel()
         pane['loading'] = True; pane['loaded_name'] = None
         pane['view'].overlay = 'Loading original panorama…'; pane['info'].set('Loading original image…'); self.draw()
         preserve = bool(self.settings['preserve_zoom'].get()) if preserve is None else preserve
-        expected, path, index = self.cameras[name][2:], self.image_dir/name, self.panes.index(pane)
+        expected, path, index = self.image_sizes[name], self.image_dir/name, self.panes.index(pane)
         def work():
             if self.closed or generation != pane['generation']: return
             try:
@@ -436,6 +566,7 @@ class ControlPointEditor:
             pane['choice']['values'] = [n for n in self.image_names if pane['name'].get().casefold() in n.casefold()]
     def navigate(self, pane, step):
         if not self.image_names: return
+        self.focused=self.panes.index(pane)
         index = self.image_names.index(pane['name'].get()) if pane['name'].get() in self.image_names else 0
         pane['name'].set(self.image_names[(index+step) % len(self.image_names)]); self.show(pane)
     def set_focus(self, index): self.focused = index
@@ -452,6 +583,7 @@ class ControlPointEditor:
             view = pane['view']; view.pan_mode = self.mode.get() == 'Pan'; view.marker_size = max(3, min(16, size))
             view.pixelated = bool(self.settings['pixelated'].get()); view.transform.wrap = bool(self.settings['wrap'].get()); view.transform.constrain()
             view.label_other_points = bool(self.settings['other_labels'].get())
+            view.arrow_browse=bool(self.settings['browse_arrows'].get())
             view.canvas.configure(cursor='fleur' if view.pan_mode else 'crosshair')
         self.draw()
 
@@ -471,6 +603,8 @@ class ControlPointEditor:
         if not self.selected(): self.active.set('')
         self.refresh_list(); self.populate_properties(); self.refresh_distances(); self.draw()
         self.window.title('360° Control Points' + (' *' if self.document.dirty else '') + ' · Abu Align & Train')
+        if self.grid and not self.grid.closed:self.grid.refresh()
+        self.request_3d()
     def tree_selection(self, event):
         values = self.point_tree.selection()
         if not getattr(self, 'refreshing', False) and values and values[0] != self.active.get(): self.select(values[0])
@@ -488,7 +622,7 @@ class ControlPointEditor:
         for key, variable in self.property_vars.items(): variable.set(values[key])
         self.enabled.set(point.get('enabled', True) if point else True); self.populating = False; self.pending = False
         self.measurement_tree.delete(*self.measurement_tree.get_children())
-        _, description, errors = point_geometry(point, self.cameras) if point and self.cameras else (None, 'Select a point', {})
+        _, description, errors = point_geometry(point, self.cameras) if point and self.cameras else (None, 'Measurements only · run initial alignment to triangulate' if point else 'Select a point', {})
         self.geometry_status.set(description)
         if point:
             for obs in point['observations']:
@@ -513,7 +647,7 @@ class ControlPointEditor:
 
     def new(self):
         if not self.can_edit() or not self.resolve_properties(): return
-        if not self.reconstruction: self.status.set('Open an alignment before adding points.'); return
+        if not self.image_dir: self.status.set('Open an alignment or panoramas before adding points.'); return
         self.document.checkpoint(); name = self.document.next_name(); self.controls['points'].append({'id': name, 'type': 'tie', 'enabled': True, 'observations': []})
         self.active.set(name); self.refresh(); self.status.set(f'{name} created. Mark the same feature in multiple translated views.')
     def delete(self):
@@ -599,16 +733,18 @@ class ControlPointEditor:
 
     def validate_for_alignment(self, payload):
         data = validate_controls(payload)
-        if self.cameras:
+        if self.image_sizes:
             for point in data['points']:
                 for obs in point['observations']:
-                    if obs['shot_id'] not in self.cameras: raise ValueError(f"Unknown image: {obs['shot_id']}")
-                    width, height = self.cameras[obs['shot_id']][2:]; x, y = obs['pixel']
+                    if obs['shot_id'] not in self.image_sizes: raise ValueError(f"Unknown image: {obs['shot_id']}")
+                    width, height = self.image_sizes[obs['shot_id']]; x, y = obs['pixel']
+                    recorded=data.get('image_sizes',{}).get(obs['shot_id'])
+                    if recorded is not None and list(recorded)!=[width,height]:raise ValueError('Saved control dimensions differ from the selected original images. Do not reuse pixels at another resolution.')
                     if not 0 <= x < width or not 0 <= y < height: raise ValueError('Measurement outside original image dimensions.')
         return data
     def load(self):
         if not self.can_edit() or not self.unsaved_guard(): return
-        if not self.reconstruction: self.status.set('Open the matching alignment before loading controls.'); return
+        if not self.image_dir: self.status.set('Open the matching alignment or panoramas before loading controls.'); return
         path = filedialog.askopenfilename(parent=self.window, title='Load control points', filetypes=[('Abu controls JSON', '*.json')])
         if not path: return
         try:
@@ -627,7 +763,8 @@ class ControlPointEditor:
         try:
             if path.suffix.lower() != '.json': raise ValueError('Save controls as a .json file.')
             if self.reconstruction and path.absolute() == self.reconstruction.absolute(): raise ValueError('Controls must not overwrite the reconstruction.')
-            atomic_json(path, self.validate_for_alignment(self.controls)); self.controls_path = path; self.document.mark_saved(); self.refresh()
+            payload=self.validate_for_alignment(self.controls);payload['image_sizes']=copy.deepcopy(self.image_sizes)
+            atomic_json(path, payload); self.controls_path = path; self.document.mark_saved(); self.refresh()
             self.status.set(f'Controls saved: {path}'); return True
         except Exception as error: self.error('Cannot save controls', error); return False
     def save_as(self):
@@ -672,7 +809,8 @@ class ControlPointEditor:
         threading.Thread(target=work, daemon=True, name='Abu spherical refinement').start()
     def set_busy(self, value):
         self.busy = value
-        for widget in [*self.edit_buttons, self.refine_button]: widget.configure(state='disabled' if value else 'normal')
+        for widget in self.edit_buttons:widget.configure(state='disabled' if value else 'normal')
+        self.refine_button.configure(state='disabled' if value or not self.reconstruction else 'normal')
         if value: self.progress.pack(side='right', padx=10); self.progress.start(12)
         else: self.progress.stop(); self.progress.pack_forget()
     def set_results(self, text):
@@ -709,6 +847,13 @@ class ControlPointEditor:
                 self.right_tabs.select(self.results_page); self.status.set(f'{state}. Saved: {output.name}')
             elif event[0] == 'refine_error':
                 self.set_busy(False); self.set_results('Refinement failed\n\n'+event[1]); self.right_tabs.select(self.results_page); self.status.set('Refinement failed: '+event[1])
+            elif event[0]=='viewer_ready':
+                import webbrowser
+                webbrowser.open(event[1]);self.status.set('Local 3D view: '+event[1]+' · click controls/cameras to select them here.')
+            elif event[0]=='viewer_error':self.status.set('3D view unavailable: '+event[1])
+            elif event[0]=='viewer_select':
+                if self.document.point(event[1]):self.select(event[1])
+            elif event[0]=='viewer_camera':self.choose_image(event[1])
         self.poll_job = self.window.after(60, self.poll)
     def close(self):
         if self.busy: messagebox.showinfo('Refinement running', 'Wait for refinement to finish before closing.', parent=self.window); return
@@ -716,7 +861,10 @@ class ControlPointEditor:
         self.closed = True; self.window.after_cancel(self.poll_job)
         for guide in self.guides: guide.hide()
         for pane in self.panes: pane['view'].close()
+        if self.grid and not self.grid.closed:self.grid.close()
+        self.viewer_executor.shutdown(wait=False,cancel_futures=True)
+        if self.viewer:self.viewer.close()
         self.executor.shutdown(wait=False, cancel_futures=True); self.window.destroy()
 
 
-def open_editor(parent): return ControlPointEditor(parent)
+def open_editor(parent,on_attach=None): return ControlPointEditor(parent,on_attach)

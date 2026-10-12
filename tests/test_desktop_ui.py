@@ -11,6 +11,19 @@ import test_gui_presets
 class DesktopTests(unittest.TestCase):
     setUp = test_gui_presets.PresetTests.setUp
     close_root = test_gui_presets.PresetTests.close_root
+    def test_control_handoff_reaches_main_align_command(self):
+        import json
+        from pathlib import Path
+        from unittest.mock import patch
+        path=Path(self.temp.name)/'controls.json';path.write_text(json.dumps({'schema_version':1,'points':[{'id':'A','type':'tie','observations':[{'shot_id':'a.jpg','pixel':[1,2]},{'shot_id':'b.jpg','pixel':[2,2]}]}]}))
+        self.app._attach_control_points(str(path),self.temp.name,250,15)
+        self.assertTrue(self.app.controls_enabled_var.get());self.assertEqual(self.app.stride_var.get(),'1')
+        with patch('abu_align_gui.threading.Thread') as thread,patch.object(self.app,'_get_logs_dir',return_value=self.temp.name):
+            self.app._start_alignment(skip_auto_train=True)
+            command=thread.call_args.kwargs['args'][0]
+        self.assertIn('--control_points',command);self.assertIn('--spherical_refine',command)
+        self.assertEqual(command[command.index('--spherical_ba_iterations')+1],'15')
+        self.assertNotIn('controls_file',self.app._preset_vars)
 
     def test_manual_controls_menu_opens_new_workspace(self):
         from tkinter import ttk
@@ -24,8 +37,8 @@ class DesktopTests(unittest.TestCase):
         theme = ttk.Style(self.root).theme_use()
         from control_points_ui import open_editor
         opened = []
-        def factory(parent):
-            editor = open_editor(parent); opened.append(editor); return editor
+        def factory(parent,**kwargs):
+            editor = open_editor(parent,**kwargs); opened.append(editor); return editor
         with patch('control_points_ui.open_editor', side_effect=factory):
             menu.invoke(index); self.root.update()
             dialogs = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]

@@ -1,3 +1,20 @@
+# Abu Align & Train v0.1.4.4: RealityScan CSV import, image browser and local 3D control inspection
+
+Added an undoable RealityScan measurement/local-XYZ CSV importer, projection and dimension checks, explicit column mapping, preview and merge policy. The provided portrait-image export defaults to point names only; its pixels cannot be transferred onto ERP images.
+
+Added a paged, bounded-cache image grid, filename/measurement filters, destination-pane selection and arrow-key image browsing with modifier nudging. Added loopback-only Viser cloud/camera/triangulated-control inspection, selection callbacks and sight lines. Moved alignment actions onto their own row to keep them fully visible at minimum width.
+
+Added photos-only preparation and preservation when opening an alignment for the exact same originals. Added Use with main Align and a main-window saved-controls option. The CLI validates selected originals and captures an immutable control snapshot, then registers images, refines and exports the refined poses. Controls are post-registration constraints, not initialization seeds.
+
+Verification: 39 UI/import/workflow tests and 5 spherical solver/integrity tests passed. Synthetic Viser scene/update/selection/HTTP/shutdown passed. Full local 48-panorama CLI run registered 48/48 cameras and completed in 43.1 s; 503 points/2587 observations refined in 6.41 s with RMS 0.071761 to 0.067308 degrees. The 10-evaluation run did not converge and used model-derived tie points, so it is an integration check, not independent accuracy evidence. Input/refinement control snapshots matched exactly. No client images were uploaded.
+
+Memory: thumbnail cache bounded to 128 images, at most approximately 7.5 MiB raw RGB; one decode worker. 3D display bounded to 50,000 cloud points. CPU spherical refinement; no additional GPU training tensors. Post-test total PC GPU memory 4365/24564 MiB, not attributable peak memory. Peak RAM/VRAM unmeasured. Full verification detail and sources: docs/CONTROL_WORKFLOW_VERIFICATION.md.
+
+Primary modified files: abu_align_gui.py, align_cli.py, desktop_ui.py, control_points_workspace.py, panorama_viewport.py; new control_points_csv.py, control_images_grid.py, control_points_3d.py, control_points_pipeline.py. Tests: test_control_import_navigation.py and test_desktop_ui.py. Updated user guide and SPHERICAL_CONTROLS.md. Mandatory release updates version headers, launchers, walkthroughs, mirrors and version snapshots.
+
+
+---
+
 # Abu Align & Train v0.1.4.3: Redesign the manual 360 control-point workspace
 
 Replaced the basic toolbar/two-canvas prototype with a dedicated professional workspace: searchable/filterable point list and distance panel, independently navigable panorama panes, editable point/survey properties, per-image measurement lists and uncertainties, configurable refinement budgets, and a visible convergence/check-point result report. Added a full Help tab and delayed hover guides for settings, tools and navigation. The compatibility entry point keeps the existing Prepare input menu working. Styles are scoped to this tool so the main application's theme is preserved.

@@ -6,6 +6,23 @@ the same physical location in each pane. Choose other images to add more
 observations. Wheel zooms, middle-button drag pans, right click removes an
 observation, and Undo restores edits. Zoom renders only the visible region.
 
+You can also **Open panoramas** before registration and prepare measurements
+without camera poses. **Use with main Align** saves and attaches the controls
+to the main window. Its enabled controls option runs initial registration,
+then joint refinement, and packages the refined poses. The CLI validates the
+selected images and snapshots the input controls before inference. These are
+post-registration constraints, not initialization seeds. Opening an alignment
+for the exact same originals retains prepared measurements.
+
+**Import CSV** previews RealityScan image measurements or local XYZ, with
+explicit column mapping, units, merge policy and undo. Perspective-image
+measurements cannot be transferred onto panoramas: import point names and
+re-mark the features instead. **Image grid** provides paged thumbnails,
+filename search and measurement filters. Plain Left/Right browse images;
+Ctrl/Shift arrows nudge measurements. **3D view** serves a local loopback
+WebGL scene with sampled sparse points, camera centres, triangulated controls
+and selected sight lines. It does not overlay unregistered survey XYZ.
+
 Tie points need translated views and measurable parallax. Add observations
 across the trajectory, not just adjacent frames. Longitude wraps around the
 panorama seam in the solver. GCP/check positions currently use **local XYZ in

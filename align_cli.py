@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.4.3 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.4.4 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1671,6 +1671,7 @@ def main():
     parser.add_argument('--spherical_refine', action='store_true', help='Joint native spherical camera/landmark refinement before packaging')
     parser.add_argument('--control_points', help='Manual landmark, local XYZ GCP, distance and check-point JSON')
     parser.add_argument('--spherical_ba_points', type=int, default=10000, help='Automatic landmark budget for sparse spherical BA')
+    parser.add_argument('--spherical_ba_iterations',type=int,default=40,help='Maximum joint spherical-refinement function evaluations')
     # RealityScan / RealityCapture Options
     parser.add_argument("--rs_gui", action="store_true", default=False, help="Launch interactive RealityScan GUI window instead of running headless in background")
     parser.add_argument("--rs_prior_run", type=str, default=None, help="Custom prior alignment run folder or cameras.csv path to ingest")
@@ -1926,6 +1927,15 @@ def main():
         image_paths = image_paths[:args.max_frames]
 
     num_frames = len(image_paths)
+    if args.control_points:
+        if args.engine not in ['opensfm','360dvo','dvo','native_colmap']:
+            raise ValueError('Manual spherical controls are supported by OpenSfM, 360DVO and native COLMAP.')
+        from control_points_pipeline import validate_selected_controls
+        validated_controls=validate_selected_controls(args.control_points,image_paths)
+        if args.engine=='opensfm' and args.projection!='equirectangular':
+            raise ValueError('Manual spherical controls require the equirectangular OpenSfM projection.')
+        if not 1<=args.spherical_ba_points<=50000 or not 5<=args.spherical_ba_iterations<=500:
+            raise ValueError('Invalid spherical control-refinement budget.')
     with Image.open(image_paths[0]) as sample_img:
         orig_w, orig_h = sample_img.size
 
@@ -1945,6 +1955,14 @@ def main():
         output_dir = get_next_sparse_dir(results_base, args.engine, args.use_ba)
 
     os.makedirs(output_dir, exist_ok=True)
+    if args.control_points:
+        from control_points_model import atomic_json
+        snapshot=Path(output_dir)/'control_points.input.json'
+        if snapshot.absolute()==Path(args.control_points).absolute():
+            import uuid
+            snapshot=Path(output_dir)/('control_points.snapshot_'+uuid.uuid4().hex[:8]+'.json')
+        atomic_json(snapshot,validated_controls)
+        args.control_points=str(snapshot)
     print(f"      * Target Output: {output_dir}")
     if args.engine in ["opensfm", "native_colmap", "360dvo", "dvo"]:
         from run_manifest import write_manifest
@@ -2468,7 +2486,8 @@ def main():
         from spherical_refinement import refine
         from opensfm_engine import opensfm_to_pycolmap
         refined = os.path.join(output_dir, 'refined', 'reconstruction.json')
-        report = refine(source, refined, args.control_points, args.spherical_ba_points)
+        report = refine(source, refined, args.control_points, args.spherical_ba_points,args.spherical_ba_iterations)
+        shutil.copy2(args.control_points,Path(refined).with_suffix('.controls.json'))
         print(f"Spherical refinement: {report['before_angular_rms_deg']:.4f} -> {report['after_angular_rms_deg']:.4f} degrees RMS")
         reconstruction = opensfm_to_pycolmap(refined)
         dense_3d = np.array([p.xyz for p in reconstruction.points3D.values()], dtype=np.float32)

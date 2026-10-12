@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.4.3
+Abu Align & Train Version 0.1.4.4
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.4.3 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.4.4 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -410,6 +410,11 @@ class AbuAlignApp:
         }
         self.presets_dir = Path(__file__).resolve().parent / "presets"
         self.preset_var = tk.StringVar(value="")
+        # Controls belong to this dataset, so keep them outside reusable presets.
+        self.controls_file_var=tk.StringVar(value='')
+        self.controls_enabled_var=tk.BooleanVar(value=False)
+        self.controls_budget_var=tk.StringVar(value='10000')
+        self.controls_iterations_var=tk.StringVar(value='40')
 
         # Legacy aliases for backward compatibility
         self.train_mode_var = self.lf_mode_var
@@ -4117,6 +4122,20 @@ class AbuAlignApp:
             messagebox.showerror("Error", f"Dataset folder not found:\n{dataset_path}")
             return
 
+        control_args=[]
+        if self.controls_enabled_var.get():
+            try:
+                engine=self.engine_var.get();path=self.controls_file_var.get().strip()
+                if engine not in ['opensfm','360dvo','dvo','native_colmap']:raise ValueError('Select OpenSfM, 360DVO or native COLMAP for manual spherical controls.')
+                if engine=='opensfm' and self.opensfm_proj_var.get()!='equirectangular':raise ValueError('Select the equirectangular OpenSfM projection for manual 360 controls.')
+                if not os.path.isfile(path):raise ValueError('Choose a saved control_points.json file.')
+                from control_points_model import validate_controls
+                validate_controls(json.loads(Path(path).read_text(encoding='utf-8')))
+                budget,iterations=int(self.controls_budget_var.get()),int(self.controls_iterations_var.get())
+                if not 1<=budget<=50000 or not 5<=iterations<=500:raise ValueError('Check the manual-control refinement budgets.')
+                control_args=['--control_points',path,'--spherical_refine','--spherical_ba_points',str(budget),'--spherical_ba_iterations',str(iterations)]
+            except Exception as error:messagebox.showerror('Manual controls',str(error));return
+
         self.is_running = True
         self.is_paused = False
         self.start_btn.config(state=tk.DISABLED)
@@ -4152,6 +4171,7 @@ class AbuAlignApp:
             "--stride", str(self.stride_var.get()),
             "--load_res", str(self.res_var.get()),
         ]
+        cmd.extend(control_args)
 
         if not self.cache_var.get():
             cmd.append("--no_cache")
@@ -4419,6 +4439,17 @@ class AbuAlignApp:
         thread = threading.Thread(target=self._run_process, args=(cmd,), daemon=True)
         thread.start()
 
+    def _attach_control_points(self,path,image_dir,budget=10000,iterations=40):
+        if self.is_running:raise ValueError('Wait for the current alignment to finish before attaching controls.')
+        self.dataset_var.set(image_dir);self.controls_file_var.set(path);self.controls_enabled_var.set(True)
+        self.controls_budget_var.set(str(budget));self.controls_iterations_var.set(str(iterations))
+        if self.engine_var.get() not in ['opensfm','360dvo','dvo','native_colmap']:self.engine_var.set('opensfm')
+        if self.engine_var.get()=='opensfm':self.opensfm_proj_var.set('equirectangular')
+        self.stride_var.set('1')
+        self._log('Manual controls attached. Main Align will register images first, then refine the new model with the controls.\n')
+    def _browse_control_points(self):
+        value=filedialog.askopenfilename(parent=self.root,title='Choose saved 360 controls',filetypes=[('Control JSON','*.json')])
+        if value:self.controls_file_var.set(value);self.controls_enabled_var.set(True)
     def _start_one_click(self):
         """Runs alignment and automatically chains into 3DGS training immediately upon completion."""
         self._start_alignment(force_auto_train=True)
@@ -4627,7 +4658,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.4.3 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.4.4 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5186,7 +5217,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.4.3 - {title}")
+        doc_win.title(f"Abu Align v0.1.4.4 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5813,7 +5844,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.4.3\n"
+            "Abu Align & Train - Version 0.1.4.4\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"
