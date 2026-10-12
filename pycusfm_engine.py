@@ -499,7 +499,7 @@ def run_pycusfm_reconstruction(
                 image_id=idx + 1
             )
             rigid = pycolmap.Rigid3d(
-                pycolmap.Rotation3d(np.array([q[3], q[0], q[1], q[2]])),
+                pycolmap.Rotation3d(R_w2c),
                 t_w2c
             )
             if hasattr(reconstruction, "add_image_with_trivial_frame"):

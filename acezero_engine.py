@@ -483,8 +483,10 @@ def run_acezero_reconstruction(
             camera_id_seq += 1
 
         # ACE0 quaternion format is qw, qx, qy, qz (OpenCV world-to-cam)
-        # pycolmap.Rotation3d accepts [qw, qx, qy, qz]
-        quat = pycolmap.Rotation3d(np.array([qw, qx, qy, qz]))
+        # pycolmap.Rotation3d accepts 3x3 matrix or [qx, qy, qz, qw]
+        from scipy.spatial.transform import Rotation as SciPyRot
+        R_w2c = SciPyRot.from_quat([qx, qy, qz, qw]).as_matrix()
+        quat = pycolmap.Rotation3d(R_w2c)
         trans = np.array([tx, ty, tz])
         rigid = pycolmap.Rigid3d(quat, trans)
 

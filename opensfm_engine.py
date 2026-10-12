@@ -331,7 +331,7 @@ def load_opensfm_points_from_json(rec_json_path: str) -> Tuple[np.ndarray, np.nd
     return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
 
 
-def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
+def opensfm_to_pycolmap(rec_json_path: str, component_index: int = 0) -> Optional[object]:
     """
     Constructs a fully populated, valid pycolmap.Reconstruction from OpenSfM reconstruction.json.
     Correctly converts camera models (PINHOLE, RADIAL, EQUIRECTANGULAR, OPENCV_FISHEYE),
@@ -350,7 +350,7 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
         with open(rec_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list) and len(data) > 0:
-            data = data[0]
+            data = data[component_index]
         elif not isinstance(data, dict):
             return None
     except Exception as e:
@@ -442,6 +442,13 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
         else:
             rec.add_camera(cam)
 
+    from spherical_geometry import load_observations, quaternion_xyzw
+    observations = load_observations(rec_json_path, data)
+    shot_observations = collections.defaultdict(list)
+    for shot, point, xy in observations:
+        shot_observations[shot].append((point, xy))
+    point_tracks = collections.defaultdict(list)
+
     # 2. Shots / Images
     shots = data.get("shots", {})
     img_id_seq = 1
@@ -453,21 +460,12 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
         t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
 
         R_w2c, _ = cv2.Rodrigues(r_vec)
-        qw = math.sqrt(max(0.0, 1.0 + R_w2c[0, 0] + R_w2c[1, 1] + R_w2c[2, 2])) / 2.0
-        if qw > 1e-6:
-            qx = (R_w2c[2, 1] - R_w2c[1, 2]) / (4.0 * qw)
-            qy = (R_w2c[0, 2] - R_w2c[2, 0]) / (4.0 * qw)
-            qz = (R_w2c[1, 0] - R_w2c[0, 1]) / (4.0 * qw)
-        else:
-            try:
-                from scipy.spatial.transform import Rotation as SciPyRot
-                scipy_q = SciPyRot.from_matrix(R_w2c).as_quat()
-                qx, qy, qz, qw = scipy_q[0], scipy_q[1], scipy_q[2], scipy_q[3]
-            except Exception:
-                qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
-
-        rigid = pycolmap.Rigid3d(pycolmap.Rotation3d(np.array([qw, qx, qy, qz])), t_vec)
-        py_img = pycolmap.Image(name=shot_id, camera_id=cam_id, image_id=img_id_seq)
+        # Stable Rodrigues -> quaternion conversion also handles rotations near pi.
+        rigid = pycolmap.Rigid3d(pycolmap.Rotation3d(quaternion_xyzw(R_w2c)), t_vec)
+        points2d = [pycolmap.Point2D(xy) for _, xy in shot_observations[shot_id]]
+        py_img = pycolmap.Image(name=shot_id, camera_id=cam_id, image_id=img_id_seq, points2D=points2d)
+        for index, (point, _) in enumerate(shot_observations[shot_id]):
+            point_tracks[point].append((img_id_seq, index))
         if hasattr(rec, "add_image_with_trivial_frame"):
             rec.add_image_with_trivial_frame(py_img, rigid)
         else:
@@ -483,7 +481,12 @@ def opensfm_to_pycolmap(rec_json_path: str) -> Optional[object]:
         if coords and len(coords) == 3:
             xyz = np.asarray(coords, dtype=np.float64)
             rgb = np.asarray(p_info.get("color", [200, 200, 200]), dtype=np.uint8)
-            rec.add_point3D(xyz, pycolmap.Track(), rgb)
+            if not np.isfinite(xyz).all():
+                continue
+            track = pycolmap.Track()
+            for image_id, index in point_tracks[str(pid)]:
+                track.add_element(image_id, index)
+            rec.add_point3D(xyz, track, rgb)
 
     return rec
 
@@ -1497,7 +1500,9 @@ def run_opensfm_spherical_sfm(
         rgb = p_data["rgb"]
         points_dict[str(p_id)] = {
             "coordinates": xyz.tolist(),
-            "color": [int(rgb[0]), int(rgb[1]), int(rgb[2])]
+            "color": [int(rgb[0]), int(rgb[1]), int(rgb[2])],
+            "observations": [{"shot_id": features[v]["name"], "pixel": features[v]["pts"][kp].tolist()}
+                             for v, kp in p_data["views"] if v in cameras_pose]
         }
         dense_pts_list.append(xyz)
         dense_rgb_list.append(rgb)
@@ -1765,18 +1770,7 @@ def opensfm_to_transforms_json(
                 r_vec = np.array(shot_data.get("rotation", [0, 0, 0]), dtype=np.float64)
                 t_vec = np.array(shot_data.get("translation", [0, 0, 0]), dtype=np.float64)
                 R_w2c, _ = cv2.Rodrigues(r_vec)
-                qw = math.sqrt(max(0.0, 1.0 + R_w2c[0, 0] + R_w2c[1, 1] + R_w2c[2, 2])) / 2.0
-                if qw > 1e-6:
-                    qx = (R_w2c[2, 1] - R_w2c[1, 2]) / (4.0 * qw)
-                    qy = (R_w2c[0, 2] - R_w2c[2, 0]) / (4.0 * qw)
-                    qz = (R_w2c[1, 0] - R_w2c[0, 1]) / (4.0 * qw)
-                else:
-                    try:
-                        from scipy.spatial.transform import Rotation as SciPyRot
-                        scipy_q = SciPyRot.from_matrix(R_w2c).as_quat()
-                        qx, qy, qz, qw = scipy_q[0], scipy_q[1], scipy_q[2], scipy_q[3]
-                    except Exception:
-                        qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+                qx, qy, qz, qw = quaternion_xyzw(R_w2c)
                 imf.write(f"{idx+1} {qw:.9f} {qx:.9f} {qy:.9f} {qz:.9f} {t_vec[0]:.9f} {t_vec[1]:.9f} {t_vec[2]:.9f} 1 {shot_id}\n\n")
 
         pts_data = rec.get("points", {})

@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.1.3.6 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.1.3.7 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -1021,6 +1021,8 @@ def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str, max_gaussians
     f_rest = pipe[f"{prefix}gauss_params.features_rest"].float().numpy()
 
     N = means.shape[0]
+    if N == 0:
+        raise ValueError("Checkpoint contains no Gaussians")
     map_to_tensors = OrderedDict()
     map_to_tensors["x"] = means[:, 0]
     map_to_tensors["y"] = means[:, 1]
@@ -1045,12 +1047,14 @@ def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str, max_gaussians
 
     valid = np.ones(N, dtype=bool)
     for k, v in map_to_tensors.items():
-        valid = np.logical_and(valid, np.isfinite(v).all(axis=-1))
+        valid = np.logical_and(valid, np.isfinite(v).reshape(N, -1).all(axis=1))
 
     # Opacity threshold logit(1/255) approx -5.5373
     valid = np.logical_and(valid, (opacities.squeeze(-1) >= -5.5373))
     valid_indices = np.where(valid)[0]
     count = len(valid_indices)
+    if count == 0:
+        raise ValueError("Checkpoint contains no finite, visible Gaussians; refusing an empty export")
 
     if max_gaussians > 0 and count > max_gaussians:
         sub_opacities = opacities[valid_indices].squeeze(-1)
@@ -1066,7 +1070,7 @@ def export_pfgs360_checkpoint_to_ply(ckpt_path: str, out_ply: str, max_gaussians
     type_list = [(k, "f4") for k in map_to_tensors.keys()]
     rec_arr = np.empty(count, dtype=type_list)
     for k in map_to_tensors.keys():
-        rec_arr[k] = map_to_tensors[k][final_indices].squeeze()
+        rec_arr[k] = map_to_tensors[k][final_indices].reshape(count)
 
     with open(out_ply, "wb") as f:
         f.write(b"ply\n")

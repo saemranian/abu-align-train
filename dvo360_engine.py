@@ -257,13 +257,8 @@ def tum_trajectory_to_colmap(
             t_w2c = -R_w2c @ t_c2w
 
             # Convert R_w2c back to quaternion [qw, qx, qy, qz]
-            qw_w2c = math.sqrt(max(0.0, 1.0 + R_w2c[0,0] + R_w2c[1,1] + R_w2c[2,2])) / 2.0
-            if qw_w2c > 1e-6:
-                qx_w2c = (R_w2c[2,1] - R_w2c[1,2]) / (4.0 * qw_w2c)
-                qy_w2c = (R_w2c[0,2] - R_w2c[2,0]) / (4.0 * qw_w2c)
-                qz_w2c = (R_w2c[1,0] - R_w2c[0,1]) / (4.0 * qw_w2c)
-            else:
-                qw_w2c, qx_w2c, qy_w2c, qz_w2c = 1.0, 0.0, 0.0, 0.0
+            from spherical_geometry import quaternion_xyzw
+            qx_w2c, qy_w2c, qz_w2c, qw_w2c = quaternion_xyzw(R_w2c)
 
             img_name = os.path.basename(image_names[idx])
             f.write(f"{idx+1} {qw_w2c:.9f} {qx_w2c:.9f} {qy_w2c:.9f} {qz_w2c:.9f} {t_w2c[0]:.9f} {t_w2c[1]:.9f} {t_w2c[2]:.9f} 1 {img_name}\n")

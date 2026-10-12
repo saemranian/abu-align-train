@@ -1,3 +1,9 @@
+# Abu Align & Train v0.1.3.7: Correct spherical pose and observation exports
+
+Fixed scalar-last PyCOLMAP quaternions and half-turn TUM rotations. Preserved upstream tracks.csv and native fallback observations. Fixed per-row finite Gaussian filtering and refused empty exports. Verification: python -B -m unittest tests.test_spherical_integrity tests.test_dvo360_engine tests.test_360dvo_cache (10 passed). Real saved 48-camera model: 68,740 points; 210,526 observations; maximum rotation matrix error 7.4e-16. VRAM: no training allocation; verification uses CPU geometry and checkpoint tensors. No accuracy benchmark or memory speedup claimed. Incoming v0.1.3.6 was checkpointed separately. Root/mirror/snapshot parity is hash-verified by release_checkpoint.py.
+
+---
+
 # Walkthrough: Abu Align & Train v0.1.3.6
 ## OpenSfM Pipeline Stabilization, High-Res Panorama Optimization & 360 Splitter Alignment Prior
 
