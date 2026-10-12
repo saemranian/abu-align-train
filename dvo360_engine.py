@@ -685,7 +685,8 @@ def run_360dvo_reconstruction(
     use_cache: bool = True,
     clear_cache: bool = False,
     cache_dir: Optional[str] = None,
-    log_callback = None
+    log_callback = None,
+    allow_fallback: bool = True,
 ) -> Tuple[object, np.ndarray, np.ndarray]:
     """
     Executes 360DVO Deep Visual Odometry on the input image list.
@@ -740,8 +741,9 @@ def run_360dvo_reconstruction(
     settings = {"patches": patches_per_frame, "ba_window": local_ba_window, "scale": metric_scale,
                 "dense": dense_cloud, "lifetime": patch_lifetime, "final_ba": final_ba_iters,
                 "grad_bias": gradient_bias, "keyframe_thresh": keyframe_thresh,
-                "polar_mask": polar_mask_pct, "load_res": load_res,
+                "polar_mask": polar_mask_pct, "load_res": load_res, "allow_fallback": allow_fallback,
                 "runner_sha256": file_hash(runner_src),
+                "tracks_sha256": file_hash(os.path.join(os.path.dirname(__file__), "dvo_tracks.py")),
                 "weights_sha256": file_hash(weights_path) if weights_path and os.path.isfile(weights_path) else None}
     manifest = write_manifest(image_paths, manifest_path, "360dvo", settings,
                               runtime_path=wsl_bridge.win_to_wsl_path if wsl_bridge else None)
@@ -924,6 +926,19 @@ def run_360dvo_reconstruction(
             )
             log(f"[*] {msg_osfm}")
 
+            track_path = os.path.join(output_dir, 'dvo_tracks.json')
+            if os.path.isfile(track_path):
+                from dvo_tracks import attach_tracks
+                from opensfm_engine import opensfm_to_pycolmap
+                track_report = attach_tracks(os.path.join(opensfm_dir, 'reconstruction.json'), track_path,
+                                             [os.path.basename(p) for p in image_paths])
+                with open(os.path.join(output_dir, 'dvo_track_report.json'), 'w', encoding='utf-8') as stream:
+                    json.dump(track_report, stream, indent=2)
+                tracked_reconstruction = opensfm_to_pycolmap(os.path.join(opensfm_dir, 'reconstruction.json'))
+                tracked_reconstruction.write_text(sparse_0)
+                tracked_reconstruction.write(sparse_0)
+                log(f"[*] Persistent DVO landmarks: {track_report['landmarks']}; observations: {track_report['observations']}")
+
             # Universal 3dgs_dataset/ directory staging
             dataset_3dgs = os.path.join(output_dir, "3dgs_dataset")
             os.makedirs(dataset_3dgs, exist_ok=True)
@@ -993,6 +1008,8 @@ def run_360dvo_reconstruction(
         else:
             log("[WARNING] WSL2 360DVO execution did not produce trajectory. Falling back to internal estimator...")
 
+    if not allow_fallback:
+        raise RuntimeError('Neural 360DVO failed or did not initialize. Check the runtime log and frame motion; experimental fallback requires --dvo_allow_fallback.')
     log("[WARNING] Neural 360DVO unavailable: using Abu's experimental CPU spherical estimator; accuracy is not equivalent.")
     manifest["backend"] = "experimental_cpu_fallback"
     with open(manifest_path, "w", encoding="utf-8") as stream:

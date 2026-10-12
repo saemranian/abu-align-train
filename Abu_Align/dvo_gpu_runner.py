@@ -157,6 +157,8 @@ def run_dvo(
     print(f'[*] Processing {total_imgs} equirectangular frames (stride={stride})...', flush=True)
 
     slam = None
+    from dvo_tracks import PersistentTracks
+    persistent_tracks = PersistentTracks()
     queue = Queue(maxsize=16)
     reader = Process(target=dvo_image_stream, args=(queue, image_files, 1, 0, load_res), daemon=True)
     reader.start()
@@ -187,19 +189,35 @@ def run_dvo(
                     viser.ViserServer = _orig_server_cls
                 else:
                     slam = DPVO(cfg, network, ht=H, wd=W, viz=False)
-                if polar_mask:
-                    original_update = slam.network.update.forward
-
-                    def masked_update(net, ctx, corr, flow, ii, jj, kk):
-                        updated_net, (delta, weight, extra) = original_update(net, ctx, corr, flow, ii, jj, kk)
-                        # Patch coordinates are on the feature grid; exclude masked
-                        # source bearings from BA even when gradient sampling finds a boundary.
-                        y = slam.patches[0, kk, 1, slam.P // 2, slam.P // 2]
-                        valid = (y >= polar_mask * H / slam.RES) & (y < (1 - polar_mask) * H / slam.RES)
-                        weight = weight * valid.reshape(1, -1, 1).to(weight.dtype)
-                        return updated_net, (delta, weight, extra)
-
-                    slam.network.update.forward = masked_update
+                original_update = slam.network.update.forward
+                capture_state = {'active': False}
+                original_window_update = slam.update
+                def window_update():
+                    capture_state['active'] = True
+                    try: return original_window_update()
+                    finally: capture_state['active'] = False
+                slam.update = window_update
+                def masked_update(net, ctx, corr, flow, ii, jj, kk):
+                    updated_net, (delta, weight, extra) = original_update(net, ctx, corr, flow, ii, jj, kk)
+                    # Patch coordinates are on the feature grid; exclude masked
+                    # source bearings from BA even when gradient sampling finds a boundary.
+                    y = slam.patches[0, kk, 1, slam.P // 2, slam.P // 2]
+                    valid = (y >= polar_mask * H / slam.RES) & (y < (1 - polar_mask) * H / slam.RES)
+                    weight = weight * valid.reshape(1, -1, 1).to(weight.dtype)
+                    if capture_state['active'] and len(kk):
+                        with torch.no_grad():
+                            center = slam.P // 2
+                            projected = slam.reproject((ii, jj, kk))[..., center, center] + delta.float()
+                            source = slam.patches[0, kk, :2, center, center]
+                            normalization = torch.tensor([W, H], device=source.device, dtype=source.dtype) / slam.RES
+                            # Preserve measured targets before BA changes the current projection.
+                            persistent_tracks.record(
+                                slam.tstamps_[ii].cpu().numpy(), slam.tstamps_[jj].cpu().numpy(),
+                                (kk % slam.M).cpu().numpy(), (source/normalization).cpu().numpy(),
+                                (projected[0]/normalization).cpu().numpy(), weight[0].amin(-1).float().cpu().numpy(),
+                                slam.colors_.view(-1, 3)[kk].cpu().numpy())
+                    return updated_net, (delta, weight, extra)
+                slam.network.update.forward = masked_update
                 # Decouple Viser visualizer to asynchronous background thread to prevent GPU stalling
                 if viz and hasattr(slam, "viser") and slam.viser is not None:
                     orig_viser_update = slam.viser.update
@@ -279,6 +297,7 @@ def run_dvo(
         colors = slam.colors_.view(-1, 3).cpu().numpy()[:slam.m]
 
     poses, tstamps = slam.terminate()
+    persistent_tracks.save(os.path.join(output_dir, 'dvo_tracks.json'))
 
     if scale and scale > 0.0 and abs(scale - 1.0) > 1e-4:
         poses[:, :3] *= scale
@@ -321,6 +340,8 @@ def run_dvo(
                   'peak_vram_bytes': torch.cuda.max_memory_allocated(),
                   'resolution_width_limit': load_res, 'polar_mask': polar_mask,
                   'final_refinement': 'sliding_window',
+                  'persistent_observations': persistent_tracks.count,
+                  'persistent_tracks_truncated': persistent_tracks.truncated,
                   'upstream_commit': subprocess.run(['git', '-C', '/home/ahmad/360DVO', 'rev-parse', 'HEAD'],
                                                    capture_output=True, text=True).stdout.strip()}
     with open(os.path.join(output_dir, 'engine_provenance.json'), 'w', encoding='utf-8') as stream:

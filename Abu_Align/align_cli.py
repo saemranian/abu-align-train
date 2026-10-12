@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.4.1 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.4.2 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1709,6 +1709,7 @@ def main():
     parser.add_argument('--pfgs_pose_mode', choices=['fixed', 'refine', 'posefree'], default='fixed')
     # 360DVO Deep Visual Odometry Options
     parser.add_argument("--dvo_weights", type=str, default=None, help="Custom checkpoint path (.pth file) for 360DVO")
+    parser.add_argument('--dvo_allow_fallback', action='store_true', help='Explicitly allow the experimental CPU estimator if neural DVO fails')
     parser.add_argument("--dvo_patches", type=int, default=96, help="Number of active tracked patches per frame in 360DVO (default: 96)")
     parser.add_argument("--dvo_polar_mask", type=float, default=0.08, help="Polar zenith/nadir cutoff fraction (0.0 to 0.20, default: 0.08) in 360DVO")
     parser.add_argument("--dvo_ba_window", type=int, default=8, help="Local ODBA sliding-window bundle adjustment size (default: 8) in 360DVO")
@@ -2384,7 +2385,8 @@ def main():
             keyframe_thresh=getattr(args, "dvo_keyframe_thresh", 15.0),
             use_cache=not getattr(args, "no_cache", False),
             clear_cache=getattr(args, "clear_cache", False),
-            cache_dir=getattr(args, "cache_dir", None)
+            cache_dir=getattr(args, "cache_dir", None),
+            allow_fallback=args.dvo_allow_fallback,
         )
         inf_elapsed = time.time() - inf_start
         print()

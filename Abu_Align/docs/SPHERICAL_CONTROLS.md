@@ -40,3 +40,12 @@ These tests establish correctness on generated geometry, not real-scene SOTA.
 
 Disconnected component merging, geographic GCP conversion and suggested
 automatic annotations remain separate future extensions.
+
+
+Neural 360DVO now preserves confidence-filtered patch measurements in
+`dvo_tracks.json`. Stable source-frame/patch IDs survive window removal. The
+OpenSfM handoff triangulates them against the final full trajectory and restores
+original-image pixel coordinates. The tracked model excludes loose display
+cloud points that cannot participate in joint BA; their separate PLY remains.
+The default main CLI/desktop DVO route requires the neural backend to initialize.
+Use `--dvo_allow_fallback` only for an explicitly experimental CPU run.
