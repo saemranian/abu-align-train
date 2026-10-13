@@ -1,3 +1,13 @@
+# Abu Align & Train v0.1.4.8: 360 Splitter UI overhaul, expansive sliders and direct keyboard parameter input
+
+Layout & Ergonomics: Overhauled the 360 Splitter (Virtual Rig Designer) parameter rows. Widened the left settings column to 620px and reduced scroll body padding to 12px, unlocking spacious 360px–385px slider tracks for Cameras, Horizontal FOV, Overlap %, and Lens Distortion ($k_1$). Completely resolved slider crowding previously caused by inline badges and checkboxes.
+
+Keyboard & Stepping: Added dark numeric Entry fields alongside every slider with bidirectional synchronization. Supports exact numeric typing with <Return>/<FocusOut> validation, <Up>/<Down> arrow key stepping (with 2x Shift acceleration), and mouse wheel scrolling across camera counts, FOV degrees, overlap %, distortion $k_1$, dome pitch tier, and output resolution/FPS.
+
+Visual Polish: Fixed truncated labels (e.g. `Cube Faces (Fi` $\rightarrow$ clean fixed `Cameras` with right-hand `faces (cube)` badge). Styled the 35mm equivalent focal length as a compact interactive badge `(18.0mm)` next to the degree unit `°`, toggling display on click without consuming slider track width.
+
+---
+
 # Abu Align & Train v0.1.4.7: Persistent image grid, A/B reconstruction comparison and illustrated control-point Help
 
 Root cause: opening an image raised the large editor above the thumbnail grid, making the grid appear closed. The grid is now an owned utility window that stays above the editor, with destination, selection, geometry, filter and scroll preserved on double-click.

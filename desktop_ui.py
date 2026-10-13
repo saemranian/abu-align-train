@@ -192,14 +192,14 @@ def polish_dialog(dialog):
 
 class ScrollPage(tk.Frame):
     """A settings page with local wheel scrolling and keyboard focus reveal."""
-    def __init__(self, parent):
+    def __init__(self, parent, padx=12, pady=12):
         super().__init__(parent, bg=SURFACE)
         self.canvas = tk.Canvas(self, bg=SURFACE, highlightthickness=0, bd=0)
         self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.bar.set)
         self.bar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.body = tk.Frame(self.canvas, bg=SURFACE, padx=22, pady=18)
+        self.body = tk.Frame(self.canvas, bg=SURFACE, padx=padx, pady=pady)
         self.window = self.canvas.create_window(0, 0, window=self.body, anchor="nw")
         self.canvas.bind("<Configure>", self._resize)
         self.body.bind("<Configure>", lambda e: self.canvas.configure(
@@ -507,7 +507,7 @@ def build_workspace(app, tooltip):
     mark = tk.Label(header, text="A", bg=ACCENT, fg=BG, font=("Segoe UI", 19, "bold"), padx=10)
     mark.pack(side="left", padx=(0, 12))
     label(header, "Abu Align & Train", 19).pack(side="left")
-    app.version_label = label(header, "v0.1.4.7", 9, muted=True)
+    app.version_label = label(header, "v0.1.4.8", 9, muted=True)
     app.version_label.pack(side="left", padx=(12, 6))
 
     # Upstream GitHub Engine Update Monitor Badge / Button

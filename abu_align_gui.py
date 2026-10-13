@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.4.7
+Abu Align & Train Version 0.1.4.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.4.7 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.4.8 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2626,11 +2626,79 @@ class AbuAlignApp:
         sliders_frame = tk.Frame(rig_card, bg=self.panel_bg)
         sliders_frame.pack(fill=tk.X, pady=(4, 2))
 
+        # Keyboard numeric entry binding helper
+        def _setup_num_entry(entry_widget, str_var, target_var, min_v, max_v, is_int=False, step=1.0, fmt=None):
+            def _format_val(v):
+                if fmt is not None:
+                    return fmt.format(v)
+                if is_int:
+                    return f"{int(round(v))}"
+                if step < 0.1:
+                    return f"{float(v):+.2f}"
+                return f"{float(v):.1f}"
+
+            def commit(event=None):
+                raw = entry_widget.get().strip().replace("°", "").replace("%", "").replace("mm", "")
+                try:
+                    val = int(raw) if is_int else float(raw)
+                    val = max(min_v, min(max_v, val))
+                    if is_int:
+                        target_var.set(int(val))
+                    else:
+                        target_var.set(round(float(val), 2 if step >= 0.01 else 3))
+                    str_var.set(_format_val(val))
+                except ValueError:
+                    cur = target_var.get()
+                    str_var.set(_format_val(cur))
+                sync_math_and_ui()
+
+            def step_val(direction, mult=1.0):
+                try:
+                    cur = int(entry_widget.get()) if is_int else float(entry_widget.get())
+                except ValueError:
+                    cur = target_var.get()
+                new_v = max(min_v, min(max_v, cur + direction * step * mult))
+                if is_int:
+                    target_var.set(int(new_v))
+                else:
+                    target_var.set(round(float(new_v), 2 if step >= 0.01 else 3))
+                str_var.set(_format_val(new_v))
+                sync_math_and_ui()
+
+            entry_widget.bind("<Return>", commit)
+            entry_widget.bind("<KP_Enter>", commit)
+            entry_widget.bind("<FocusOut>", commit)
+            entry_widget.bind("<Up>", lambda e: [step_val(1, 2.0 if (e.state & 0x1) else 1.0), "break"][1])
+            entry_widget.bind("<Down>", lambda e: [step_val(-1, 2.0 if (e.state & 0x1) else 1.0), "break"][1])
+            entry_widget.bind("<MouseWheel>", lambda e: [step_val(1 if e.delta > 0 else -1), "break"][1])
+
         # Row 1: Number of Cameras
         cams_row = tk.Frame(sliders_frame, bg=self.panel_bg)
-        cams_row.pack(fill=tk.X, pady=1)
-        cams_lbl = tk.Label(cams_row, text="Camera Count (N):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        cams_row.pack(fill=tk.X, pady=2)
+        cams_lbl = tk.Label(cams_row, text="Cameras", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg, width=11, anchor="w")
         cams_lbl.pack(side=tk.LEFT)
+
+        cams_right_box = tk.Frame(cams_row, bg=self.panel_bg)
+        cams_right_box.pack(side=tk.RIGHT)
+
+        cams_val_lbl = tk.Label(cams_right_box, text="cams", font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, width=6, anchor="w")
+        cams_val_lbl.pack(side=tk.RIGHT, padx=(2, 0))
+
+        cams_entry_var = tk.StringVar(value=str(num_cams_var.get()))
+        cams_entry = tk.Entry(
+            cams_right_box,
+            textvariable=cams_entry_var,
+            font=("Segoe UI", 9, "bold"),
+            bg=self.bg_dark,
+            fg=self.text_primary,
+            insertbackground="#a855f7",
+            width=4,
+            justify="right",
+            relief=tk.FLAT
+        )
+        cams_entry.pack(side=tk.RIGHT, padx=(0, 2), ipady=2)
+        ToolTip(cams_entry, "Type camera count (3-32) and press Enter. Arrow Up/Down or scroll to adjust.")
+
         cams_scale = tk.Scale(
             cams_row,
             from_=3,
@@ -2643,14 +2711,13 @@ class AbuAlignApp:
             highlightthickness=0,
             activebackground="#a855f7"
         )
-        cams_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        cams_val_lbl = tk.Label(cams_row, text="8 cams", font=("Segoe UI", 8, "bold"), fg="#a855f7", bg=self.panel_bg, width=8, anchor="e")
-        cams_val_lbl.pack(side=tk.RIGHT)
+        cams_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 10))
+        _setup_num_entry(cams_entry, cams_entry_var, num_cams_var, 3, 32, is_int=True, step=1)
 
         # Row 2: Horizontal Field of View (FOV)
         fov_row = tk.Frame(sliders_frame, bg=self.panel_bg)
-        fov_row.pack(fill=tk.X, pady=1)
-        fov_lbl = tk.Label(fov_row, text="Horizontal FOV (°):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        fov_row.pack(fill=tk.X, pady=2)
+        fov_lbl = tk.Label(fov_row, text="Field of view", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg, width=11, anchor="w")
         fov_lbl.pack(side=tk.LEFT)
 
         show_35mm_eq_var = tk.BooleanVar(value=True)
@@ -2663,24 +2730,21 @@ class AbuAlignApp:
             except Exception:
                 return ""
 
-        def _format_fov_display(fov_val: float) -> str:
-            if show_35mm_eq_var.get():
-                eq_s = _calc_35mm_str(fov_val)
-                return f"{fov_val:.1f}° ({eq_s})" if eq_s else f"{fov_val:.1f}°"
-            return f"{fov_val:.1f}°"
+        fov_right_box = tk.Frame(fov_row, bg=self.panel_bg)
+        fov_right_box.pack(side=tk.RIGHT)
 
         fov_val_lbl = tk.Label(
-            fov_row,
-            text=_format_fov_display(fov_var.get()),
+            fov_right_box,
+            text=f"({_calc_35mm_str(fov_var.get())})",
             font=("Segoe UI", 8, "bold"),
             fg="#38bdf8",
-            bg=self.panel_bg,
-            width=16,
-            anchor="e",
+            bg=self.bg_dark,
+            padx=4,
+            pady=1,
             cursor="hand2"
         )
-        fov_val_lbl.pack(side=tk.RIGHT)
-        ToolTip(fov_val_lbl, "Click to toggle 35mm equivalent focal length display: e.g. 90.0° (18.0mm) vs 90.0°")
+        fov_val_lbl.pack(side=tk.RIGHT, padx=(4, 0))
+        ToolTip(fov_val_lbl, "35mm equivalent focal length. Click to toggle display.")
 
         def toggle_35mm_eq(event=None):
             show_35mm_eq_var.set(not show_35mm_eq_var.get())
@@ -2688,19 +2752,23 @@ class AbuAlignApp:
 
         fov_val_lbl.bind("<Button-1>", toggle_35mm_eq)
 
-        fov_eq_chk = tk.Checkbutton(
-            fov_row,
-            text="35mm eq",
-            variable=show_35mm_eq_var,
-            font=("Segoe UI", 7),
-            fg="#94a3b8",
-            bg=self.panel_bg,
-            selectcolor=self.bg_dark,
-            activebackground=self.panel_bg,
-            command=lambda: sync_math_and_ui()
+        fov_unit_lbl = tk.Label(fov_right_box, text="°", font=("Segoe UI", 9, "bold"), fg=self.text_secondary, bg=self.panel_bg)
+        fov_unit_lbl.pack(side=tk.RIGHT, padx=(1, 2))
+
+        fov_entry_var = tk.StringVar(value=f"{fov_var.get():.1f}")
+        fov_entry = tk.Entry(
+            fov_right_box,
+            textvariable=fov_entry_var,
+            font=("Segoe UI", 9, "bold"),
+            bg=self.bg_dark,
+            fg=self.text_primary,
+            insertbackground="#38bdf8",
+            width=5,
+            justify="right",
+            relief=tk.FLAT
         )
-        fov_eq_chk.pack(side=tk.RIGHT, padx=(0, 4))
-        ToolTip(fov_eq_chk, "Toggle 35mm equivalent focal length display next to FOV (e.g. 90.0° → 18.0mm, 114.0° → 11.7mm).")
+        fov_entry.pack(side=tk.RIGHT, padx=(0, 2), ipady=2)
+        ToolTip(fov_entry, "Type horizontal FOV in degrees (e.g. 90.0, 114.0) and press Enter. Arrow Up/Down or scroll to adjust.")
 
         fov_scale = tk.Scale(
             fov_row,
@@ -2713,15 +2781,38 @@ class AbuAlignApp:
             bg=self.panel_bg,
             troughcolor=self.bg_dark,
             highlightthickness=0,
-            activebackground="#a855f7"
+            activebackground="#38bdf8"
         )
-        fov_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        fov_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 10))
+        _setup_num_entry(fov_entry, fov_entry_var, fov_var, 15.0, 160.0, is_int=False, step=0.5)
 
         # Row 3: Target Overlap %
         ol_row = tk.Frame(sliders_frame, bg=self.panel_bg)
-        ol_row.pack(fill=tk.X, pady=1)
-        ol_lbl = tk.Label(ol_row, text="Adjacent Overlap (%):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
+        ol_row.pack(fill=tk.X, pady=2)
+        ol_lbl = tk.Label(ol_row, text="Overlap", font=("Segoe UI", 9), fg=self.text_primary, bg=self.panel_bg, width=11, anchor="w")
         ol_lbl.pack(side=tk.LEFT)
+
+        ol_right_box = tk.Frame(ol_row, bg=self.panel_bg)
+        ol_right_box.pack(side=tk.RIGHT)
+
+        ol_val_lbl = tk.Label(ol_right_box, text="%", font=("Segoe UI", 9, "bold"), fg="#10b981", bg=self.panel_bg, width=2, anchor="w")
+        ol_val_lbl.pack(side=tk.RIGHT, padx=(2, 0))
+
+        ol_entry_var = tk.StringVar(value=f"{overlap_var.get():.1f}")
+        ol_entry = tk.Entry(
+            ol_right_box,
+            textvariable=ol_entry_var,
+            font=("Segoe UI", 9, "bold"),
+            bg=self.bg_dark,
+            fg=self.text_primary,
+            insertbackground="#10b981",
+            width=5,
+            justify="right",
+            relief=tk.FLAT
+        )
+        ol_entry.pack(side=tk.RIGHT, padx=(0, 2), ipady=2)
+        ToolTip(ol_entry, "Type adjacent overlap % (0-85%) and press Enter. Arrow Up/Down or scroll to adjust.")
+
         ol_scale = tk.Scale(
             ol_row,
             from_=0.0,
@@ -2735,19 +2826,36 @@ class AbuAlignApp:
             highlightthickness=0,
             activebackground="#10b981"
         )
-        ol_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        ol_val_lbl = tk.Label(ol_row, text="50.0%", font=("Segoe UI", 8, "bold"), fg="#10b981", bg=self.panel_bg, width=8, anchor="e")
-        ol_val_lbl.pack(side=tk.RIGHT)
+        ol_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 10))
+        _setup_num_entry(ol_entry, ol_entry_var, overlap_var, 0.0, 85.0, is_int=False, step=1.0)
 
         # Dome extra tier options frame
         dome_frame = tk.Frame(rig_card, bg=self.panel_bg)
         dome_row1 = tk.Frame(dome_frame, bg=self.panel_bg)
         dome_row1.pack(fill=tk.X, pady=1)
         tk.Label(dome_row1, text="Pitch Tier (°):", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        tk.Entry(dome_row1, textvariable=dome_pitch_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT).pack(side=tk.LEFT, padx=(0, 8))
+        dome_pitch_entry = tk.Entry(dome_row1, textvariable=dome_pitch_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
+        dome_pitch_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ToolTip(dome_pitch_entry, "Elevation pitch angle for upper tier (+15° to +75°). Arrow Up/Down or scroll to adjust.")
 
         tk.Label(dome_row1, text="Cams/Tier:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 4))
-        tk.Entry(dome_row1, textvariable=dome_tier_cams_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=4, relief=tk.FLAT).pack(side=tk.LEFT, padx=(0, 12))
+        dome_tier_entry = tk.Entry(dome_row1, textvariable=dome_tier_cams_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=4, relief=tk.FLAT)
+        dome_tier_entry.pack(side=tk.LEFT, padx=(0, 12))
+        ToolTip(dome_tier_entry, "Number of cameras in the elevated pitch tier (1-16). Arrow Up/Down or scroll to adjust.")
+
+        def _bind_dome_entry(entry, var, step, min_v, max_v):
+            def step_val(d):
+                try: cur = int(entry.get())
+                except ValueError: cur = var.get()
+                var.set(max(min_v, min(max_v, cur + d * step)))
+                sync_math_and_ui()
+            entry.bind("<Up>", lambda e: [step_val(1), "break"][1])
+            entry.bind("<Down>", lambda e: [step_val(-1), "break"][1])
+            entry.bind("<MouseWheel>", lambda e: [step_val(1 if e.delta > 0 else -1), "break"][1])
+            entry.bind("<Return>", lambda e: sync_math_and_ui())
+            entry.bind("<FocusOut>", lambda e: sync_math_and_ui())
+        _bind_dome_entry(dome_pitch_entry, dome_pitch_var, 5, 5, 85)
+        _bind_dome_entry(dome_tier_entry, dome_tier_cams_var, 1, 1, 16)
 
         tk.Checkbutton(dome_row1, text="Zenith (+90°)", variable=dome_zenith_var, font=("Segoe UI", 8), fg="#c084fc", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg).pack(side=tk.LEFT, padx=(0, 6))
         tk.Checkbutton(dome_row1, text="Nadir (-90°)", variable=dome_nadir_var, font=("Segoe UI", 8), fg="#c084fc", bg=self.panel_bg, selectcolor=self.bg_dark, activebackground=self.panel_bg).pack(side=tk.LEFT)
@@ -2796,7 +2904,30 @@ class AbuAlignApp:
         # Distortion & Optics Row
         o2 = tk.Frame(optics_card, bg=self.panel_bg)
         o2.pack(fill=tk.X, pady=2)
-        tk.Label(o2, text="Distortion (k1):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w").pack(side=tk.LEFT)
+        dist_lbl = tk.Label(o2, text="Distortion (k1):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=12, anchor="w")
+        dist_lbl.pack(side=tk.LEFT)
+
+        dist_right_box = tk.Frame(o2, bg=self.panel_bg)
+        dist_right_box.pack(side=tk.RIGHT)
+
+        dist_val_lbl = tk.Label(dist_right_box, text="(Pinhole)", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg=self.panel_bg, width=11, anchor="w")
+        dist_val_lbl.pack(side=tk.RIGHT, padx=(2, 0))
+
+        dist_entry_var = tk.StringVar(value=f"{distortion_k1_var.get():+.2f}")
+        dist_entry = tk.Entry(
+            dist_right_box,
+            textvariable=dist_entry_var,
+            font=("Segoe UI", 8, "bold"),
+            bg=self.bg_dark,
+            fg=self.text_primary,
+            insertbackground="#38bdf8",
+            width=5,
+            justify="right",
+            relief=tk.FLAT
+        )
+        dist_entry.pack(side=tk.RIGHT, padx=(0, 2), ipady=2)
+        ToolTip(dist_entry, "Type lens distortion coefficient k1 (-0.20 to +0.20) and press Enter.")
+
         dist_scale = tk.Scale(
             o2,
             from_=-0.20,
@@ -2810,9 +2941,20 @@ class AbuAlignApp:
             highlightthickness=0,
             activebackground="#38bdf8"
         )
-        dist_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        dist_val_lbl = tk.Label(o2, text="0.00 (Pinhole)", font=("Segoe UI", 8), fg="#38bdf8", bg=self.panel_bg, width=11, anchor="e")
-        dist_val_lbl.pack(side=tk.RIGHT)
+        dist_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 10))
+        _setup_num_entry(dist_entry, dist_entry_var, distortion_k1_var, -0.20, 0.20, is_int=False, step=0.01)
+
+        def _bind_dim_entry(entry, var, step=64):
+            def step_val(d):
+                try: cur = int(entry.get())
+                except ValueError: cur = var.get()
+                var.set(max(64, cur + d * step))
+                sync_math_and_ui()
+            entry.bind("<Up>", lambda e: [step_val(1), "break"][1])
+            entry.bind("<Down>", lambda e: [step_val(-1), "break"][1])
+            entry.bind("<MouseWheel>", lambda e: [step_val(1 if e.delta > 0 else -1), "break"][1])
+        _bind_dim_entry(w_entry, out_w_var)
+        _bind_dim_entry(h_entry, out_h_var)
 
         # Video Frame Extraction Row
         video_card_frame = tk.Frame(optics_card, bg=self.panel_bg)
@@ -2826,6 +2968,16 @@ class AbuAlignApp:
         fps_stride_val_lbl.pack(side=tk.LEFT, padx=(0, 2))
         fps_entry = tk.Entry(video_card_frame, textvariable=video_fps_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
         fps_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=1)
+
+        def _bind_fps_entry(entry, var):
+            def step_val(d):
+                try: cur = float(entry.get())
+                except ValueError: cur = var.get()
+                var.set(max(0.1, round(cur + d * 0.5, 1)))
+            entry.bind("<Up>", lambda e: [step_val(1), "break"][1])
+            entry.bind("<Down>", lambda e: [step_val(-1), "break"][1])
+            entry.bind("<MouseWheel>", lambda e: [step_val(1 if e.delta > 0 else -1), "break"][1])
+        _bind_fps_entry(fps_entry, video_fps_var)
 
         tk.Label(video_card_frame, text="Max Frames:", font=("Segoe UI", 8), fg=self.text_secondary, bg=self.panel_bg).pack(side=tk.LEFT, padx=(0, 2))
         max_f_entry = tk.Entry(video_card_frame, textvariable=video_max_frames_var, font=("Segoe UI", 8), bg=self.bg_dark, fg=self.text_primary, insertbackground=self.text_primary, width=5, relief=tk.FLAT)
@@ -3347,24 +3499,32 @@ class AbuAlignApp:
                 # Visibility of mode-specific widgets
                 if m == "dome":
                     dome_frame.pack(fill=tk.X, pady=(4, 2))
-                    cams_lbl.config(text="Equator Cams (N):")
+                    cams_lbl.config(text="Equator cams:")
                     cams_scale.config(state=tk.NORMAL)
+                    cams_entry.config(state="normal")
+                    cams_val_lbl.config(text="cams")
                 elif m == "cubemap":
                     dome_frame.pack_forget()
-                    cams_lbl.config(text="Cube Faces (Fixed):")
+                    cams_lbl.config(text="Cameras:")
                     cams_scale.config(state=tk.DISABLED)
+                    cams_entry.config(state="disabled")
                     num_cams_var.set(6)
+                    cams_val_lbl.config(text="faces (cube)")
                     if last_rig_mode[0] != "cubemap":
                         fov_var.set(114.0)
                         fov_v = 114.0
                 elif m == "fibonacci":
                     dome_frame.pack_forget()
-                    cams_lbl.config(text="Sphere Cams (N):")
+                    cams_lbl.config(text="Sphere cams:")
                     cams_scale.config(state=tk.NORMAL)
+                    cams_entry.config(state="normal")
+                    cams_val_lbl.config(text="cams")
                 else:  # ring
                     dome_frame.pack_forget()
-                    cams_lbl.config(text="Camera Count (N):")
+                    cams_lbl.config(text="Cameras:")
                     cams_scale.config(state=tk.NORMAL)
+                    cams_entry.config(state="normal")
+                    cams_val_lbl.config(text="cams")
 
                 last_rig_mode[0] = m
 
@@ -3398,20 +3558,40 @@ class AbuAlignApp:
                         overlap_var.set(round(act_ol, 1))
                         ol_v = act_ol
 
-                # Value labels
-                cams_val_lbl.config(text=f"{num_cams_var.get()} cams")
-                fov_val_lbl.config(text=_format_fov_display(fov_var.get()))
-                ol_val_lbl.config(text=f"{overlap_var.get():.1f}%")
+                # Value labels and numeric entry synchronization
+                focused_w = None
+                try:
+                    focused_w = dialog.focus_get()
+                except Exception:
+                    pass
+
+                if focused_w != cams_entry:
+                    cams_entry_var.set(str(num_cams_var.get()))
+                if focused_w != fov_entry:
+                    fov_entry_var.set(f"{fov_var.get():.1f}")
+                if focused_w != ol_entry:
+                    ol_entry_var.set(f"{overlap_var.get():.1f}")
+                if focused_w != dist_entry:
+                    dist_entry_var.set(f"{distortion_k1_var.get():+.2f}")
+
+                # Update 35mm equivalent badge
+                if show_35mm_eq_var.get():
+                    eq_s = _calc_35mm_str(fov_var.get())
+                    fov_val_lbl.config(text=f"({eq_s})" if eq_s else "")
+                else:
+                    fov_val_lbl.config(text="")
+
+                ol_val_lbl.config(text="%")
 
                 k1_val = distortion_k1_var.get()
                 if abs(k1_val) < 1e-4:
-                    dist_val_lbl.config(text="0.00 (Pinhole)", fg="#38bdf8")
+                    dist_val_lbl.config(text="(Pinhole)", fg="#38bdf8")
                     if hasattr(renderer, "optics_text"):
                         renderer.optics_text = "ideal pinhole optics"
                 else:
-                    dist_val_lbl.config(text=f"{k1_val:+.2f}", fg="#f59e0b")
+                    dist_type = "barrel" if k1_val < 0 else "pincushion"
+                    dist_val_lbl.config(text=f"({dist_type})", fg="#f59e0b")
                     if hasattr(renderer, "optics_text"):
-                        dist_type = "barrel" if k1_val < 0 else "pincushion"
                         renderer.optics_text = f"radial {dist_type} distortion (k1={k1_val:+.2f})"
 
                 # Aspect ratio & resolution
@@ -4742,7 +4922,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.4.7 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.4.8 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5301,7 +5481,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.4.7 - {title}")
+        doc_win.title(f"Abu Align v0.1.4.8 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5928,7 +6108,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.4.7\n"
+            "Abu Align & Train - Version 0.1.4.8\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

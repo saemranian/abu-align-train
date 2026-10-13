@@ -51,7 +51,7 @@ def enhance_rig_designer(app, ctx):
     ctx["bottom_bar"].pack(side="bottom", fill="x", padx=16, pady=(0, 12))
     body.pack(fill="both", expand=True, padx=8, pady=(4, 10))
     left.pack_propagate(False)
-    left.configure(width=560, bg=BG)
+    left.configure(width=620, bg=BG)
     left.pack_configure(expand=False, padx=(0, 14))
     right.configure(bg=BG)
     right.pack_configure(expand=True, padx=0)
@@ -117,17 +117,27 @@ def enhance_rig_designer(app, ctx):
         if row_name not in ctx:
             continue
         row = ctx[row_name]
-        row.pack_configure(pady=9)
+        row.pack_configure(pady=6)
         for widget in row.winfo_children():
             if isinstance(widget, tk.Scale):
-                widget.configure(bd=0, sliderrelief="flat", sliderlength=24, width=7,
+                widget.configure(bd=0, sliderrelief="flat", sliderlength=20, width=8,
                                  bg=ACCENT, activebackground="#9ce8d3", troughcolor=FIELD)
             elif isinstance(widget, tk.Checkbutton):
                 widget.configure(bg=BG, fg=MUTED, selectcolor=FIELD, activebackground=BG,
                                  activeforeground=ACCENT, bd=0, highlightthickness=0)
-            elif isinstance(widget, tk.Label) and widget == ctx.get("fov_val_lbl"):
-                widget.configure(width=16, anchor="e", fg=ACCENT)
-    for name, title in [("cams_lbl", "Cameras"), ("fov_lbl", "Field of view"), ("ol_lbl", "Overlap")]:
+            elif isinstance(widget, tk.Frame):
+                widget.configure(bg=row.cget("bg"))
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Entry):
+                        child.configure(bg=FIELD, fg=TEXT, insertbackground=ACCENT, selectbackground=BORDER, relief="flat", bd=0)
+                    elif isinstance(child, tk.Label):
+                        if child == ctx.get("fov_val_lbl"):
+                            child.configure(bg=FIELD, fg=ACCENT, padx=6, pady=2)
+                        elif child == ctx.get("dist_val_lbl"):
+                            child.configure(fg=ACCENT)
+                        else:
+                            child.configure(fg=MUTED)
+    for name, title in [("cams_lbl", "Cameras"), ("fov_lbl", "Field of view"), ("ol_lbl", "Overlap"), ("dist_lbl", "Distortion")]:
         if name in ctx:
             ctx[name].configure(text=title, width=11, fg=MUTED)
 
