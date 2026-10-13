@@ -1,3 +1,33 @@
+# Abu Align & Train v0.1.4.7: Persistent image grid, A/B reconstruction comparison and illustrated control-point Help
+
+Root cause: opening an image raised the large editor above the thumbnail grid, making the grid appear closed. The grid is now an owned utility window that stays above the editor, with destination, selection, geometry, filter and scroll preserved on double-click.
+
+3D workspace: added a collapsible comparison sidebar beside the native GPU navigator. A is the current editable alignment; B is a read-only JSON/PLY/completed-run reconstruction. Shared main-workspace parsers and name matching support COLMAP packages and native spherical models. A/B/overlay modes hold the viewpoint; layer/RGB/sampled distance colouring, a zero-to-P95 legend, matching-camera offset lines, aggregate and selected-camera differences and JSON reports aid inspection. Optional rigid/similarity fitting transforms the preview only, requires non-collinear uniquely matched cameras, and explicitly falls back to raw B on ambiguity. Multi-component OpenSfM inputs are rejected. Sources, controls and training packages are unchanged.
+
+Responsiveness: parsing B is isolated in a child process and numeric comparison runs on a background worker. Generation checks reject stale results; clear/close cancels queued work, terminates this tool's loader and cleans temporary files. Control-only updates reuse unchanged geometry. The side layout preserves the entire available 3D body height, with scrolling settings and reachable load/switch/fit/report actions.
+
+Help: added a searchable illustrated guide with seven task topics, locally drawn diagrams/icons, responsive cards and direct actions opening tools/settings. Full reference remains available. Updated user guide and spherical-control documentation; design references and precise limitations are in docs/CONTROL_COMPARISON_HELP_VERIFICATION.md.
+
+Verification: 60 regression tests passed in 53.760 seconds in the local vggt Python environment. Tests cover grid stacking/state, independent known transforms, immutability, ambiguous fitting, JSON/PLY/transforms/COLMAP formats, disconnected components, bounded archive transport, actual child loading, overlay/switching, camera selection, report saving/clearing and illustrated Help search/actions. Reproduction code and modules are in docs/CONTROL_COMPARISON_HELP_VERIFICATION.md. Locally generated Help illustrations were visually reviewed. Automated Tk tests exercise the native interface; no full desktop screenshot is claimed.
+
+Local read-only runtime check: two existing 593-camera models sampled to 50000 points each loaded in about 6.8 seconds combined; fitted comparison including directed sampled distances took about 0.17 seconds. All 593 camera names matched and reported values were finite. This is one runtime check, not a guaranteed latency or survey-accuracy benchmark. No panorama pixels were decoded/uploaded for it. UI tests use synthetic data; private sources and outputs remain outside Git.
+
+Memory/VRAM hygiene: retained/displayed clouds capped at 50000 points per model. One float64 XYZ plus uint8 RGB pair uses 1350000 bytes (about 1.29 MiB), excluding cameras, previews, search structures and renderer arrays. Isolated parser peak can exceed the retained sample while reading full files. Peak host RAM and additional viewer VRAM were not instrumented. Existing WGL/OpenGL GPU rendering is retained; this release adds no GPU solver/training tensors. The small Help diagram cache is released on destruction. No upstream repository or installed package edits.
+
+Co-development: completed v0.1.4.6 GUI/rig-designer/splitter edits and their commits from the other agent are preserved. That agent's commit also captured the initial control-point code; this dedicated release completes documentation, loader verification, parity and backup. No ownership or benchmark claim is made for its separate splitter changes.
+
+Primary control-point files: control_images_grid.py, control_points_comparison.py (new), control_points_native_3d.py, control_points_help.py (new), control_points_workspace.py, tests/test_control_comparison_help.py (new), docs/360_CONTROL_POINTS_USER_GUIDE.md, docs/SPHERICAL_CONTROLS.md and docs/CONTROL_COMPARISON_HELP_VERIFICATION.md (new). Mandatory release synchronizes GUI/CLI/training version headers, C# launchers, walkthroughs, all active root/mirror files and complete v0.1.4.7 snapshots.
+
+---
+
+# Abu Align & Train v0.1.4.6: GPU-accelerated 360 virtual rig projection and 35mm equivalent focal length telemetry
+
+Architecture: Added batched PyTorch FP16 CUDA tensor sampling with circular boundary padding (`F.grid_sample(..., align_corners=True)`) and asynchronous multi-threaded disk I/O (`AsyncImageWriter` with 8 background workers) to the 360 Splitter virtual camera projection engine. Benchmark on NVIDIA RTX 4090 achieved 9.6 ms per 6-face cubemap projection (~626.9 perspective views / sec). Added multi-threaded CPU fallback.
+
+UI & Telemetry: Added standard 35mm equivalent focal length computation ($f_{35\text{mm}} = 18.0 / \tan(\theta / 2)$) displayed dynamically next to the horizontal FOV slider (`90.0° (18.0mm)` / `114.0° (11.7mm)`). Added inline `35mm eq` toggle checkbox, clickable FOV value label with hover cursor, 3D Orbit visualizer `35mm Eq` display checkbutton, and real-time focal length telemetry in the camera inspector (`FOV 90° (18.0mm)`). Added GPU CUDA acceleration toggle and real-time FPS / backend indicator in the progress bar.
+
+---
+
 # Abu Align & Train v0.1.4.5: Accelerated responsive 360 refinement, predicted image browsing and embedded GPU 3D
 
 Root cause: the supplied 593-camera report used Python-loop residuals and sparse finite differences in the GUI process, taking 476.98 seconds and exhausting its budget. The blank Viser browser was reproduced: installed 0.2.23 crashes with React error 300 when the hide-share setting changes hook count. No upstream repositories or installed packages were edited.

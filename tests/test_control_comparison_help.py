@@ -48,6 +48,25 @@ class ComparisonMathTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'single reconstruction component'):load_scene(source)
             source.write_text('{"schema_version":1,"points":[]}')
             with self.assertRaisesRegex(ValueError,'no camera reconstruction'):load_scene(source)
+    def test_other_formats_preserve_camera_frame_and_reject_disconnected_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            p=Path(folder);cloud=p/'points.ply'
+            cloud.write_text('ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n1 2 3 10 20 30\n2 3 4 40 50 60\n')
+            ply_scene=load_scene(cloud);self.assertEqual(ply_scene['centers'],{});self.assertEqual(len(ply_scene['points']),2)
+            matrix=np.diag([1.,-1.,-1.,1.]);matrix[:3,3]=[1,2,3]
+            transforms=p/'transforms.json';transforms.write_text(json.dumps({'frames':[{'file_path':'./a.jpg','transform_matrix':matrix.tolist()}]}))
+            tf_scene=load_scene(transforms);np.testing.assert_array_equal(tf_scene['camera_rotations']['a.jpg'],np.eye(3))
+            np.testing.assert_array_equal(tf_scene['centers']['a.jpg'],[1,2,3]);self.assertEqual(len(tf_scene['points']),2)
+            run=p/'run';(run/'COLMAP_Lichtfield').mkdir(parents=True)
+            (run/'COLMAP_Lichtfield'/'images.txt').write_text('1 1 0 0 0 -1 -2 -3 1 a.jpg\n\n')
+            colmap_scene=load_scene(run);np.testing.assert_array_equal(colmap_scene['centers']['a.jpg'],[1,2,3])
+            np.testing.assert_array_equal(colmap_scene['camera_rotations']['a.jpg'],np.eye(3))
+            osfm=p/'opensfm_only';osfm.mkdir();component={'shots':{'a.jpg':{'rotation':[0,0,0],'translation':[-1,-2,-3]}},'cameras':{},'points':{}}
+            reconstruction=osfm/'reconstruction.json';reconstruction.write_text(json.dumps([component,component]))
+            with self.assertRaisesRegex(ValueError,'single reconstruction component'):load_scene(osfm)
+            reconstruction.write_text(json.dumps([component]));self.assertEqual(load_scene(osfm)['source'],str(osfm))
+            result=compare_scenes(self.scene(),colmap_scene,distances=True)
+            self.assertIn('distance_error',result['report']);self.assertIsNone(result['heat_colors'])
 
 
 class InterfaceTests(unittest.TestCase):

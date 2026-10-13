@@ -11,6 +11,7 @@ class ImageGrid:
         self.cache = OrderedDict(); self.photos = {}; self.tiles = {}; self.results = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=1,thread_name_prefix='Abu thumbnails'); self.futures=[]
         self.window=tk.Toplevel(editor.window);self.window.title('Panorama image browser');self.window.geometry('1050x760');self.window.minsize(650,500);self.window.configure(bg='#1a2024')
+        self.window.transient(editor.window)
         top=tk.Frame(self.window,bg='#1a2024',padx=12,pady=10);top.pack(fill='x')
         self.search=tk.StringVar(master=self.window);self.filter=tk.StringVar(master=self.window,value='All images');self.target=tk.StringVar(master=self.window,value='Left' if editor.focused==0 else 'Right')
         editor.label(top,'Find image').pack(side='left');entry=editor.entry(top,self.search,20);entry.pack(side='left',padx=8)
@@ -109,7 +110,7 @@ class ImageGrid:
     def select(self,name):
         self.selected=name
         for n,(frame,label) in self.tiles.items():frame.configure(highlightbackground='#70dbc0' if n==name else '#344149')
-    def select_and_open(self,name):self.select(name);self.open_selected()
+    def select_and_open(self,name):self.select(name);return self.open_selected()
     def open_selected(self):
         if self.selected not in self.names:
             if not self.names:return
@@ -117,7 +118,13 @@ class ImageGrid:
         index=0 if self.target.get()=='Left' else 1
         self.editor.choose_image(self.selected,index)
         if self.selected in self.predictions:self.editor.panes[index]['focus_after_load']=(self.selected,self.predictions[self.selected])
-        self.editor.window.lift()
+        # Raising the large editor covered the grid and looked like a close.
+        # Keep this owned window open and preserve its position/filter/scroll.
+        self.editor.tabs.select(self.editor.workspace)
+        self.window.lift(self.editor.window)
+        self.info.set(f"Opened in {self.target.get().lower()}: {self.selected} · grid stays open")
+        self.editor.audit.event('grid_image_open',image=self.selected,pane=index)
+        return 'break'
     def keyboard(self,step,event=None):
         if event and isinstance(event.widget,(tk.Entry,ttk.Combobox)):return
         if not self.names:return

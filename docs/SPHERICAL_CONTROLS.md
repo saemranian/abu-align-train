@@ -72,3 +72,13 @@ Use `--dvo_allow_fallback` only for an explicitly experimental CPU run.
 Disabled manual points and distance constraints attached to them are excluded from optimization. Controls retain their disabled state on disk. Use Apply properties to commit property edits; Save as keeps separate control-file variants. The workspace includes measured angular residuals and unconfirmed projection guidance. Predictions never become observations automatically.
 
 Each successful refinement exports a binary sparse PLY and a native-frame camera CSV beside its JSON. Existing saved refinements can be exported from Results. Properties > Predicted images provides geometric candidate locations, not visibility guarantees. See [performance and verification](CONTROL_ACCELERATION_VERIFICATION.md).
+
+Double-clicking an image keeps the grid open above the editor and preserves its
+scroll/filter/selection state. In embedded **3D view**, choose **Compare
+reconstructions** to load a read-only B JSON, sparse PLY or completed run folder
+beside the editable A alignment. Switch A/B from one viewpoint, inspect camera
+offsets or sampled cloud distances, optionally fit B's preview by matching cameras,
+and save a comparison report. Frame fitting never modifies the source files or
+controls. Agreement is not independent accuracy. The Help tab now includes a
+searchable illustrated guide and the detailed reference. See
+[comparison design and verification](CONTROL_COMPARISON_HELP_VERIFICATION.md).

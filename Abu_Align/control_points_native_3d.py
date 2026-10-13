@@ -16,7 +16,7 @@ class PixelFormat(ct.Structure):
 class NativeControlNavigator(tk.Frame):
     def __init__(self,editor,parent):
         super().__init__(parent,bg='#111518');self.editor=editor;self.closed=False;self.context=None;self.job=None;self.data=None
-        self.selected='';self.camera_selected='';self.center=np.zeros(3);self.yaw=-25.;self.pitch=20.;self.distance=3.;self.pan=np.zeros(2);self.drag=None
+        self.selected='';self.camera_selected='';self.selected_camera_layer='A';self.comparison=None;self.center=np.zeros(3);self.yaw=-25.;self.pitch=20.;self.distance=3.;self.pan=np.zeros(2);self.drag=None
         bar=tk.Frame(self,bg='#1a2024',padx=8,pady=6);bar.pack(fill='x')
         self.cloud=tk.BooleanVar(self,True);self.cameras=tk.BooleanVar(self,True);self.controls=tk.BooleanVar(self,True);self.rays=tk.BooleanVar(self,True)
         for title,var in [('Cloud',self.cloud),('Cameras',self.cameras),('Controls',self.controls),('Sight lines',self.rays)]:
@@ -25,19 +25,27 @@ class NativeControlNavigator(tk.Frame):
         selection=tk.Frame(self,bg='#1a2024',padx=8,pady=4);selection.pack(fill='x')
         self.point_var=tk.StringVar(self);self.camera_var=tk.StringVar(self)
         editor.label(selection,'Point').pack(side='left');self.point_choice=ttk.Combobox(selection,textvariable=self.point_var,state='readonly',style='CP.TCombobox',width=20);self.point_choice.pack(side='left',padx=8)
-        self.point_choice.bind('<<ComboboxSelected>>',lambda e:editor.select(self.point_var.get()))
+        self.point_choice.bind('<<ComboboxSelected>>',lambda e:self.select_control(self.point_var.get()))
         editor.label(selection,'Camera').pack(side='left');self.camera_choice=ttk.Combobox(selection,textvariable=self.camera_var,state='readonly',style='CP.TCombobox',width=32);self.camera_choice.pack(side='left',padx=8)
-        self.camera_choice.bind('<<ComboboxSelected>>',lambda e:self.select_camera(self.camera_var.get()))
+        self.camera_choice.bind('<<ComboboxSelected>>',lambda e:self.camera_option_selected())
         editor.button(selection,'2D workspace',lambda:editor.tabs.select(editor.workspace)).pack(side='right')
         editor.style_dropdowns(selection)
         self.info=tk.StringVar(self,'Preparing hardware 3D renderer…');editor.label(self,variable=self.info,muted=True,padx=10).pack(side='bottom',fill='x')
         editor.label(self,'Drag: orbit · Right/middle drag: pan · Wheel: zoom · Click: select point/camera · F: fit',muted=True,padx=10,pady=5).pack(side='bottom',fill='x')
-        self.surface=tk.Frame(self,bg='#111518',takefocus=True);self.surface.pack(fill='both',expand=True)
+        self.scene_body=tk.Frame(self,bg='#111518');self.scene_body.pack(fill='both',expand=True)
+        self.surface=tk.Frame(self.scene_body,bg='#111518',takefocus=True);self.surface.pack(side='left',fill='both',expand=True)
+        from control_points_comparison import ComparisonPanel
+        self.compare=ComparisonPanel(self,self.scene_body)
+        self.editor.button(selection,'Compare reconstructions',self.toggle_comparison,'Load a read-only B reconstruction, then inspect A/B or overlay from one viewpoint.').pack(side='right',padx=5)
         self.surface.bind('<Map>',self.initialize);self.surface.bind('<Configure>',lambda e:self.request());self.surface.bind('<Expose>',lambda e:self.request())
         self.surface.bind('<ButtonPress-1>',lambda e:self.press(e,'orbit'));self.surface.bind('<B1-Motion>',self.move);self.surface.bind('<ButtonRelease-1>',self.release)
         for button in [2,3]:
             self.surface.bind(f'<ButtonPress-{button}>',lambda e:self.press(e,'pan'));self.surface.bind(f'<B{button}-Motion>',self.move);self.surface.bind(f'<ButtonRelease-{button}>',self.release)
         self.surface.bind('<MouseWheel>',self.wheel);self.surface.bind('<f>',lambda e:self.fit());self.surface.bind('<Key-1>',lambda e:self.preset(0,0));self.surface.bind('<Key-7>',lambda e:self.preset(0,89))
+        self.surface.bind('<b>',lambda e:self.compare.switch())
+    def toggle_comparison(self):
+        if self.compare.frame.winfo_manager():self.compare.frame.pack_forget()
+        else:self.compare.show()
     def initialize(self,event=None):
         if self.context or self.closed:return
         try:
@@ -61,28 +69,77 @@ class NativeControlNavigator(tk.Frame):
         except Exception as error:
             self.editor.audit.error('native_3d_error',error);self.info.set('3D renderer unavailable: '+str(error)+' · use Browser view')
     def set_data(self,data):
-        changed=self.data is None or self.data.get('source')!=data.get('source');self.data=data
+        changed=self.data is None or self.data.get('source')!=data.get('source')
+        if changed:self.comparison=None
+        self.data=data
         center=data['center'];scale=max(data['extent'],1e-8);self.origin=center;self.scale=scale
         self.points=np.ascontiguousarray((data['points']-center)/scale,dtype=np.float32);self.colors=np.ascontiguousarray(data['colors'],dtype=np.uint8)
         self.camera_names=list(data['centers']);self.camera_xyz=np.ascontiguousarray([(data['centers'][n]-center)/scale for n in self.camera_names],dtype=np.float32).reshape(-1,3)
         self.point_names=list(data['controls']);self.control_xyz=np.ascontiguousarray([(data['controls'][n]['position']-center)/scale for n in self.point_names],dtype=np.float32).reshape(-1,3)
         palette={'tie':(112,219,192),'gcp':(120,180,255),'check':(255,125,125)}
         self.control_colors=np.ascontiguousarray([palette[data['controls'][n]['kind']] if data['controls'][n]['enabled'] else (130,140,145) for n in self.point_names],dtype=np.uint8).reshape(-1,3)
-        self.point_choice.configure(values=self.point_names);self.camera_choice.configure(values=self.camera_names)
+        self.point_choice.configure(values=self.point_names);self.update_camera_choices()
         if self.point_var.get() not in self.point_names:self.point_var.set('')
-        if self.camera_var.get() not in self.camera_names:self.camera_var.set('');self.camera_selected=''
+        if self.selected_camera_layer=='A' and self.camera_selected not in self.camera_names:self.camera_var.set('');self.camera_selected=''
         self.camera_axes=np.asarray([[self.camera_xyz[i],self.camera_xyz[i]+data['camera_rotations'][name][:,axis]*.018] for i,name in enumerate(self.camera_names) for axis in range(3) if name in data.get('camera_rotations',{})],dtype=np.float32).reshape(-1,3)
         self.axis_colors=np.tile(np.repeat(np.array([[220,95,95],[100,210,130],[110,155,240]],dtype=np.uint8),2,axis=0),(len(self.camera_axes)//6,1))
         self.info.set(f"{len(self.points):,} cloud points · {len(self.camera_names)} cameras · {len(self.point_names)} triangulated controls · "+getattr(self,'renderer','starting renderer'))
         if changed:self.fit()
+        self.compare.set_reference(data)
         self.request()
-    def set_selected(self,name):self.selected=name;self.point_var.set(name if name in self.point_names else '');self.request()
-    def select_camera(self,name):
-        self.camera_selected=name;self.camera_var.set(name);self.editor.choose_image(name);self.editor.audit.event('native_3d_camera_select',image=name);self.request()
-    def fit(self):self.center=np.zeros(3);self.pan[:]=0;self.distance=2.6;self.request()
+    def update_camera_choices(self):
+        names=getattr(self,'camera_names',[])
+        self.camera_options={('A · '+n if self.comparison else n):('A',n) for n in names}
+        if self.comparison:self.camera_options.update({'B · '+n:('B',n) for n in self.comparison['b']['centers']})
+        self.camera_choice.configure(values=list(self.camera_options))
+    def camera_option_selected(self):
+        layer,name=self.camera_options[self.camera_var.get()];self.select_camera(name,layer)
+    def set_comparison(self,result):
+        self.comparison=result
+        if result and self.data:
+            b=result['b'];self.b_names=list(b['centers'])
+            self.b_points=np.ascontiguousarray((b['points']-self.origin)/self.scale,dtype=np.float32)
+            self.b_cameras=np.ascontiguousarray([(b['centers'][n]-self.origin)/self.scale for n in self.b_names],dtype=np.float32).reshape(-1,3)
+            self.b_axes=np.asarray([[self.b_cameras[i],self.b_cameras[i]+b['camera_rotations'][name][:,axis]*.018] for i,name in enumerate(self.b_names) for axis in range(3)],dtype=np.float32).reshape(-1,3)
+            self.offset_segments=np.ascontiguousarray((result['segments'].reshape(-1,3)-self.origin)/self.scale,dtype=np.float32)
+        elif self.selected_camera_layer=='B':self.selected_camera_layer='A';self.camera_selected='';self.camera_var.set('')
+        self.update_camera_choices();self.request()
+    def visible_layers(self):
+        if not self.comparison:return True,False
+        mode=self.compare.mode.get();return mode!='B only',mode!='A only'
+    def select_control(self,name):
+        self.selection_kind='point'
+        if self.comparison and self.compare.mode.get()=='B only':self.compare.mode.set('Overlay');self.compare.apply()
+        self.editor.select(name)
+    def set_selected(self,name):
+        if name!=self.selected:self.selection_kind='point'
+        self.selected=name;self.point_var.set(name if name in self.point_names else '');self.request()
+    def select_camera(self,name,layer='A'):
+        self.selection_kind='camera';self.selected_camera_layer=layer;self.camera_selected=name;self.camera_var.set(layer+' · '+name if self.comparison else name)
+        image=name if layer=='A' else next((r['a_image'] for r in self.comparison['report']['camera_differences'] if r['b_image']==name),None)
+        if image:self.editor.choose_image(image)
+        else:self.editor.status.set('B camera selected for inspection. No matching A image is available in the editable workspace.')
+        self.compare.describe_camera(name,layer)
+        self.editor.audit.event('native_3d_camera_select',image=name,layer=layer);self.request()
+    def fit(self):
+        self.pan[:]=0;self.center=np.zeros(3);self.distance=2.6
+        if self.data:
+            a,b=self.visible_layers();bounds=[]
+            for active,points,cameras in [(a,self.points,self.camera_xyz),(b,getattr(self,'b_points',np.empty((0,3))),getattr(self,'b_cameras',np.empty((0,3))))]:
+                if not active:continue
+                if self.cloud.get() and len(points):bounds.append(np.quantile(points,[.01,.99],axis=0))
+                if self.cameras.get() and len(cameras):bounds.append(cameras)
+            if a and self.controls.get() and len(self.control_xyz):bounds.append(self.control_xyz)
+            if bounds:
+                coords=np.concatenate(bounds);self.center=(coords.min(0)+coords.max(0))/2
+                span=max(float(np.linalg.norm(coords.max(0)-coords.min(0))),.02);aspect=max(.1,self.surface.winfo_width()/max(1,self.surface.winfo_height()))
+                self.distance=span*1.5/max(.3,min(1.,aspect))
+        self.request()
     def focus_selected(self):
-        if self.data and self.selected in self.data['controls']:self.center=(self.data['controls'][self.selected]['position']-self.origin)/self.scale;self.pan[:]=0;self.request()
-        elif self.data and self.camera_selected in self.data['centers']:self.center=(self.data['centers'][self.camera_selected]-self.origin)/self.scale;self.pan[:]=0;self.request()
+        if self.data and getattr(self,'selection_kind','point')=='point' and self.selected in self.data['controls']:self.center=(self.data['controls'][self.selected]['position']-self.origin)/self.scale;self.pan[:]=0;self.request()
+        elif self.data:
+            scene=self.comparison['b'] if self.selected_camera_layer=='B' and self.comparison else self.data
+            if self.camera_selected in scene['centers']:self.center=(scene['centers'][self.camera_selected]-self.origin)/self.scale;self.pan[:]=0;self.request()
     def preset(self,yaw,pitch):self.yaw=yaw;self.pitch=pitch;self.request()
     def press(self,e,mode):self.surface.focus_set();self.drag=(e.x,e.y,mode,e.x,e.y)
     def move(self,e):
@@ -110,15 +167,16 @@ class NativeControlNavigator(tk.Frame):
     def pick(self,x,y):
         if self.data is None:return
         hits=[]
-        for kind,names,points,enabled in [('point',self.point_names,self.control_xyz,self.controls.get()),('camera',self.camera_names,self.camera_xyz,self.cameras.get())]:
+        a,b=self.visible_layers()
+        for kind,names,points,enabled in [('point',self.point_names,self.control_xyz,self.controls.get() and a),('camera',self.camera_names,self.camera_xyz,self.cameras.get() and a),('b_camera',getattr(self,'b_names',[]),getattr(self,'b_cameras',np.empty((0,3))),self.cameras.get() and b)]:
             if not enabled:continue
             screen,valid,depth=self.project(points);dist=np.linalg.norm(screen-[x,y],axis=1)
             for i in np.flatnonzero(valid&(dist<12)):hits.append((dist[i],depth[i],kind,names[i]))
         if not hits:return
         _,_,kind,name=min(hits)
-        if kind=='point':self.editor.select(name)
-        else:self.select_camera(name)
-        self.info.set(kind.capitalize()+': '+name+' · '+getattr(self,'renderer',''));self.request()
+        if kind=='point':self.select_control(name)
+        else:self.select_camera(name,'B' if kind=='b_camera' else 'A')
+        self.info.set(('B camera' if kind=='b_camera' else kind.capitalize())+': '+name+' · '+getattr(self,'renderer',''));self.request()
     def request(self):
         if self.closed or self.job:return
         self.job=self.after(16,self.draw)
@@ -135,20 +193,30 @@ class NativeControlNavigator(tk.Frame):
         g=self.gl;g.wglMakeCurrent(self.dc,self.context);view,projection,w,h=self.matrices();g.glViewport(0,0,w,h);g.glClear(0x4000|0x0100)
         for kind,matrix in [(0x1701,projection),(0x1700,view)]:g.glMatrixMode(kind);g.glLoadMatrixd(np.ascontiguousarray(matrix.T).ctypes.data_as(ct.POINTER(ct.c_double)))
         if self.data:
-            if self.cloud.get():self.draw_arrays(self.points,self.colors,size=2.)
-            if self.cameras.get():self.draw_arrays(self.camera_xyz,size=7.);self.draw_arrays(self.camera_axes,self.axis_colors,mode=1)
-            if self.controls.get():self.draw_arrays(self.control_xyz,self.control_colors,size=12.)
-            if self.selected in self.data['controls']:
+            a,b=self.visible_layers();color=self.compare.color.get() if self.comparison else 'Original RGB'
+            if a:
+                if self.cloud.get():self.draw_arrays(self.points,self.colors if color=='Original RGB' else None,size=2.,color=(.44,.86,.75))
+                if self.cameras.get():self.draw_arrays(self.camera_xyz,size=7.,color=(.44,.86,.75));self.draw_arrays(self.camera_axes,self.axis_colors,mode=1)
+                if self.controls.get():self.draw_arrays(self.control_xyz,self.control_colors,size=12.)
+            if b:
+                if self.cloud.get():
+                    colors=self.comparison['b']['colors'] if color=='Original RGB' else self.comparison['heat_colors'] if color=='B distance to A' else None
+                    self.draw_arrays(self.b_points,colors,size=2.,color=(1.,.61,.5))
+                if self.cameras.get():self.draw_arrays(self.b_cameras,size=7.,color=(1.,.61,.5));self.draw_arrays(self.b_axes,mode=1,color=(1.,.61,.5))
+            if a and b and self.compare.offsets.get():self.draw_arrays(self.offset_segments,mode=1,color=(1.,.8,.45))
+            if a and self.selected in self.data['controls']:
                 point=self.data['controls'][self.selected];position=(point['position']-self.origin)/self.scale
                 self.draw_arrays(np.array([position]),size=18.,color=(1.,.8,.4))
                 if self.rays.get():
                     segments=np.asarray([[position,(self.data['centers'][n]-self.origin)/self.scale] for n in point['shots'] if n in self.data['centers']],dtype=np.float32).reshape(-1,3)
                     self.draw_arrays(segments,mode=1,color=(1.,.8,.4))
-            if self.camera_selected in self.data['centers']:self.draw_arrays(np.array([(self.data['centers'][self.camera_selected]-self.origin)/self.scale]),size=12.,color=(.47,.71,1.))
+            scene=self.comparison['b'] if self.selected_camera_layer=='B' and self.comparison else self.data
+            if (a if self.selected_camera_layer=='A' else b) and self.camera_selected in scene['centers']:self.draw_arrays(np.array([(scene['centers'][self.camera_selected]-self.origin)/self.scale]),size=12.,color=(.47,.71,1.))
         self.gdi.SwapBuffers(self.dc)
     def close(self):
         if self.closed:return
         self.closed=True
+        self.compare.close()
         if self.job:self.after_cancel(self.job)
         if self.context:self.gl.wglMakeCurrent(None,None);self.gl.wglDeleteContext(self.context);self.context=None
         if hasattr(self,'dc'):self.user.ReleaseDC(self.hwnd,self.dc)

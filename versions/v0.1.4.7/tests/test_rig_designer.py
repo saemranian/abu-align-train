@@ -1,0 +1,200 @@
+"""Rig preview geometry, selection, and responsive desktop regressions."""
+import math
+import unittest
+from unittest.mock import patch
+import tkinter as tk
+import test_gui_presets
+from rig_viewport import basis, camera_corners
+
+
+class GeometryTests(unittest.TestCase):
+    def test_camera_basis_is_orthonormal_with_roll_and_poles(self):
+        for yaw in [0, 45, 180, 359]:
+            for pitch in [-90, -35, 0, 60, 90]:
+                axes = basis(yaw, pitch, 37)
+                for a in range(3):
+                    for b in range(3):
+                        dot = sum(x*y for x,y in zip(axes[a], axes[b]))
+                        self.assertAlmostEqual(dot, 1 if a == b else 0)
+
+    def test_frustum_preserves_fov_and_aspect(self):
+        corners = camera_corners(("camera", 0, 0, 0, 90), 2)
+        self.assertAlmostEqual(corners[0][0], -1)
+        self.assertAlmostEqual(corners[0][1], .5)
+        self.assertAlmostEqual(corners[0][2], 1)
+        self.assertAlmostEqual(math.degrees(math.atan2(abs(corners[0][0]), corners[0][2])) * 2, 90)
+
+
+class RigDesignerTests(unittest.TestCase):
+    close_root = test_gui_presets.PresetTests.close_root
+
+    def setUp(self):
+        test_gui_presets.PresetTests.setUp(self)
+        self.errors_seen = []
+        self.root.report_callback_exception = lambda *e: self.errors_seen.append(e)
+        self.root.deiconify()
+        self.app._open_panoramic_splitter_dialog()
+        self.ui = self.app.rig_designer
+        self.root.update()
+
+    def test_tabs_and_controls_visible_at_minimum_size(self):
+        self.ui.dialog.geometry("1120x760+40+40")
+        # Hit-testing measures the desktop z-order as well as Tk geometry.
+        self.ui.dialog.attributes("-topmost", True)
+        self.ui.dialog.lift()
+        for index, page in enumerate(self.ui.pages):
+            self.ui.tabs.select(index)
+            self.root.update()
+            cards = [w for w in page.body.pack_slaves() if isinstance(w, tk.LabelFrame)]
+            self.assertEqual(len(cards), 1)
+            self.assertTrue(cards[0].winfo_ismapped())
+            self.assertGreater(cards[0].winfo_height(), 50)
+            # Focus reveal may scroll the top of the card out of view. Hit-test
+            # the visible intersection, not a coordinate clipped by the canvas.
+            x = max(cards[0].winfo_rootx(), page.canvas.winfo_rootx()) + 5
+            y = max(cards[0].winfo_rooty(), page.canvas.winfo_rooty()) + 5
+            self.assertLess(y, min(cards[0].winfo_rooty()+cards[0].winfo_height(),
+                                   page.canvas.winfo_rooty()+page.canvas.winfo_height()))
+            hit = self.root.winfo_containing(x, y)
+            self.assertTrue(str(hit).startswith(str(cards[0])), (index, hit))
+        self.assertGreater(self.ui.canvas.winfo_width(), 400)
+        self.assertGreater(self.ui.canvas.winfo_height(), 250)
+        self.assertEqual(self.errors_seen, [])
+
+    def test_modes_views_selection_and_invalid_edit(self):
+        for mode in ["ring", "cubemap", "dome", "fibonacci"]:
+            self.ui.mode.set(mode)
+            self.root.update()
+            for view in ["3d", "polar", "equirect"]:
+                self.ui.view.set(view)
+                self.root.update()
+                self.assertGreater(len(self.ui.canvas.find_all()), 0)
+        self.ui.view.set("3d")
+        self.ui.redraw()
+        index, x, y, _ = self.ui.renderer.positions[-1]
+        self.assertTrue(self.ui.renderer.pick(x, y))
+        self.assertEqual(self.ui.renderer.selected, index)
+        self.ui.width.set("")
+        self.root.update()
+        self.ui.width.set(1024)
+        self.ui.redraw()
+        self.assertEqual(self.errors_seen, [])
+
+    def test_selected_camera_clamps_after_rig_change(self):
+        self.ui.mode.set("fibonacci")
+        self.ui.cameras.set(32)
+        self.ui.renderer.selected = 31
+        self.ui.redraw()
+        self.ui.mode.set("cubemap")
+        self.root.update()
+        self.assertLess(self.ui.renderer.selected, len(self.ui.get_rig()))
+        self.assertEqual(self.errors_seen, [])
+
+    def test_focus_and_camera_navigation_preserve_configuration(self):
+        original = self.ui.get_rig()
+        self.ui.view.set("3d")
+        self.ui.renderer.selected = 0
+        self.ui.select_camera(-1)
+        self.assertEqual(self.ui.renderer.selected, len(original)-1)
+        self.assertIn(f"{len(original):02d} / {len(original):02d}", self.ui.camera_text.cget("text"))
+        width = self.ui.canvas.winfo_width()
+        self.ui.focus_view()
+        self.root.update()
+        self.assertTrue(self.ui.focused.get())
+        self.assertGreater(self.ui.canvas.winfo_width(), width)
+        self.ui.focus_view(True)
+        self.root.update()
+        self.assertFalse(self.ui.focused.get())
+        self.assertTrue(self.ui.tabs.winfo_ismapped())
+        self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
+    def test_inspector_tracks_view_mode(self):
+        self.ui.view.set("polar")
+        self.root.update()
+        self.assertFalse(self.ui.inspector.winfo_ismapped())
+        self.ui.view.set("3d")
+        self.root.update()
+        self.assertTrue(self.ui.inspector.winfo_ismapped())
+        self.assertFalse(self.ui.display_open.get())
+        self.ui.toggle_display()
+        self.root.update()
+        self.assertTrue(self.ui.display_open.get())
+        self.assertEqual(self.errors_seen, [])
+
+    def test_controls_guide_preserves_rig(self):
+        original = self.ui.get_rig()
+        self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        height = self.ui.canvas.winfo_height()
+        self.ui.toggle_guide()
+        self.root.update()
+        self.assertTrue(self.ui.controls_guide.winfo_ismapped())
+        self.assertGreater(self.ui.canvas.winfo_height(), 100)
+        self.assertEqual(self.ui.canvas.winfo_height(), height)
+        self.ui.toggle_guide()
+        self.root.update()
+        self.assertFalse(self.ui.controls_guide.winfo_ismapped())
+        self.assertEqual(self.ui.get_rig(), original)
+        self.assertEqual(self.errors_seen, [])
+
+    def test_toolbar_labels_reflow_without_window_resize(self):
+        self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        self.ui.toggle_display()
+        self.ui.toggle_guide()
+        self.root.update()
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+        controls = [w for w in walk(self.ui.dialog) if isinstance(w, tk.Button)
+                    and w.cget("text") in ("Hide display", "Hide controls", "Focus view", "Fit", "Top", "Front")]
+        self.assertEqual(len(controls), 6)
+        for control in controls:
+            self.assertGreaterEqual(control.winfo_width(), control.winfo_reqwidth())
+            self.assertLessEqual(control.winfo_x()+control.winfo_width(), control.master.winfo_width())
+            for other in controls:
+                if other is control:
+                    continue
+                self.assertTrue(control.winfo_x()+control.winfo_width() <= other.winfo_x()
+                                or other.winfo_x()+other.winfo_width() <= control.winfo_x()
+                                or control.winfo_y()+control.winfo_height() <= other.winfo_y()
+                                or other.winfo_y()+other.winfo_height() <= control.winfo_y())
+        self.assertEqual(self.errors_seen, [])
+
+    def test_source_browse_actions_keep_their_width(self):
+        self.ui.dialog.geometry("1120x760")
+        self.ui.tabs.select(0)
+        self.root.update()
+        card = next(w for w in self.ui.pages[0].body.winfo_children() if isinstance(w, tk.LabelFrame))
+        buttons = [w for row in card.winfo_children() for w in row.winfo_children()
+                   if isinstance(w, tk.Button)]
+        self.assertGreaterEqual(len(buttons), 3)
+        for control in buttons:
+            self.assertTrue(control.winfo_ismapped())
+            self.assertGreaterEqual(control.winfo_width(), control.winfo_reqwidth())
+            self.assertLessEqual(control.winfo_x()+control.winfo_width(), control.master.winfo_width())
+
+    def test_direct_camera_selection_and_rig_shrink(self):
+        self.ui.mode.set("fibonacci")
+        self.ui.cameras.set(32)
+        self.root.update()
+        original = self.ui.get_rig()
+        self.ui.camera_picker.set("32")
+        self.ui.camera_picker.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        self.assertEqual(self.ui.renderer.selected, 31)
+        self.assertEqual(self.ui.get_rig(), original)
+        self.ui.mode.set("cubemap")
+        self.root.update()
+        self.assertEqual(len(self.ui.camera_picker.cget("values")), len(self.ui.get_rig()))
+        self.assertEqual(int(self.ui.camera_picker.get()), self.ui.renderer.selected+1)
+        self.ui.dialog.geometry("1120x760")
+        self.root.update()
+        self.assertGreater(self.ui.camera_picker.winfo_width(), 30)
+        self.assertEqual(self.errors_seen, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

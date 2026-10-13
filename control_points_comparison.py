@@ -1,6 +1,5 @@
 """Read-only bounded reconstruction comparison for the control-point navigator."""
 import argparse
-import copy
 import json
 import queue
 import subprocess
