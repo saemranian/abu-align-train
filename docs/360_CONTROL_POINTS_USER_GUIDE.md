@@ -1,6 +1,6 @@
 # 360 Control Points - user guide
 
-Open **Prepare input > 360 manual control points**.
+Open **Prepare input > 360 manual control points**. Help & shortcuts now offers a searchable Illustrated guide and a Full reference tab. Illustrated task cards include navigation diagrams and buttons to open the relevant tool.
 
 360° CONTROL POINTS — WORKFLOW
 
@@ -14,7 +14,7 @@ Add point (Ctrl+N) creates a named tie point immediately. In Place points mode, 
 3. NAVIGATE PRECISELY
 Wheel: zoom around the cursor. Middle-drag or Space + left-drag: pan. Fit / F: entire panorama. 1:1 / 1: original pixel size. Drag an existing marker to adjust it. Left/Right browse images in the active pane; Alt+Left/Right also browse. Ctrl+Arrow nudges 0.1 px; Shift+Arrow nudges 10 px. Disable arrow browsing in Settings for plain-arrow 1 px nudging. Text fields retain normal typing keys. Right-click a marker removes its measurement. Ctrl+Z / Ctrl+Y undo and redo.
 
-Image grid shows all images on one continuous scrolling page; thumbnails load as you scroll with a bounded cache. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. Measured markers are yellow; predicted guidance is blue. A Predicted filter shows unmeasured candidate images.
+Image grid shows all images on one continuous scrolling page; thumbnails load as you scroll with a bounded cache. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. The grid stays open above the editor, retaining its filter, selection and scroll position. Measured markers are yellow; predicted guidance is blue. A Predicted filter shows unmeasured candidate images.
 
 Wrap panorama seam allows close-up panning across the left/right boundary. Latitude stays bounded. Pixel display uses nearest-pixel rendering for precise inspection. Marker coordinates always refer to original image pixels regardless of display zoom. Both image panes navigate independently; linked zoom synchronizes pixel scale only.
 
@@ -45,7 +45,8 @@ Every successful refinement writes <name>.points.ply, <name>.cameras.csv and <na
 
 9. INSPECT RESULTS AND 3D
 Results reports angular RMS before/after, solver convergence, independent check errors and output paths. Reaching the evaluation limit is not convergence. Reduced fitted residual is not proof of absolute accuracy. Open result inspects the new alignment with the same controls; it does not automatically replace or export the application's training package.
-3D view opens the embedded hardware 3D navigator. Drag to orbit, right/middle drag to pan, wheel to zoom, F to fit. Use Front/Top, Focus selected, visibility switches, camera orientation axes and sight lines. Click or choose a point/camera in the lists to select it. The 2D workspace button returns to the images; the selected camera is loaded there. Browser view opens the optional local WebGL viewer. Public sharing is disabled. Raw survey XYZ is not guessed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. This inspects the open alignment, not a live preview of an unfinished solve.
+3D view opens the embedded hardware 3D navigator. Drag to orbit, right/middle drag to pan, wheel to zoom, F to fit. Use Front/Top, Focus selected, visibility switches, camera orientation axes and sight lines. Click or choose a point/camera in the lists to select it. The 2D workspace button returns to the images; the selected camera is loaded there. Compare reconstructions opens a collapsible side panel. A is the editable alignment; Load B or Run folder loads a read-only comparison in a separate process. Show A only, B only or Overlay; Switch A/B preserves the viewpoint. Camera offsets and per-camera differences show agreement. Fit B to A optionally fits matching non-collinear cameras; Allow scale selects similarity versus rigid fitting. Source files and controls remain unchanged. B distance to A colours directed distances to sampled A points; density affects the result. These metrics are not independent accuracy. Save comparison report preserves the chosen frame transform and differences.
+Browser view opens the optional local WebGL viewer for A. Public sharing is disabled. Raw survey XYZ is not guessed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. This inspects the open alignment, not a live preview of an unfinished solve.
 
 PREDICTIONS ARE GUIDANCE, NOT MEASUREMENTS
 A dashed blue marker predicts the selected point using at least two consistent measurements and the current alignment. It is never saved automatically. Find the actual feature and click it yourself. Predictions are suppressed when triangulation is unreliable or residuals are high. Avoid repeated patterns, reflections, moving objects, sky and stitching artefacts.

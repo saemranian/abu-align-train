@@ -49,6 +49,16 @@ try:
 except ImportError:
     HAS_CV2 = False
 
+try:
+    import torch
+    import torch.nn.functional as F
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 
 # ======================================================================
 # Mathematical Relations & Optics Formulas
@@ -978,14 +988,45 @@ def generate_realityscan_xmp(
 
 
 # ======================================================================
-# Panoramic Rig Splitter Class
+# Asynchronous Disk I/O & Accelerated Projector Classes
 # ======================================================================
+
+class AsyncImageWriter:
+    """
+    High-throughput asynchronous image writer using a bounded thread pool.
+    Overlaps JPEG/PNG encoding and disk writing with GPU projection,
+    preventing disk I/O bottlenecks from stalling the pipeline.
+    """
+    def __init__(self, max_workers: int = 8, max_queue_size: int = 64):
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.semaphore = threading.Semaphore(max_queue_size)
+        self.lock = threading.Lock()
+        self.error = None
+
+    def submit(self, filepath: str, img: np.ndarray, encode_params: list):
+        self.semaphore.acquire()
+        def _task():
+            try:
+                cv2.imwrite(filepath, img, encode_params)
+            except Exception as e:
+                with self.lock:
+                    self.error = e
+            finally:
+                self.semaphore.release()
+        self.executor.submit(_task)
+
+    def wait_completion(self):
+        self.executor.shutdown(wait=True)
+        if self.error:
+            raise self.error
+
 
 class PanoramicRigSplitter:
     """
-    Vectorized high-performance equirectangular rig projector.
-    Precomputes coordinate grids and cv2.remap tables for arbitrary virtual camera arrays.
+    High-performance GPU-accelerated and CPU multi-threaded equirectangular rig projector.
+    Precomputes coordinate grids and PyTorch GPU sampling tensors / cv2.remap tables.
     Supports arbitrary aspect ratios (W x H) and radial distortion compensation (k1, k2).
+    Automatically leverages NVIDIA GPU via PyTorch FP16 grid_sample with CPU fallback.
     """
 
     def __init__(
@@ -999,6 +1040,7 @@ class PanoramicRigSplitter:
         k1: float = 0.0,
         k2: float = 0.0,
         interpolation: int = 1,  # cv2.INTER_LINEAR = 1
+        use_gpu: bool = True,
     ):
         self.pano_w = pano_width
         self.pano_h = pano_height
@@ -1009,14 +1051,19 @@ class PanoramicRigSplitter:
         self.k2 = float(k2)
         self.interpolation = interpolation
 
+        self.use_gpu = bool(use_gpu and HAS_TORCH and torch.cuda.is_available())
+        self.device = torch.device("cuda" if self.use_gpu else "cpu")
+        self.gpu_dtype = torch.float16 if self.use_gpu else torch.float32
+
         self.maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self.rotations: Dict[str, np.ndarray] = {}
         self.intrinsics: Dict[str, Dict[str, Any]] = {}
+        self.gpu_grids = None
 
         self._build_remap_tables()
 
     def _build_remap_tables(self):
-        """Precomputes coordinate grids for each camera in the rig."""
+        """Precomputes coordinate grids for each camera in the rig (CPU and GPU)."""
         w = self.out_w
         h = self.out_h
 
@@ -1027,14 +1074,8 @@ class PanoramicRigSplitter:
             R = euler_to_rotation_matrix(yaw_deg, pitch_deg, roll_deg)
             self.rotations[cam_name] = R
 
-            # Focal lengths:
-            # fx = (w / 2) / tan(fov_h / 2)
-            # fy = (h / 2) / tan(fov_v / 2)
             fov_h_rad = math.radians(fov_deg)
             fx = (float(w) / 2.0) / math.tan(fov_h_rad / 2.0)
-
-            # In rectilinear pinhole: fy = fx (square pixels)
-            # fy matches fx when sensor pixels are square
             fy = fx
             fov_v_deg = calculate_vertical_fov(fov_deg, w, h)
 
@@ -1060,45 +1101,116 @@ class PanoramicRigSplitter:
             py_grid = np.arange(h, dtype=np.float32)
             px_m, py_m = np.meshgrid(px_grid, py_grid)
 
-            # Normalized camera sensor plane coordinates:
-            # u = (px - cx) / fx, v = -(py - cy) / fy (inverted Y for 3D camera coordinate convention)
             u = (px_m - cx) / fx
             v = -(py_m - cy) / fy
 
-            # Apply radial lens distortion if specified (Brown-Conrady model)
             if abs(self.k1) > 1e-6 or abs(self.k2) > 1e-6:
                 r2 = u * u + v * v
                 radial = 1.0 + self.k1 * r2 + self.k2 * (r2 * r2)
                 u = u * radial
                 v = v * radial
 
-            # Ray directions in local camera frame: [u, v, 1.0]
-            rays_cam = np.stack([u, v, np.ones_like(u)], axis=-1)  # (h, w, 3)
-
-            # Rotate rays into equirectangular global coordinate frame: ray_global = rays_cam @ R^T
+            rays_cam = np.stack([u, v, np.ones_like(u)], axis=-1)
             rays_global = rays_cam @ R.T
 
             x = rays_global[..., 0]
             y = rays_global[..., 1]
             z = rays_global[..., 2]
 
-            # Longitude lambda in [-pi, pi], Latitude phi in [-pi/2, pi/2]
             lon = np.arctan2(x, z)
             hypot = np.sqrt(x * x + z * z)
             lat = np.arctan2(y, hypot)
 
-            # Map to equirectangular pixel coordinates
             map_x = ((lon / (2.0 * np.pi) + 0.5) * self.pano_w).astype(np.float32)
             map_y = ((0.5 - lat / np.pi) * self.pano_h).astype(np.float32)
 
-            # Seamless boundary wrapping for continuous 360° horizontal stitching
             map_x = np.mod(map_x, self.pano_w)
             map_y = np.clip(map_y, 0, self.pano_h - 1)
 
             self.maps[cam_name] = (map_x, map_y)
 
+        # Build batched GPU sampling grids if GPU acceleration is enabled
+        if self.use_gpu:
+            try:
+                padded_w = float(self.pano_w + 2.0)
+                grids = []
+                for cam_name, _, _, _, _ in self.rig_cameras:
+                    mx, my = self.maps[cam_name]
+                    # Map continuous pixel coords into normalized [-1.0, 1.0] for PyTorch grid_sample
+                    # In circularly padded image (W+2), pixel 0 is at index 1, so padded_x = mx + 1.0
+                    gx = 2.0 * ((mx + 1.0) / (padded_w - 1.0)) - 1.0
+                    gy = 2.0 * (my / max(1.0, float(self.pano_h - 1.0))) - 1.0
+                    grids.append(np.stack([gx, gy], axis=-1).astype(np.float32))
+
+                stacked_grids = np.stack(grids, axis=0)  # (N_cams, out_h, out_w, 2)
+                self.gpu_grids = torch.from_numpy(stacked_grids).to(
+                    device=self.device, dtype=self.gpu_dtype
+                )
+            except Exception as e:
+                print(f"[PanoramicRigSplitter] GPU grid precomputation failed, falling back to CPU: {e}")
+                self.use_gpu = False
+                self.gpu_grids = None
+
+    def _split_panorama_gpu(self, pano: np.ndarray) -> Dict[str, np.ndarray]:
+        """Ultra-fast batched GPU projection using PyTorch FP16 grid_sample."""
+        num_cams = len(self.rig_cameras)
+        if pano.ndim == 3:
+            # 3-channel color image (H, W, 3)
+            t_pano = torch.from_numpy(pano).permute(2, 0, 1).unsqueeze(0).to(
+                device=self.device, dtype=self.gpu_dtype, non_blocking=True
+            )
+            # Circular pad horizontally by 1 pixel on left and right for seamless 360 wrap
+            t_padded = F.pad(t_pano, (1, 1, 0, 0), mode='circular')
+            out = F.grid_sample(
+                t_padded.expand(num_cams, -1, -1, -1),
+                self.gpu_grids,
+                mode='bilinear',
+                padding_mode='border',
+                align_corners=True
+            )
+            out_np = out.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).contiguous().cpu().numpy()
+            return {
+                self.rig_cameras[i][0]: out_np[i]
+                for i in range(num_cams)
+            }
+        else:
+            # 1-channel / 2D mask (H, W)
+            t_mask = torch.from_numpy(pano).unsqueeze(0).unsqueeze(0).to(
+                device=self.device, dtype=self.gpu_dtype, non_blocking=True
+            )
+            t_padded = F.pad(t_mask, (1, 1, 0, 0), mode='circular')
+            out = F.grid_sample(
+                t_padded.expand(num_cams, -1, -1, -1),
+                self.gpu_grids,
+                mode='bilinear',
+                padding_mode='border',
+                align_corners=True
+            )
+            out_np = out.squeeze(1).clamp(0, 255).to(torch.uint8).contiguous().cpu().numpy()
+            return {
+                self.rig_cameras[i][0]: out_np[i]
+                for i in range(num_cams)
+            }
+
+    def _split_panorama_cpu(self, pano: np.ndarray) -> Dict[str, np.ndarray]:
+        """Multi-threaded CPU fallback projection using OpenCV remap across camera views."""
+        def _remap_cam(item):
+            cam_name, (map_x, map_y) = item
+            crop = cv2.remap(
+                pano,
+                map_x,
+                map_y,
+                interpolation=self.interpolation,
+                borderMode=cv2.BORDER_WRAP
+            )
+            return cam_name, crop
+
+        max_workers = min(len(self.rig_cameras), os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return dict(pool.map(_remap_cam, self.maps.items()))
+
     def split_panorama(self, pano_bgr: np.ndarray) -> Dict[str, np.ndarray]:
-        """Projects a single equirectangular panorama into all rig views."""
+        """Projects a single equirectangular panorama into all rig views (GPU with CPU fallback)."""
         if not HAS_CV2:
             raise RuntimeError("OpenCV (cv2) is required for panoramic image remapping.")
 
@@ -1108,17 +1220,14 @@ class PanoramicRigSplitter:
             self.pano_h = h
             self._build_remap_tables()
 
-        crops = {}
-        for cam_name, (map_x, map_y) in self.maps.items():
-            crop = cv2.remap(
-                pano_bgr,
-                map_x,
-                map_y,
-                interpolation=self.interpolation,
-                borderMode=cv2.BORDER_WRAP
-            )
-            crops[cam_name] = crop
-        return crops
+        if self.use_gpu and self.gpu_grids is not None:
+            try:
+                return self._split_panorama_gpu(pano_bgr)
+            except Exception as e:
+                print(f"[PanoramicRigSplitter] GPU projection failed ({e}), falling back to CPU multi-threading")
+                self.use_gpu = False
+
+        return self._split_panorama_cpu(pano_bgr)
 
     def get_c2w_matrix(self, cam_name: str) -> np.ndarray:
         """Returns 4x4 camera-to-world matrix for the virtual pinhole camera."""
@@ -1340,6 +1449,7 @@ def split_panorama_dataset(
     mask_dir: Optional[str] = None,
     auto_detect_mask: bool = True,
     masks_only: bool = False,
+    use_gpu: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1348,6 +1458,7 @@ def split_panorama_dataset(
     along with RealityScan / RealityCapture standard cameras.csv tables for every perspective,
     all_cameras.csv manifest, and .xmp XML metadata sidecars for RealityScan Rig Parser.
     Also projects equirectangular mask layers into matching <image>.mask.<ext> files alongside views.
+    Fully accelerated using GPU (PyTorch FP16 grid_sample) and multi-threaded asynchronous disk writing.
     """
     if not HAS_CV2:
         raise RuntimeError("OpenCV (cv2) is required for panoramic rig projection.")
@@ -1356,6 +1467,9 @@ def split_panorama_dataset(
     in_abs = str(Path(input_dir).resolve())
     out_abs = str(Path(output_dir).resolve())
     os.makedirs(out_abs, exist_ok=True)
+
+    # Initialize high-throughput asynchronous writer for non-blocking disk I/O
+    writer = AsyncImageWriter(max_workers=min(8, os.cpu_count() or 4))
 
     out_w = crop_width if crop_width is not None else crop_size
     out_h = crop_height if crop_height is not None else crop_size
@@ -1464,7 +1578,8 @@ def split_panorama_dataset(
             crop_width=out_w,
             crop_height=out_h,
             k1=k1,
-            k2=k2
+            k2=k2,
+            use_gpu=use_gpu,
         )
 
         # Determine stride from target FPS
@@ -1537,7 +1652,7 @@ def split_panorama_dataset(
                         mask_filepath = os.path.join(images_out, mask_filename)
 
                     if not masks_only and cam_name in crops:
-                        cv2.imwrite(out_filepath, crops[cam_name], encode_params)
+                        writer.submit(out_filepath, crops[cam_name], encode_params)
                         total_views_saved += 1
 
                         # RealityScan / RealityCapture standard pose & XMP
@@ -1596,11 +1711,14 @@ def split_panorama_dataset(
 
                     # Mask Export (NO XMP, NO CSV)
                     if cam_name in mask_crops:
-                        cv2.imwrite(mask_filepath, mask_crops[cam_name], encode_params)
+                        writer.submit(mask_filepath, mask_crops[cam_name], encode_params)
                         total_masks_saved += 1
 
                 if progress_callback:
-                    progress_callback(saved_frame_idx, expected_frames, f"{base_name} (t={timestamp_sec:.2f}s)")
+                    elapsed = max(0.001, time.time() - start_time)
+                    fps = saved_frame_idx / elapsed
+                    backend = "[GPU]" if splitter.use_gpu else "[CPU]"
+                    progress_callback(saved_frame_idx, expected_frames, f"{base_name} ({fps:.1f} fps) {backend}")
 
                 if video_max_frames > 0 and saved_frame_idx >= video_max_frames:
                     break
@@ -1655,7 +1773,8 @@ def split_panorama_dataset(
             crop_width=out_w,
             crop_height=out_h,
             k1=k1,
-            k2=k2
+            k2=k2,
+            use_gpu=use_gpu,
         )
 
         for idx, fname in enumerate(files):
@@ -1712,7 +1831,7 @@ def split_panorama_dataset(
                     mask_filepath = os.path.join(images_out, mask_filename)
 
                 if not masks_only and cam_name in crops:
-                    cv2.imwrite(out_filepath, crops[cam_name], encode_params)
+                    writer.submit(out_filepath, crops[cam_name], encode_params)
                     total_views_saved += 1
 
                     # RealityScan / RealityCapture standard pose & XMP
@@ -1771,11 +1890,17 @@ def split_panorama_dataset(
                 # Mask Output: RealityCapture mask layer (<base>_<cam>.mask.<ext>)
                 # CRITICAL: NO .xmp file, NO entry in cameras.csv
                 if cam_name in mask_crops:
-                    cv2.imwrite(mask_filepath, mask_crops[cam_name], encode_params)
+                    writer.submit(mask_filepath, mask_crops[cam_name], encode_params)
                     total_masks_saved += 1
 
             if progress_callback:
-                progress_callback(idx + 1, len(files), fname)
+                elapsed = max(0.001, time.time() - start_time)
+                fps = (idx + 1) / elapsed
+                backend = "[GPU]" if splitter.use_gpu else "[CPU]"
+                progress_callback(idx + 1, len(files), f"{fname} ({fps:.1f} fps) {backend}")
+
+    # Ensure all asynchronous disk writes finish cleanly
+    writer.wait_completion()
 
     # 2. Export transforms.json Manifest
     first_cam = rig[0][0]
@@ -1920,6 +2045,7 @@ def split_masks_for_dataset(
     subfolder_per_perspective: bool = True,
     image_format: str = "jpg",
     quality: int = 95,
+    use_gpu: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1973,6 +2099,7 @@ def split_masks_for_dataset(
         mask_dir=mask_dir,
         auto_detect_mask=True,
         masks_only=True,
+        use_gpu=use_gpu,
         export_transforms_json=False,
         export_realityscan_csv=False,
         export_xmp=False,

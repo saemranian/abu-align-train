@@ -1,4 +1,5 @@
 """Progressive disclosure and viewport controls for the existing rig workflow."""
+import math
 import tkinter as tk
 from tkinter import ttk
 from types import SimpleNamespace
@@ -113,14 +114,22 @@ def enhance_rig_designer(app, ctx):
         description = label(page.body, detail, muted=True, wraplength=460, justify="left")
         description.pack(after=heading, anchor="w", pady=(0, 18))
     for row_name in ("cams_row", "fov_row", "ol_row", "o2"):
+        if row_name not in ctx:
+            continue
         row = ctx[row_name]
         row.pack_configure(pady=9)
         for widget in row.winfo_children():
             if isinstance(widget, tk.Scale):
                 widget.configure(bd=0, sliderrelief="flat", sliderlength=24, width=7,
                                  bg=ACCENT, activebackground="#9ce8d3", troughcolor=FIELD)
+            elif isinstance(widget, tk.Checkbutton):
+                widget.configure(bg=BG, fg=MUTED, selectcolor=FIELD, activebackground=BG,
+                                 activeforeground=ACCENT, bd=0, highlightthickness=0)
+            elif isinstance(widget, tk.Label) and widget == ctx.get("fov_val_lbl"):
+                widget.configure(width=16, anchor="e", fg=ACCENT)
     for name, title in [("cams_lbl", "Cameras"), ("fov_lbl", "Field of view"), ("ol_lbl", "Overlap")]:
-        ctx[name].configure(text=title, width=11, fg=MUTED)
+        if name in ctx:
+            ctx[name].configure(text=title, width=11, fg=MUTED)
 
     # A dedicated view strip stops controls disappearing beyond the viewport edge.
     for child in ctx["viz_hdr"].winfo_children():
@@ -215,6 +224,17 @@ def enhance_rig_designer(app, ctx):
         tk.Checkbutton(toggles, text=title, variable=var, command=toggle,
                        bg=SURFACE, fg=MUTED, selectcolor=BG, activebackground=SURFACE,
                        activeforeground=ACCENT, bd=0, highlightthickness=0).pack(side="left", padx=(0, 14))
+
+    show_35mm_var = ctx.get("show_35mm_eq_var")
+    if show_35mm_var is not None:
+        def toggle_35mm():
+            if "sync_math_and_ui" in ctx:
+                ctx["sync_math_and_ui"]()
+            inspect_camera()
+        tk.Checkbutton(toggles, text="35mm Eq", variable=show_35mm_var, command=toggle_35mm,
+                       bg=SURFACE, fg=MUTED, selectcolor=BG, activebackground=SURFACE,
+                       activeforeground=ACCENT, bd=0, highlightthickness=0).pack(side="left", padx=(0, 14))
+
     ctx["viz_canvas"].configure(bg="#11191e", takefocus=True)
     ctx["viz_canvas"].configure(highlightthickness=1, highlightbackground="#11191e", highlightcolor=BORDER)
     ctx["canvas_card"].configure(bg="#11191e", highlightthickness=0)
@@ -256,7 +276,15 @@ def enhance_rig_designer(app, ctx):
             index = min(renderer.selected, len(rig)-1)
             camera_number.set(choices[index])
             name, yaw, pitch, roll, fov = rig[index]
-            camera_text.configure(text=f"CAMERA {index+1:02d} / {len(rig):02d}\nYaw {yaw:g}° · Pitch {pitch:g}° · FOV {fov:g}°")
+            show_eq = ctx.get("show_35mm_eq_var")
+            eq_text = ""
+            if show_eq is None or show_eq.get():
+                try:
+                    f_eq = 18.0 / math.tan(math.radians(max(1.0, min(170.0, float(fov)))) / 2.0)
+                    eq_text = f" ({f_eq:.1f}mm)"
+                except Exception:
+                    pass
+            camera_text.configure(text=f"CAMERA {index+1:02d} / {len(rig):02d}\nYaw {yaw:g}° · Pitch {pitch:g}° · FOV {fov:g}°{eq_text}")
     ctx["viz_canvas"].bind("<<RigRendered>>", inspect_camera)
     def sync_view(*_):
         is_orbit = ctx["canvas_view_mode_var"].get() == "3d"

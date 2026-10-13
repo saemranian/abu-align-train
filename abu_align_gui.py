@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.4.5
+Abu Align & Train Version 0.1.4.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -217,7 +217,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.4.5 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title("Abu Align & Train - Version 0.1.4.6 (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -2652,6 +2652,56 @@ class AbuAlignApp:
         fov_row.pack(fill=tk.X, pady=1)
         fov_lbl = tk.Label(fov_row, text="Horizontal FOV (°):", font=("Segoe UI", 8), fg=self.text_primary, bg=self.panel_bg, width=14, anchor="w")
         fov_lbl.pack(side=tk.LEFT)
+
+        show_35mm_eq_var = tk.BooleanVar(value=True)
+
+        def _calc_35mm_str(fov_val: float) -> str:
+            try:
+                rad = math.radians(max(1.0, min(170.0, float(fov_val))))
+                f_mm = 18.0 / math.tan(rad / 2.0)
+                return f"{f_mm:.1f}mm"
+            except Exception:
+                return ""
+
+        def _format_fov_display(fov_val: float) -> str:
+            if show_35mm_eq_var.get():
+                eq_s = _calc_35mm_str(fov_val)
+                return f"{fov_val:.1f}° ({eq_s})" if eq_s else f"{fov_val:.1f}°"
+            return f"{fov_val:.1f}°"
+
+        fov_val_lbl = tk.Label(
+            fov_row,
+            text=_format_fov_display(fov_var.get()),
+            font=("Segoe UI", 8, "bold"),
+            fg="#38bdf8",
+            bg=self.panel_bg,
+            width=16,
+            anchor="e",
+            cursor="hand2"
+        )
+        fov_val_lbl.pack(side=tk.RIGHT)
+        ToolTip(fov_val_lbl, "Click to toggle 35mm equivalent focal length display: e.g. 90.0° (18.0mm) vs 90.0°")
+
+        def toggle_35mm_eq(event=None):
+            show_35mm_eq_var.set(not show_35mm_eq_var.get())
+            sync_math_and_ui()
+
+        fov_val_lbl.bind("<Button-1>", toggle_35mm_eq)
+
+        fov_eq_chk = tk.Checkbutton(
+            fov_row,
+            text="35mm eq",
+            variable=show_35mm_eq_var,
+            font=("Segoe UI", 7),
+            fg="#94a3b8",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg,
+            command=lambda: sync_math_and_ui()
+        )
+        fov_eq_chk.pack(side=tk.RIGHT, padx=(0, 4))
+        ToolTip(fov_eq_chk, "Toggle 35mm equivalent focal length display next to FOV (e.g. 90.0° → 18.0mm, 114.0° → 11.7mm).")
+
         fov_scale = tk.Scale(
             fov_row,
             from_=30.0,
@@ -2666,8 +2716,6 @@ class AbuAlignApp:
             activebackground="#a855f7"
         )
         fov_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        fov_val_lbl = tk.Label(fov_row, text="90.0°", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg=self.panel_bg, width=8, anchor="e")
-        fov_val_lbl.pack(side=tk.RIGHT)
 
         # Row 3: Target Overlap %
         ol_row = tk.Frame(sliders_frame, bg=self.panel_bg)
@@ -2854,6 +2902,36 @@ class AbuAlignApp:
         )
         xmp_chk.pack(side=tk.LEFT)
         ToolTip(xmp_chk, "Generates an .xmp XML sidecar for every image compliant with RealityScan 2.2 / Epic Games pano2views (locking synthetic pinhole intrinsics, Brown3 zero-distortion, exact 35mm focal equivalent, and unconstrained extrinsics for automated bundle adjustment alignment).")
+
+        # GPU Hardware Acceleration Row
+        o6 = tk.Frame(optics_card, bg=self.panel_bg)
+        o6.pack(fill=tk.X, pady=(2, 1))
+
+        cuda_avail = False
+        gpu_name = ""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                cuda_avail = True
+                gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            pass
+
+        use_gpu_var = tk.BooleanVar(value=cuda_avail)
+        gpu_txt = f"⚡ GPU CUDA Acceleration ({gpu_name})" if cuda_avail else "⚡ GPU Acceleration (CUDA not detected - CPU multi-threading active)"
+        gpu_chk = tk.Checkbutton(
+            o6,
+            text=gpu_txt,
+            variable=use_gpu_var,
+            font=("Segoe UI", 8, "bold" if cuda_avail else "normal"),
+            fg="#10b981" if cuda_avail else "#94a3b8",
+            bg=self.panel_bg,
+            selectcolor=self.bg_dark,
+            activebackground=self.panel_bg,
+            state="normal" if cuda_avail else "disabled"
+        )
+        gpu_chk.pack(side=tk.LEFT)
+        ToolTip(gpu_chk, "Hardware-accelerates virtual rig projection using batched PyTorch CUDA tensors with circular padding and asynchronous I/O thread pool.")
 
         # -----------------------------------------------------------------
         # RIGHT COLUMN: Interactive Visualizer Canvas & Telemetry Dashboard
@@ -3322,7 +3400,7 @@ class AbuAlignApp:
 
                 # Value labels
                 cams_val_lbl.config(text=f"{num_cams_var.get()} cams")
-                fov_val_lbl.config(text=f"{fov_var.get():.1f}°")
+                fov_val_lbl.config(text=_format_fov_display(fov_var.get()))
                 ol_val_lbl.config(text=f"{overlap_var.get():.1f}%")
 
                 k1_val = distortion_k1_var.get()
@@ -3814,6 +3892,7 @@ class AbuAlignApp:
                         dvo_trajectory_csv=dvo_csv_var.get().strip() or None,
                         mask_dir=mask_dir_var.get().strip() or None,
                         auto_detect_mask=True,
+                        use_gpu=use_gpu_var.get(),
                         progress_callback=on_progress,
                     )
                     tot = res.get("total_views", 0)
@@ -3904,6 +3983,7 @@ class AbuAlignApp:
                         subfolder_per_perspective=subfolder_per_cam_var.get(),
                         image_format=fmt,
                         quality=q,
+                        use_gpu=use_gpu_var.get(),
                         progress_callback=on_progress,
                     )
                     tot = res.get("total_masks", 0)
@@ -4662,7 +4742,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.4.5 - Run Telemetry & Diagnostic Log\n")
+                lf.write("Abu Align & Train v0.1.4.6 - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5221,7 +5301,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.4.5 - {title}")
+        doc_win.title(f"Abu Align v0.1.4.6 - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -5848,7 +5928,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.4.5\n"
+            "Abu Align & Train - Version 0.1.4.6\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

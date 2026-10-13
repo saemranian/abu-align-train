@@ -33,7 +33,7 @@ Add point (Ctrl+N) creates a named tie point immediately. In Place points mode, 
 3. NAVIGATE PRECISELY
 Wheel: zoom around the cursor. Middle-drag or Space + left-drag: pan. Fit / F: entire panorama. 1:1 / 1: original pixel size. Drag an existing marker to adjust it. Left/Right browse images in the active pane; Alt+Left/Right also browse. Ctrl+Arrow nudges 0.1 px; Shift+Arrow nudges 10 px. Disable arrow browsing in Settings for plain-arrow 1 px nudging. Text fields retain normal typing keys. Right-click a marker removes its measurement. Ctrl+Z / Ctrl+Y undo and redo.
 
-Image grid shows all images on one continuous scrolling page; thumbnails load as you scroll with a bounded cache. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. Measured markers are yellow; predicted guidance is blue. A Predicted filter shows unmeasured candidate images.
+Image grid shows all images on one continuous scrolling page; thumbnails load as you scroll with a bounded cache. Search by filename and filter images with or without a measurement of the selected point. Choose the Left or Right destination, then double-click a thumbnail or Open selected. The grid stays open above the editor, retaining its filter, selection and scroll position. Measured markers are yellow; predicted guidance is blue. A Predicted filter shows unmeasured candidate images.
 
 Wrap panorama seam allows close-up panning across the left/right boundary. Latitude stays bounded. Pixel display uses nearest-pixel rendering for precise inspection. Marker coordinates always refer to original image pixels regardless of display zoom. Both image panes navigate independently; linked zoom synchronizes pixel scale only.
 
@@ -64,7 +64,8 @@ Every successful refinement writes <name>.points.ply, <name>.cameras.csv and <na
 
 9. INSPECT RESULTS AND 3D
 Results reports angular RMS before/after, solver convergence, independent check errors and output paths. Reaching the evaluation limit is not convergence. Reduced fitted residual is not proof of absolute accuracy. Open result inspects the new alignment with the same controls; it does not automatically replace or export the application's training package.
-3D view opens the embedded hardware 3D navigator. Drag to orbit, right/middle drag to pan, wheel to zoom, F to fit. Use Front/Top, Focus selected, visibility switches, camera orientation axes and sight lines. Click or choose a point/camera in the lists to select it. The 2D workspace button returns to the images; the selected camera is loaded there. Browser view opens the optional local WebGL viewer. Public sharing is disabled. Raw survey XYZ is not guessed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. This inspects the open alignment, not a live preview of an unfinished solve.
+3D view opens the embedded hardware 3D navigator. Drag to orbit, right/middle drag to pan, wheel to zoom, F to fit. Use Front/Top, Focus selected, visibility switches, camera orientation axes and sight lines. Click or choose a point/camera in the lists to select it. The 2D workspace button returns to the images; the selected camera is loaded there. Compare reconstructions opens a collapsible side panel. A is the editable alignment; Load B or Run folder loads a read-only comparison in a separate process. Show A only, B only or Overlay; Switch A/B preserves the viewpoint. Camera offsets and per-camera differences show agreement. Fit B to A optionally fits matching non-collinear cameras; Allow scale selects similarity versus rigid fitting. Source files and controls remain unchanged. B distance to A colours directed distances to sampled A points; density affects the result. These metrics are not independent accuracy. Save comparison report preserves the chosen frame transform and differences.
+Browser view opens the optional local WebGL viewer for A. Public sharing is disabled. Raw survey XYZ is not guessed into an unregistered frame. The display samples at most 50,000 cloud points; optimization data remains complete. This inspects the open alignment, not a live preview of an unfinished solve.
 
 PREDICTIONS ARE GUIDANCE, NOT MEASUREMENTS
 A dashed blue marker predicts the selected point using at least two consistent measurements and the current alignment. It is never saved automatically. Find the actual feature and click it yourself. Predictions are suppressed when triangulation is unreliable or residuals are high. Avoid repeated patterns, reflections, moving objects, sky and stitching artefacts.
@@ -249,8 +250,9 @@ class ControlPointEditor:
         self.tabs = ttk.Notebook(self.window, style='CP.TNotebook'); self.tabs.pack(fill='both', expand=True, padx=12)
         self.workspace = tk.Frame(self.tabs, bg=BG); self.help_page = tk.Frame(self.tabs, bg=PANEL)
         self.tabs.add(self.workspace, text='Workspace'); self.tabs.add(self.help_page, text='Help & shortcuts')
-        self.help_text = ScrolledText(self.help_page, wrap='word', bg=PANEL, fg=TEXT, font=('Segoe UI', 11), relief='flat', padx=24, pady=18, spacing1=5, spacing3=8)
-        self.help_text.pack(fill='both', expand=True); self.help_text.insert('1.0', HELP); self.help_text.configure(state='disabled')
+        from control_points_help import HelpExplorer
+        self.help_view=HelpExplorer(self,self.help_page,HELP);self.help_view.pack(fill='both',expand=True)
+        self.help_text=self.help_view.reference
         split = tk.PanedWindow(self.workspace, orient='horizontal', bg=BG, sashwidth=7, bd=0); split.pack(fill='both', expand=True)
         left = tk.Frame(split, bg=PANEL, padx=10, pady=10); center = tk.Frame(split, bg=BG); right = tk.Frame(split, bg=PANEL, padx=10, pady=10)
         split.add(left, minsize=210, width=260, stretch='never'); split.add(center, minsize=400, stretch='always'); split.add(right, minsize=250, width=300, stretch='never')
