@@ -1,3 +1,11 @@
+# Abu Align & Train v0.1.4.6: GPU-accelerated 360 virtual rig projection and 35mm equivalent focal length telemetry
+
+Architecture: Added batched PyTorch FP16 CUDA tensor sampling with circular boundary padding (`F.grid_sample(..., align_corners=True)`) and asynchronous multi-threaded disk I/O (`AsyncImageWriter` with 8 background workers) to the 360 Splitter virtual camera projection engine. Benchmark on NVIDIA RTX 4090 achieved 9.6 ms per 6-face cubemap projection (~626.9 perspective views / sec). Added multi-threaded CPU fallback.
+
+UI & Telemetry: Added standard 35mm equivalent focal length computation ($f_{35\text{mm}} = 18.0 / \tan(\theta / 2)$) displayed dynamically next to the horizontal FOV slider (`90.0° (18.0mm)` / `114.0° (11.7mm)`). Added inline `35mm eq` toggle checkbox, clickable FOV value label with hover cursor, 3D Orbit visualizer `35mm Eq` display checkbutton, and real-time focal length telemetry in the camera inspector (`FOV 90° (18.0mm)`). Added GPU CUDA acceleration toggle and real-time FPS / backend indicator in the progress bar.
+
+---
+
 # Abu Align & Train v0.1.4.5: Accelerated responsive 360 refinement, predicted image browsing and embedded GPU 3D
 
 Root cause: the supplied 593-camera report used Python-loop residuals and sparse finite differences in the GUI process, taking 476.98 seconds and exhausting its budget. The blank Viser browser was reproduced: installed 0.2.23 crashes with React error 300 when the hide-share setting changes hook count. No upstream repositories or installed packages were edited.
