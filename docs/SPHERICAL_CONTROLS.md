@@ -71,7 +71,7 @@ Use `--dvo_allow_fallback` only for an explicitly experimental CPU run.
 
 Disabled manual points and distance constraints attached to them are excluded from optimization. Controls retain their disabled state on disk. Use Apply properties to commit property edits; Save as keeps separate control-file variants. The workspace includes measured angular residuals and unconfirmed projection guidance. Predictions never become observations automatically.
 
-Each successful refinement exports a binary sparse PLY and a native-frame camera CSV beside its JSON. Existing saved refinements can be exported from Results. Properties > Predicted images provides geometric candidate locations, not visibility guarantees. See [performance and verification](CONTROL_ACCELERATION_VERIFICATION.md).
+Each successful refinement exports a binary sparse PLY and a native-frame camera CSV beside its JSON. Existing saved refinements can be exported from Results. Properties > Measurement actions > Predicted images provides geometric candidate locations, not visibility guarantees. See [performance and verification](CONTROL_ACCELERATION_VERIFICATION.md).
 
 Double-clicking an image keeps the grid open above the editor and preserves its
 scroll/filter/selection state. In embedded **3D view**, choose **Compare
@@ -82,3 +82,16 @@ and save a comparison report. Frame fitting never modifies the source files or
 controls. Agreement is not independent accuracy. The Help tab now includes a
 searchable illustrated guide and the detailed reference. See
 [comparison design and verification](CONTROL_COMPARISON_HELP_VERIFICATION.md).
+
+The embedded navigator is now the shared **Abu 3D Viewer M54**. Select controls,
+cameras or cloud samples and use Orbit selected/O/double-click to set the pivot.
+M54 tools supplies grid/world-up controls and reversible whole-model transforms;
+export saves a separate full-source copy. Properties has a vertical divider above
+Measurements and a compact Measurement actions menu. See [Abu M54](ABU_M54.md).
+
+
+## Manual control points update
+
+The shared editor also supports calibrated perspective cameras and is now named
+Manual control points. Read [the updated guide](MANUAL_CONTROL_POINTS.md). Existing
+spherical controls and original ERP coordinates retain their native geometry.

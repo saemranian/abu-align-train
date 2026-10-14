@@ -1,7 +1,7 @@
 # Abu Align & Train Suite — Master Architecture & Co-Development Handover Protocol
 
 > **Target Audience**: OpenAI GPT-6 (Astra / Canvas / Work Mode) & Google Antigravity Co-Development Team  
-> **Current Version**: `v0.1.3.5` (Strict Base-10 Odometer Versioning)  
+> **Current Version**: `v0.1.5.5` main-folder release; VERSION.txt is the single runtime authority.
 > **Canonical Project Root**: `C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\abu align`  
 > **Documentation Location**: `C:\Users\USer\.gemini\antigravity\scratch\General Stuff 01\abu align\docs\HANDOVER_TO_GPT6.md`  
 > **Primary Environments**:  
@@ -12,6 +12,21 @@
 ---
 
 ## 1. Executive Summary & Suite Vision
+
+### Shared viewer update — Abu 3D Viewer M54
+
+The shared viewer is named **Abu 3D Viewer M54**, shortened to **Abu M54** while it
+is developed toward future Abu 3D tool combinations. Main Align/Train and manual
+360 controls use `abu_m54_native.M54NativeViewer`; `abu_m54_browser` supplies shared
+browser navigation, picking, grid and transformation controls. The standalone
+`Abu_M54.exe` / `abu_m54_app.py` opens reconstruction JSON, PLY, camera CSV, COLMAP
+models, trajectories and related supported result formats, including Windows Open
+with registration. Scene/file/transform math lives in `abu_m54.py` with float64
+world coordinates and normalized GPU displays. Do not create another viewer fork.
+Read [the M54 architecture and user guide](ABU_M54.md) and
+[its verification record](ABU_M54_VERIFICATION.md) before changing viewer behavior.
+Sources remain immutable; model transformations are preview operations until an
+explicit full-source copy export. No client images/data are uploaded.
 
 **Abu Align & Train** is an end-to-end, production-grade **Neural Photogrammetry, Preprocessing, and 3D Gaussian Splatting (3DGS) Training Suite**. Originally started as an alignment bridge, it has evolved into a comprehensive suite of high-performance tools engineered for:
 
@@ -339,3 +354,36 @@ python -m unittest discover -s tests -p "test_*.py"
 ---
 
 > *This documentation is maintained jointly by the Google Antigravity and OpenAI GPT-6 co-development team. Always update this file when introducing new engines, tools, or major architectural changes.*
+
+
+## Manual control points / M54 live-transform update — v0.1.5.1
+
+The tool is now **Manual control points**, supporting original 360 ERP and
+calibrated perspective images through one interface. Full analysis file loading
+lives in `abu_m54.load_calibrated_alignment`; the projection/pycolmap adapter is
+`manual_camera_geometry`, and accuracy settings/guides are defined in
+`manual_refinement_settings`. Camera/cloud math and viewing still use shared M54.
+Import intrinsics and real tracks; do not invent tracks for dense neural points.
+Intrinsics stay fixed. Valid perspective results also export a COLMAP model.
+Main alignment can apply saved controls/settings after perspective engine inference,
+including VGGT-Omega, without changing upstream files. Sparse/manual-only results
+are not regenerated dense clouds or guaranteed better training initialization.
+
+M54 numeric transforms update live and native values support horizontal dragging
+with fine/coarse modifiers and gesture-level Undo. Browser scene-pointer callbacks
+are attached only during temporary single-click picking: global always-on callbacks
+disable Viser drag navigation. Keep orbit/pan the default and return after picking.
+Preserve disabled legacy controls, but validate active dimensions, projection,
+uncertainties, constraint count and selected track connectivity.
+
+This tested v0.1.5.1 release is committed in the attached managed M54 worktree.
+v0.1.5.0 is reserved for the other agent's active canonical release. Their unfinished
+GUI/splitter/rig changes are excluded. The M54/manual feature files are also in the
+canonical project for use, while its version/mirror/snapshots remain under concurrent
+ownership. Do not overwrite those files or claim the canonical checkout is clean.
+Read `MANUAL_CONTROL_POINTS.md` and `MANUAL_CONTROL_POINTS_VERIFICATION.md`.
+
+
+## Main release reconciliation — v0.1.5.5
+
+The human confirmed the other agent finished. The canonical release now consolidates its current GUI/rig/splitter source plus all prior Manual/M54 features, without overwriting them with the older isolated GUI. Batch launchers/title/badge/About/logs use VERSION.txt. Read MANUAL_UI_RESPONSIVENESS.md: child-target drag fix, bounded side-width allocation, Auto/Fast/Live guide resizing, Reset pane sizes, coalesced real wheel input and immutable source/solver separation. Fast/Auto trades continuous content reflow for a responsive guide with release-time repaint; do not claim60fps or that all Tk repaint cost disappeared. No screenshots or client uploads were used in this update.

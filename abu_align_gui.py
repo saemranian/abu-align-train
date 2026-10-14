@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.4.8
+Abu Align & Train Version 0.1.5.5
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -15,6 +15,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
+from version_manager import get_current_version
 from typing import List, Dict, Any, Optional, Tuple, Callable
 try:
     import psutil
@@ -217,7 +218,7 @@ class SystemHardwareMonitor:
 class AbuAlignApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Abu Align & Train - Version 0.1.4.8 (Neural Photogrammetry & 3DGS Training Suite)")
+        self.root.title(f"Abu Align & Train - Version {get_current_version()} (Neural Photogrammetry & 3DGS Training Suite)")
         width = min(1440, self.root.winfo_screenwidth() - 80)
         height = min(1050, self.root.winfo_screenheight() - 120)
         self.root.geometry(f"{width}x{height}")
@@ -3372,8 +3373,110 @@ class AbuAlignApp:
         coverage_telemetry_lbl.pack(fill=tk.X, pady=1)
 
         # -----------------------------------------------------------------
-        # BOTTOM PROGRESS & ACTIONS BAR
+        # BOTTOM PROGRESS & ACTIONS BAR & LOG MONITOR
         # -----------------------------------------------------------------
+        log_monitor_frame = tk.Frame(dialog, bg="#0b0f14", highlightthickness=1, highlightbackground="#1e293b")
+        log_visible = [False]
+
+        # Top header of Log Monitor
+        log_hdr = tk.Frame(log_monitor_frame, bg="#111827", padx=8, pady=4)
+        log_hdr.pack(fill=tk.X)
+        tk.Label(log_hdr, text="📜 Splitter Log Monitor", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg="#111827").pack(side=tk.LEFT)
+
+        autoscroll_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            log_hdr, text="Auto-scroll", variable=autoscroll_var,
+            font=("Segoe UI", 7), fg=self.text_secondary, bg="#111827",
+            selectcolor="#0b0f14", activebackground="#111827", bd=0, highlightthickness=0
+        ).pack(side=tk.LEFT, padx=(10, 4))
+
+        def clear_splitter_log():
+            log_text.config(state=tk.NORMAL)
+            log_text.delete("1.0", tk.END)
+            log_text.config(state=tk.DISABLED)
+
+        def copy_splitter_log():
+            try:
+                dialog.clipboard_clear()
+                dialog.clipboard_append(log_text.get("1.0", tk.END))
+                copy_log_btn.config(text="✓ Copied")
+                dialog.after(1500, lambda: copy_log_btn.config(text="Copy"))
+            except Exception:
+                pass
+
+        copy_log_btn = tk.Button(log_hdr, text="Copy", font=("Segoe UI", 7), bg="#1f2937", fg=self.text_primary, relief=tk.FLAT, padx=6, pady=1, command=copy_splitter_log)
+        copy_log_btn.pack(side=tk.RIGHT, padx=(2, 0))
+
+        clear_log_btn = tk.Button(log_hdr, text="Clear", font=("Segoe UI", 7), bg="#1f2937", fg=self.text_primary, relief=tk.FLAT, padx=6, pady=1, command=clear_splitter_log)
+        clear_log_btn.pack(side=tk.RIGHT, padx=(2, 2))
+
+        # Text area with scrollbars
+        log_body = tk.Frame(log_monitor_frame, bg="#0b0f14")
+        log_body.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        log_scroll_y = tk.Scrollbar(log_body, orient=tk.VERTICAL)
+        log_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        log_scroll_x = tk.Scrollbar(log_body, orient=tk.HORIZONTAL)
+        log_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        log_text = tk.Text(
+            log_body,
+            height=7,
+            bg="#0b0f14",
+            fg="#e2e8f0",
+            insertbackground="#38bdf8",
+            font=("Consolas", 8),
+            wrap="none",
+            yscrollcommand=log_scroll_y.set,
+            xscrollcommand=log_scroll_x.set,
+            bd=0,
+            highlightthickness=0,
+            state=tk.DISABLED,
+        )
+        log_text.pack(fill=tk.BOTH, expand=True)
+        log_scroll_y.config(command=log_text.yview)
+        log_scroll_x.config(command=log_text.xview)
+
+        log_text.tag_config("info", foreground="#38bdf8")
+        log_text.tag_config("success", foreground="#10b981")
+        log_text.tag_config("warning", foreground="#f59e0b")
+        log_text.tag_config("error", foreground="#ef4444")
+        log_text.tag_config("dim", foreground="#64748b")
+
+        def append_splitter_log(msg: str, level: str = "info"):
+            ts = time.strftime("%H:%M:%S")
+            line = f"[{ts}] {msg}\n"
+            log_text.config(state=tk.NORMAL)
+            eff_level = level
+            l_lower = msg.lower()
+            if "error" in l_lower or "failed" in l_lower:
+                eff_level = "error"
+            elif "complete" in l_lower or "success" in l_lower or "matched" in l_lower or "verified" in l_lower:
+                eff_level = "success"
+            elif "warning" in l_lower or "alert" in l_lower:
+                eff_level = "warning"
+
+            log_text.insert(tk.END, line, eff_level)
+            lines_cnt = int(log_text.index("end-1c").split(".")[0])
+            if lines_cnt > 2000:
+                log_text.delete("1.0", f"{lines_cnt - 2000}.0")
+            log_text.config(state=tk.DISABLED)
+
+            if autoscroll_var.get():
+                log_text.see(tk.END)
+
+            if eff_level == "error" and not log_visible[0]:
+                toggle_log_monitor()
+
+        def toggle_log_monitor():
+            log_visible[0] = not log_visible[0]
+            if log_visible[0]:
+                log_monitor_frame.pack(fill=tk.BOTH, expand=False, padx=12, pady=(0, 6), before=bottom_bar)
+                toggle_log_btn.config(text="📜 Log Monitor ▲", fg="#38bdf8")
+            else:
+                log_monitor_frame.pack_forget()
+                toggle_log_btn.config(text="📜 Log Monitor ▼", fg=self.text_primary)
+
         bottom_bar = tk.Frame(dialog, bg=self.panel_bg, padx=12, pady=8)
         bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
@@ -3440,7 +3543,21 @@ class AbuAlignApp:
             pady=6,
             state=tk.DISABLED
         )
-        open_folder_btn.pack(side=tk.LEFT)
+        open_folder_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        toggle_log_btn = tk.Button(
+            btn_row,
+            text="📜 Log Monitor ▼",
+            font=("Segoe UI", 9),
+            bg="#29293d",
+            fg=self.text_primary,
+            relief=tk.FLAT,
+            padx=10,
+            pady=6,
+            command=toggle_log_monitor
+        )
+        toggle_log_btn.pack(side=tk.LEFT)
+        ToolTip(toggle_log_btn, "Toggles the live real-time Log Monitor to inspect virtual camera compounding, frame status, timings, and troubleshooting messages.")
 
         close_btn = tk.Button(
             btn_row,
@@ -4047,6 +4164,9 @@ class AbuAlignApp:
                     v_stride = video_stride_var.get() if video_mode_var.get() == "Frame Stride" else 1
                     v_max_f = video_max_frames_var.get()
 
+                    def splitter_log_cb(msg):
+                        dialog.after(0, lambda: append_splitter_log(msg))
+
                     res = ps.split_panorama_dataset(
                         input_dir=in_p,
                         output_dir=out_d,
@@ -4074,6 +4194,7 @@ class AbuAlignApp:
                         auto_detect_mask=True,
                         use_gpu=use_gpu_var.get(),
                         progress_callback=on_progress,
+                        log_callback=splitter_log_cb,
                     )
                     tot = res.get("total_views", 0)
                     panos = res.get("total_panoramas", 0)
@@ -4106,6 +4227,7 @@ class AbuAlignApp:
                         split_btn.config(state=tk.NORMAL, text="Export views")
                         export_masks_btn.config(state=tk.NORMAL)
                         close_btn.config(state=tk.NORMAL)
+                        append_splitter_log(f"Split Error: {error}", level="error")
                         messagebox.showerror("Split Error", f"Failed to project multi-camera rig:\n{error}")
                     dialog.after(0, on_err)
 
@@ -4151,6 +4273,9 @@ class AbuAlignApp:
                     fmt = fmt_var.get()
                     q = qual_var.get()
 
+                    def splitter_log_cb(msg):
+                        dialog.after(0, lambda: append_splitter_log(msg))
+
                     res = ps.split_masks_for_dataset(
                         input_dir=in_p,
                         output_dir=out_d,
@@ -4165,6 +4290,7 @@ class AbuAlignApp:
                         quality=q,
                         use_gpu=use_gpu_var.get(),
                         progress_callback=on_progress,
+                        log_callback=splitter_log_cb,
                     )
                     tot = res.get("total_masks", 0)
                     panos = res.get("total_panoramas", 0)
@@ -4192,6 +4318,7 @@ class AbuAlignApp:
                         split_btn.config(state=tk.NORMAL, text="Export views")
                         export_masks_btn.config(state=tk.NORMAL, text="🎭 Export Masks Only")
                         close_btn.config(state=tk.NORMAL)
+                        append_splitter_log(f"Mask Error: {error}", level="error")
                         messagebox.showerror("Mask Error", f"Failed to project masks:\n{error}", parent=dialog)
                     dialog.after(0, on_err)
 
@@ -4387,8 +4514,6 @@ class AbuAlignApp:
         if self.controls_enabled_var.get():
             try:
                 engine=self.engine_var.get();path=self.controls_file_var.get().strip()
-                if engine not in ['opensfm','360dvo','dvo','native_colmap']:raise ValueError('Select OpenSfM, 360DVO or native COLMAP for manual spherical controls.')
-                if engine=='opensfm' and self.opensfm_proj_var.get()!='equirectangular':raise ValueError('Select the equirectangular OpenSfM projection for manual 360 controls.')
                 if not os.path.isfile(path):raise ValueError('Choose a saved control_points.json file.')
                 from control_points_model import validate_controls
                 validate_controls(json.loads(Path(path).read_text(encoding='utf-8')))
@@ -4707,12 +4832,18 @@ class AbuAlignApp:
         self.dataset_var.set(image_dir);self.controls_file_var.set(path);self.controls_enabled_var.set(True)
         self.controls_budget_var.set(str(budget));self.controls_iterations_var.set(str(iterations))
         self.controls_backend_var.set(backend)
-        if self.engine_var.get() not in ['opensfm','360dvo','dvo','native_colmap']:self.engine_var.set('opensfm')
-        if self.engine_var.get()=='opensfm':self.opensfm_proj_var.set('equirectangular')
+        import json
+        family=json.loads(Path(path).read_text(encoding='utf-8')).get('image_projection','spherical')
+        if family=='spherical':
+            if self.engine_var.get() not in ['opensfm','360dvo','dvo','native_colmap']:self.engine_var.set('opensfm')
+            if self.engine_var.get()=='opensfm':self.opensfm_proj_var.set('equirectangular')
+        else:
+            if self.engine_var.get() in ['360dvo','dvo','native_colmap']:self.engine_var.set('vggt_omega')
+            if self.engine_var.get()=='opensfm':self.opensfm_proj_var.set('perspective')
         self.stride_var.set('1')
         self._log('Manual controls attached. Main Align will register images first, then refine the new model with the controls.\n')
     def _browse_control_points(self):
-        value=filedialog.askopenfilename(parent=self.root,title='Choose saved 360 controls',filetypes=[('Control JSON','*.json')])
+        value=filedialog.askopenfilename(parent=self.root,title='Choose saved manual controls',filetypes=[('Control JSON','*.json')])
         if value:self.controls_file_var.set(value);self.controls_enabled_var.set(True)
     def _start_one_click(self):
         """Runs alignment and automatically chains into 3DGS training immediately upon completion."""
@@ -4922,7 +5053,7 @@ class AbuAlignApp:
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
-                lf.write("Abu Align & Train v0.1.4.8 - Run Telemetry & Diagnostic Log\n")
+                lf.write(f"Abu Align & Train v{get_current_version()} - Run Telemetry & Diagnostic Log\n")
                 lf.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 lf.write(f"Command:   {' '.join(cmd)}\n")
                 lf.write("=" * 72 + "\n\n")
@@ -5481,7 +5612,7 @@ class AbuAlignApp:
             return
 
         doc_win = tk.Toplevel(self.root)
-        doc_win.title(f"Abu Align v0.1.4.8 - {title}")
+        doc_win.title(f"Abu Align v{get_current_version()} - {title}")
         doc_win.geometry("1060x820")
         doc_win.minsize(860, 580)
         doc_win.configure(bg=self.bg_dark)
@@ -6108,7 +6239,7 @@ class AbuAlignApp:
 
     def _show_about_box(self):
         about_text = (
-            "Abu Align & Train - Version 0.1.4.8\n"
+            f"Abu Align & Train - Version {get_current_version()}\n"
             "Unified Neural Photogrammetry & 3D Gaussian Splatting Training Suite\n\n"
             "• Photogrammetry Engines: VGGT-Omega, Niantic Labs ACE0, NVIDIA Isaac PyCuSFM, Mapillary OpenSfM (360° Spherical), & 360DVO (Deep 360° Visual Odometry)\n"
             "• 3DGS Training Engines: LichtFeld Studio (Vulkan Real-Time GUI + GUT), Nerfstudio Splatfacto, NVIDIA 3DGRUT, & PFGS360 (CVPR 2026 Pose-Free 360° GS)\n"

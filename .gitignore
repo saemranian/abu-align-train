@@ -187,3 +187,6 @@ datasets/
 # Personal GUI profiles (may contain local model paths)
 /presets/*.json
 /presets/*.tmp
+
+# Public prediction checkpoints and local setup downloads; never release data.
+/.abu_models/

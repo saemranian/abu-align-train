@@ -1,4 +1,4 @@
-"""Compatibility entry point for the 360 control-point workspace."""
+"""Compatibility entry point for calibrated 360/perspective Manual control points."""
 from control_points_workspace import ControlPointEditor, open_editor
 
 if __name__ == '__main__':

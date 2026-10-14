@@ -56,6 +56,13 @@ try:
 except ImportError:
     HAS_TORCH = False
 
+try:
+    from scipy.spatial.transform import Rotation as ScipyRotation
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+    ScipyRotation = None
+
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
@@ -306,90 +313,92 @@ def basis(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> Tuple[np.n
     return rolled_right, rolled_up, forward
 
 
+def matrix_to_euler_zyx(M: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Extracts canonical Tait-Bryan ZYX Euler angles (yaw, pitch, roll in degrees)
+    from a 3x3 rotation matrix in SO(3).
+    R_c2w = R_z(yaw) * R_y(pitch) * R_x(roll)
+    """
+    if HAS_SCIPY and ScipyRotation is not None:
+        try:
+            rot = ScipyRotation.from_matrix(M)
+            y, p, r = rot.as_euler('ZYX', degrees=True)
+            return float(y), float(p), float(r)
+        except Exception:
+            pass
+
+    # Pure NumPy robust fallback
+    sy = math.sqrt(M[0, 0] * M[0, 0] + M[1, 0] * M[1, 0])
+    singular = sy < 1e-6
+    if not singular:
+        yaw = math.atan2(M[1, 0], M[0, 0])
+        pitch = math.atan2(-M[2, 0], sy)
+        roll = math.atan2(M[2, 1], M[2, 2])
+    else:
+        yaw = math.atan2(-M[0, 1], M[1, 1])
+        pitch = math.atan2(-M[2, 0], sy)
+        roll = 0.0
+    return math.degrees(yaw), math.degrees(pitch), math.degrees(roll)
+
+
+def euler_zyx_to_matrix(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> np.ndarray:
+    """
+    Constructs 3x3 rotation matrix from Tait-Bryan ZYX Euler angles (yaw, pitch, roll in degrees).
+    R_c2w = R_z(yaw) * R_y(pitch) * R_x(roll)
+    """
+    if HAS_SCIPY and ScipyRotation is not None:
+        try:
+            return ScipyRotation.from_euler('ZYX', [yaw_deg, pitch_deg, roll_deg], degrees=True).as_matrix()
+        except Exception:
+            pass
+
+    y = math.radians(yaw_deg)
+    p = math.radians(pitch_deg)
+    r = math.radians(roll_deg)
+    Rz = np.array([[math.cos(y), -math.sin(y), 0.0], [math.sin(y), math.cos(y), 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    Ry = np.array([[math.cos(p), 0.0, math.sin(p)], [0.0, 1.0, 0.0], [-math.sin(p), 0.0, math.cos(p)]], dtype=np.float64)
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, math.cos(r), -math.sin(r)], [0.0, math.sin(r), math.cos(r)]], dtype=np.float64)
+    return Rz @ Ry @ Rx
+
+
 def get_rc_axes(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Constructs the 3 orthonormal body axes in RealityCapture world frame (X-east, Y-north, Z-up)
-    for a panorama or camera with given (yaw, pitch, roll).
-    Yaw: 0=North (+Y), 90=East (+X)
-    Pitch: 0=Nadir (-Z), 90=Horizontal, 180=Zenith (+Z)
+    Constructs the 3 orthonormal body axes in RealityCapture / Postshot world frame (X-east, Y-north, Z-up)
+    for a camera with Tait-Bryan ZYX Euler angles (yaw, pitch, roll in degrees).
+    Returns (right, up, forward) column vectors.
     """
-    p_rad = math.radians(pitch_deg)
-    y_rad = math.radians(yaw_deg)
-    r_rad = math.radians(roll_deg)
-    fwd = np.array([math.sin(p_rad) * math.sin(y_rad), math.sin(p_rad) * math.cos(y_rad), -math.cos(p_rad)], dtype=np.float64)
-    fwd_norm = np.linalg.norm(fwd)
-    if fwd_norm > 1e-12:
-        fwd /= fwd_norm
-    else:
-        fwd = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-    w0 = np.array([math.cos(y_rad), -math.sin(y_rad), 0.0], dtype=np.float64)
-    w0_norm = np.linalg.norm(w0)
-    if w0_norm > 1e-6:
-        w0 /= w0_norm
-        u0 = np.cross(w0, fwd)
-        u0_norm = np.linalg.norm(u0)
-        if u0_norm > 1e-6:
-            u0 /= u0_norm
-        else:
-            u0 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    else:
-        u0 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        w0 = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-
-    up = math.cos(r_rad) * u0 + math.sin(r_rad) * w0
-    up_norm = np.linalg.norm(up)
-    if up_norm > 1e-12:
-        up /= up_norm
-    else:
-        up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-
-    right = np.cross(fwd, up)
-    if np.dot(right, w0) < 0:
-        right = -right
-    right_norm = np.linalg.norm(right)
-    if right_norm > 1e-12:
-        right /= right_norm
-    else:
-        right = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-
-    return right, up, fwd
+    M = euler_zyx_to_matrix(yaw_deg, pitch_deg, roll_deg)
+    return M[:, 0], M[:, 1], M[:, 2]  # right, up, fwd
 
 
-def rc_axes_to_euler(fwd: np.ndarray, up: np.ndarray) -> Tuple[float, float, float]:
+def rc_axes_to_euler(fwd: np.ndarray, up: np.ndarray, right: Optional[np.ndarray] = None) -> Tuple[float, float, float]:
     """
-    Extracts canonical RealityCapture / RealityScan Euler angles (yaw, pitch, roll)
-    from optical axes in RC world space.
+    Extracts canonical RealityCapture / Postshot Tait-Bryan ZYX Euler angles (yaw, pitch, roll in degrees)
+    from orthonormal body axes in world frame: Column 0: Right, Column 1: Up, Column 2: Forward (optical axis).
+    R_c2w = R_z(yaw) * R_y(pitch) * R_x(roll)
     """
-    fwd_norm = np.linalg.norm(fwd)
-    if fwd_norm > 1e-12:
-        fwd = fwd / fwd_norm
+    fwd_norm = fwd / max(float(np.linalg.norm(fwd)), 1e-12)
+    up_norm = up / max(float(np.linalg.norm(up)), 1e-12)
+    if right is None:
+        right_norm = np.cross(up_norm, fwd_norm)
     else:
-        fwd = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        right_norm = right / max(float(np.linalg.norm(right)), 1e-12)
+    r_len = float(np.linalg.norm(right_norm))
+    if r_len > 1e-12:
+        right_norm /= r_len
+    else:
+        right_norm = np.array([1.0, 0.0, 0.0], dtype=np.float64)
 
-    up_norm = np.linalg.norm(up)
-    if up_norm > 1e-12:
-        up = up / up_norm
+    up_norm = np.cross(fwd_norm, right_norm)
+    u_len = float(np.linalg.norm(up_norm))
+    if u_len > 1e-12:
+        up_norm /= u_len
     else:
-        up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        up_norm = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-    yaw = float(np.degrees(np.arctan2(fwd[0], fwd[1])) % 360.0)
-    pitch = float(np.degrees(np.arccos(np.clip(-fwd[2], -1.0, 1.0))))
-    yaw_rad = math.radians(yaw)
-    w0 = np.array([math.cos(yaw_rad), -math.sin(yaw_rad), 0.0], dtype=np.float64)
-    w0_norm = np.linalg.norm(w0)
-    if w0_norm > 1e-6:
-        w0 /= w0_norm
-        u0 = np.cross(w0, fwd)
-        u0_norm = np.linalg.norm(u0)
-        if u0_norm > 1e-6:
-            u0 /= u0_norm
-            roll = float(np.degrees(np.arctan2(np.dot(up, w0), np.dot(up, u0))))
-        else:
-            roll = 0.0
-    else:
-        roll = 0.0
-    return round(yaw, 4), round(pitch, 4), round(roll, 4)
+    R_mat = np.column_stack([right_norm, up_norm, fwd_norm])
+    yaw, pitch, roll = matrix_to_euler_zyx(R_mat)
+    return round(float(yaw), 4), round(float(pitch), 4), round(float(roll), 4)
 
 
 def load_alignment_trajectory(trajectory_path: str) -> Dict[str, Any]:
@@ -775,51 +784,59 @@ def compound_realitycapture_pose(
         p_pitch = 90.0
         p_roll = 0.0
 
-    rig_r, rig_u, rig_f = basis(rig_yaw, rig_pitch, rig_roll)
+    # Local rig camera orientation in panorama body frame (Col 0: Right, Col 1: Up, Col 2: Forward)
+    R_rig_cam = euler_to_rotation_matrix(rig_yaw, rig_pitch, rig_roll)
 
     if override_orientations_from_rig or pano_pose is None:
-        # Map local rig basis (X-right, Y-up, Z-fwd) to canonical RC world frame (X-east, Y-north, Z-up)
-        # using the identity RC orientation (yaw=0°, pitch=90° horizontal, roll=0°)
-        r_rc, u_rc, f_rc = get_rc_axes(0.0, 90.0, 0.0)
-        M_rig_to_rc = np.column_stack([r_rc, u_rc, f_rc])
-        fwd_rc = M_rig_to_rc @ rig_f
-        up_rc = M_rig_to_rc @ rig_u
-        yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
-        fwd_norm = fwd_rc / max(float(np.linalg.norm(fwd_rc)), 1e-12)
-        up_norm = up_rc / max(float(np.linalg.norm(up_rc)), 1e-12)
-        right_rc = np.cross(fwd_norm, up_norm)
-        if np.dot(right_rc, M_rig_to_rc @ rig_r) < 0:
-            right_rc = -right_rc
-        right_norm = right_rc / max(float(np.linalg.norm(right_rc)), 1e-12)
-        down_norm = -up_norm
-        R_mat = np.vstack([right_norm, down_norm, fwd_norm])
+        # Canonical flat Euler orientation facing North with Z-up: yaw=0, pitch=90 (horizon), roll=0
+        R_pano_c2w = euler_zyx_to_matrix(0.0, 90.0, 0.0)
+    elif "R_c2w" in pano_pose:
+        R_pano_c2w = np.array(pano_pose["R_c2w"], dtype=np.float64)
     else:
-        r_p, u_p, f_p = get_rc_axes(p_yaw, p_pitch, p_roll)
-        R_rig_to_rc = np.column_stack([r_p, u_p, f_p])
-        fwd_rc = R_rig_to_rc @ rig_f
-        up_rc = R_rig_to_rc @ rig_u
-        yaw, pitch, roll = rc_axes_to_euler(fwd_rc, up_rc)
-        fwd_norm = fwd_rc / max(float(np.linalg.norm(fwd_rc)), 1e-12)
-        up_norm = up_rc / max(float(np.linalg.norm(up_rc)), 1e-12)
-        right_rc = np.cross(fwd_norm, up_norm)
-        if np.dot(right_rc, R_rig_to_rc @ rig_r) < 0:
-            right_rc = -right_rc
-        right_norm = right_rc / max(float(np.linalg.norm(right_rc)), 1e-12)
-        down_norm = -up_norm
-        R_mat = np.vstack([right_norm, down_norm, fwd_norm])
+        R_pano_c2w = euler_zyx_to_matrix(p_yaw, p_pitch, p_roll)
+
+    # If the trajectory entry itself was for a specific rig face prior (e.g. '_left'), uncompound it
+    pose_name = pano_pose.get("name", "") if pano_pose else ""
+    if pose_name:
+        p_stem = Path(pose_name).stem.lower()
+        face_angles = {
+            "front": (0.0, 0.0, 0.0),
+            "right": (90.0, 0.0, 0.0),
+            "back": (180.0, 0.0, 0.0),
+            "left": (-90.0, 0.0, 0.0),
+            "up": (0.0, 90.0, 0.0),
+            "down": (0.0, -90.0, 0.0),
+        }
+        for known_face, (fy, fp, fr) in face_angles.items():
+            if p_stem.endswith(f"_{known_face}"):
+                R_face_in_pano = euler_to_rotation_matrix(fy, fp, fr)
+                R_pano_c2w = R_pano_c2w @ R_face_in_pano.T
+                break
+
+    # Strict SO(3) compounding: R_cam_c2w = R_pano_c2w * R_rig_cam
+    R_cam_c2w = R_pano_c2w @ R_rig_cam
+    yaw, pitch, roll = matrix_to_euler_zyx(R_cam_c2w)
+
+    right_cam = R_cam_c2w[:, 0]
+    up_cam = R_cam_c2w[:, 1]
+    fwd_cam = R_cam_c2w[:, 2]
+
+    # RealityCapture XMP world-to-camera matrix (R_w2c = R_c2w.T)
+    # Row 0: right, Row 1: down (-up), Row 2: fwd
+    R_xmp = np.vstack([right_cam, -up_cam, fwd_cam])
+    R_flat = [0.0 if abs(v) < 1e-12 else float(v) for v in R_xmp.flatten()]
 
     fov_rad = math.radians(fov_deg)
     fx = (float(crop_w) / 2.0) / math.tan(fov_rad / 2.0)
     f_35mm = fx * (36.0 / max(crop_w, crop_h))
-    R_flat = [0.0 if abs(v) < 1e-12 else float(v) for v in R_mat.flatten()]
 
     return {
         "x": x,
         "y": y,
         "alt": alt,
-        "yaw": yaw,
-        "pitch": pitch,
-        "roll": roll,
+        "yaw": round(float(yaw), 4),
+        "pitch": round(float(pitch), 4),
+        "roll": round(float(roll), 4),
         "f_35mm": f_35mm,
         "fov_deg": fov_deg,
         "px_norm": 0.0,
@@ -831,6 +848,7 @@ def compound_realitycapture_pose(
         "t1": 0.0,
         "t2": 0.0,
         "R": R_flat,
+        "R_c2w": R_cam_c2w,
     }
 
 
@@ -1052,8 +1070,15 @@ class PanoramicRigSplitter:
         self.interpolation = interpolation
 
         self.use_gpu = bool(use_gpu and HAS_TORCH and torch.cuda.is_available())
-        self.device = torch.device("cuda" if self.use_gpu else "cpu")
-        self.gpu_dtype = torch.float16 if self.use_gpu else torch.float32
+        if self.use_gpu:
+            self.device = torch.device("cuda")
+            self.gpu_dtype = torch.float16
+        elif HAS_TORCH:
+            self.device = torch.device("cpu")
+            self.gpu_dtype = torch.float32
+        else:
+            self.device = None
+            self.gpu_dtype = None
 
         self.maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self.rotations: Dict[str, np.ndarray] = {}
@@ -1451,6 +1476,7 @@ def split_panorama_dataset(
     masks_only: bool = False,
     use_gpu: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Splits an entire directory of 360° panoramas OR a 360° video file into rectilinear pinhole views
@@ -1462,6 +1488,14 @@ def split_panorama_dataset(
     """
     if not HAS_CV2:
         raise RuntimeError("OpenCV (cv2) is required for panoramic rig projection.")
+
+    def log_msg(msg: str):
+        if log_callback:
+            try:
+                log_callback(msg)
+            except Exception:
+                pass
+        print(f"[360 Splitter] {msg}")
 
     start_time = time.time()
     in_abs = str(Path(input_dir).resolve())
@@ -1509,10 +1543,20 @@ def split_panorama_dataset(
         rig = get_horizontal_ring_rig(num_cameras=num_cameras, fov_deg=fov_deg)
         rig_title = f"{num_cameras}-Camera Horizontal Ring"
 
+    log_msg(f"Initializing {rig_title} with {len(rig)} virtual views...")
+    log_msg(f"Input: {in_abs}")
+    log_msg(f"Output: {out_abs}")
+    log_msg(f"Crop: {out_w}x{out_h} | FOV: {fov_deg:.1f}° | Lens distortion: k1={k1:.4f}, k2={k2:.4f}")
+
     # Ingest alignment / trajectory prior if provided (OpenSfM, RealityCapture, 360DVO, Nerfstudio, COLMAP)
     traj_data = None
     if dvo_trajectory_csv and (os.path.isfile(dvo_trajectory_csv) or os.path.isdir(dvo_trajectory_csv)):
         traj_data = load_dvo_trajectory(dvo_trajectory_csv)
+        if traj_data and traj_data["count"] > 0:
+            log_msg(f"Trajectory Prior: Loaded {traj_data['count']} poses from {os.path.basename(dvo_trajectory_csv)} (Engine: {traj_data['engine'].upper()})")
+            log_msg("SO(3) Compounding: True Tait-Bryan ZYX Euler angles enabled for perfect Postshot/RealityCapture alignment.")
+        else:
+            log_msg(f"Trajectory Prior Warning: No valid poses loaded from {dvo_trajectory_csv}")
 
     # RealityScan CSV row collections:
     # 1. Master rows for out_abs/cameras.csv
@@ -2015,6 +2059,14 @@ def split_panorama_dataset(
     with open(meta_path, "w", encoding="utf-8") as mf:
         json.dump(rig_meta, mf, indent=2)
 
+    log_msg(f"Projection complete! Generated {total_views_saved} views from {total_source_items} source panoramas in {elapsed:.2f}s.")
+    if export_realityscan_csv and cameras_csv_path:
+        log_msg(f"Saved Postshot/RealityCapture cameras.csv ({len(rc_master_rows)-1} rows): {cameras_csv_path}")
+    if export_transforms_json and transforms_path:
+        log_msg(f"Saved transforms.json ({len(transforms_frames)} frames): {transforms_path}")
+    if total_masks_saved > 0:
+        log_msg(f"Saved {total_masks_saved} mask layers (.mask).")
+
     return {
         "success": True,
         "rig_mode": mode,
@@ -2047,6 +2099,7 @@ def split_masks_for_dataset(
     quality: int = 95,
     use_gpu: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    log_callback: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """
     Dedicated equirectangular mask projection helper.
@@ -2104,7 +2157,12 @@ def split_masks_for_dataset(
         export_realityscan_csv=False,
         export_xmp=False,
         progress_callback=progress_callback,
+        log_callback=log_callback,
     )
+
+
+# Backward compatibility alias
+split_panorama_to_rig = split_panorama_dataset
 
 
 # ======================================================================

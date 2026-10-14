@@ -79,7 +79,7 @@ class WorkspaceTests(unittest.TestCase):
         # race in Viser's development-server auto-builder on Windows.
         with patch('viser._client_autobuild._check_viser_yarn_running', return_value=False):
             self.server = viser.ViserServer(host='127.0.0.1', port=8896, verbose=False)
-        self.addCleanup(self.server.stop)
+        self.addCleanup(lambda:self.server.stop())
         self.loader = Mock(side_effect=lambda path: sample())
         self.ui = InspectionWorkspace(self.server, {'Run A':'a', 'Run B':'b'}, 'Run A',
                                       'Fixture', self.loader, lambda: {'Run A':'a', 'Run B':'b'})

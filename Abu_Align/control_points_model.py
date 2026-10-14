@@ -9,6 +9,9 @@ def validate_controls(payload):
     if not isinstance(payload, dict) or payload.get('schema_version') != 1 or not isinstance(payload.get('points'), list):
         raise ValueError('Choose an Abu control-points file (schema version 1).')
     data = copy.deepcopy(payload)
+    if 'image_policy' in data:
+        from manual_image_policy import validate_policy
+        data['image_policy']=validate_policy(data['image_policy'])
     data.setdefault('distances', [])
     if not isinstance(data['distances'], list): raise ValueError('Distances must be a list.')
     names = set()
@@ -112,7 +115,8 @@ def atomic_json(path, data, indent=2):
 def point_geometry(point, cameras):
     """Triangulated guidance only; never treat a prediction as a measurement."""
     import numpy as np
-    from spherical_refinement import triangulate, pixel_bearing
+    from spherical_refinement import triangulate
+    from manual_camera_geometry import bearing
     observations = [(o['shot_id'], o['pixel'], o.get('sigma_px', 1)) for o in point['observations']]
     if len(observations) < 2: return None, 'Needs at least 2 images', {}
     try:
@@ -121,7 +125,7 @@ def point_geometry(point, cameras):
         for name, pixel, _ in observations:
             rotation, translation, width, height = cameras[name]
             ray = rotation @ xyz + translation; ray /= np.linalg.norm(ray)
-            errors[name] = float(np.degrees(np.arccos(np.clip(ray @ pixel_bearing(pixel, width, height), -1, 1))))
+            errors[name] = float(np.degrees(np.arccos(np.clip(ray @ bearing(pixel,cameras[name]), -1, 1))))
         rms = math.sqrt(sum(v*v for v in errors.values()) / len(errors))
         return xyz, f'Angular RMS {rms:.4f}°', errors
     except (ValueError, KeyError, np.linalg.LinAlgError) as error:
@@ -129,11 +133,5 @@ def point_geometry(point, cameras):
 
 
 def projected_pixel(xyz, camera):
-    import numpy as np
-    rotation, translation, width, height = camera
-    ray = rotation @ xyz + translation
-    length = np.linalg.norm(ray)
-    if length <= 1e-10: return None
-    ray /= length
-    return [((.5 + np.arctan2(ray[0], ray[2])/(2*np.pi)) % 1)*width,
-            (.5 + np.arcsin(np.clip(ray[1], -1, 1))/np.pi)*height]
+    from manual_camera_geometry import project
+    return project(xyz,camera)

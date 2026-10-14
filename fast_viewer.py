@@ -130,8 +130,8 @@ def load_cameras_from_tum(traj_path: str) -> List[Dict]:
                     qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
                     poses.append({
                         "name": f"cam_{ts}",
-                        "pos": np.array([tx, ty, tz], dtype=np.float32),
-                        "wxyz": np.array([qw, qx, qy, qz], dtype=np.float32)
+                        "pos": np.array([tx, ty, tz], dtype=np.float64),
+                        "wxyz": np.array([qw, qx, qy, qz], dtype=np.float64)
                     })
     except Exception as e:
         print(f"[Warning] Failed to parse TUM trajectory {traj_path}: {e}")
@@ -200,8 +200,8 @@ def load_cameras_from_colmap_images(images_txt_path: str) -> List[Dict]:
 
                     poses.append({
                         "name": name.replace("\\", "/").removeprefix("./"),
-                        "pos": t_c2w.astype(np.float32),
-                        "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                        "pos": t_c2w.astype(np.float64),
+                        "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float64)
                     })
     except Exception as e:
         print(f"[Warning] Failed to parse COLMAP images.txt {images_txt_path}: {e}")
@@ -218,7 +218,7 @@ def load_cameras_from_transforms(tf_path: str) -> List[Dict]:
             data = json.load(f)
         frames = data.get("frames", [])
         for idx, frame in enumerate(frames):
-            c2w = np.array(frame.get("transform_matrix", np.eye(4)), dtype=np.float32)
+            c2w = np.array(frame.get("transform_matrix", np.eye(4)), dtype=np.float64)
             # NeRF transforms use OpenGL (-Z forward, +Y up); Viser uses OpenCV.
             R = c2w[:3, :3] @ np.diag([1.0, -1.0, -1.0])
             t = c2w[:3, 3]
@@ -227,7 +227,7 @@ def load_cameras_from_transforms(tf_path: str) -> List[Dict]:
             poses.append({
                 "name": name,
                 "pos": t,
-                "wxyz": np.array([qw, qx, qy, qz], dtype=np.float32)
+                "wxyz": np.array([qw, qx, qy, qz], dtype=np.float64)
             })
     except Exception as e:
         print(f"[Warning] Failed to parse transforms.json {tf_path}: {e}")
@@ -272,8 +272,8 @@ def load_cameras_from_colmap_bin(images_bin_path: str) -> List[Dict]:
 
                 poses.append({
                     "name": name.replace("\\", "/").removeprefix("./"),
-                    "pos": t_c2w.astype(np.float32),
-                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                    "pos": t_c2w.astype(np.float64),
+                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float64)
                 })
     except Exception as e:
         print(f"[Warning] Failed to parse COLMAP images.bin {images_bin_path}: {e}")
@@ -319,8 +319,8 @@ def load_cameras_from_opensfm(opensfm_path: str) -> List[Dict]:
 
                 poses.append({
                     "name": name.replace("\\", "/").removeprefix("./"),
-                    "pos": t_c2w.astype(np.float32),
-                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                    "pos": t_c2w.astype(np.float64),
+                    "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float64)
                 })
     except Exception as e:
         print(f"[Warning] Failed to parse OpenSfM reconstruction.json {opensfm_path}: {e}")
@@ -360,8 +360,8 @@ def load_cameras_from_ace0(ace0_path: str) -> List[Dict]:
 
                     poses.append({
                         "name": os.path.basename(raw_img_path),
-                        "pos": t_c2w.astype(np.float32),
-                        "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float32)
+                        "pos": t_c2w.astype(np.float64),
+                        "wxyz": np.array([qw_c, qx_c, qy_c, qz_c], dtype=np.float64)
                     })
     except Exception as e:
         print(f"[Warning] Failed to parse ACE0 pose file {ace0_path}: {e}")
@@ -729,7 +729,7 @@ def main():
     project_title, dataset_dir, runs, initial_selected = resolve_project_structure(target_dir)
 
     print("=" * 72)
-    print("   Abu Align & Train - Interactive 3D Inspection Viewer (Viser)")
+    print("   Abu 3D Viewer M54 - Interactive 3D Inspection (Viser)")
     print(f"   * Project Name:     {project_title}")
     print(f"   * Dataset Root:     {dataset_dir}")
     print(f"   * Discovered Runs:  {len(runs)}")
@@ -753,6 +753,9 @@ def main():
     if server is None:
         print("[ERROR] Could not start Viser server on any port 8080-8089.")
         sys.exit(1)
+
+    # Keep installed Viser's hook count stable while preventing public tunnels.
+    server.request_share_url=lambda verbose=True:None
 
     url = f"http://localhost:{active_port}"
 
@@ -787,11 +790,9 @@ def main():
     from viewer_workspace import InspectionWorkspace
 
     def load_workspace_run(path):
-        asset, *_ = find_run_assets(path)
-        points, colors = read_ply_data(asset) if asset else (None, None)
-        cameras, source = load_run_cameras(path)
-        return dict(points=points, colors=colors, cameras=cameras, source=source,
-                    asset=os.path.basename(asset) if asset else "No point cloud found")
+        from abu_m54 import load_scene,to_records
+        scene=load_scene(path,limit=1000000);data=to_records(scene);data['asset']=os.path.basename(path)
+        return data
 
     workspace = InspectionWorkspace(server, runs, current_run_name, project_title,
         load_workspace_run, lambda: resolve_project_structure(target_dir)[2])
@@ -800,8 +801,10 @@ def main():
     print(f"Viewing active run: {current_run_name}")
     print("Press Ctrl+C to stop viewer.\n")
 
-    while True:
-        time.sleep(0.1)
+    try:
+        while True:time.sleep(0.1)
+    except KeyboardInterrupt:pass
+    finally:server.stop()
 
 
 if __name__ == "__main__":

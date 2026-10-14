@@ -30,7 +30,7 @@ def left_jacobian(v):
 
 
 class BearingProblem:
-    def __init__(self,cameras,free_names,point_ids,measurements,gcps,distances,scale_name,baseline,scale_anchor):
+    def __init__(self,cameras,free_names,point_ids,measurements,gcps,distances,scale_name,baseline,scale_anchor,anchor_camera=None):
         self.names=list(cameras);self.free=list(free_names);self.ids=list(point_ids)
         self.nc=len(self.free);self.offset=self.nc*6;self.nparams=self.offset+3*len(self.ids)
         self.cmap={n:i for i,n in enumerate(self.names)};self.pmap={n:i for i,n in enumerate(self.ids)}
@@ -39,10 +39,11 @@ class BearingProblem:
         self.r0=np.array([cameras[n][0] for n in self.names]);self.t0=np.array([cameras[n][1] for n in self.names])
         self.ci=np.array([self.cmap[m[1]] for m in measurements]);self.pi=np.array([self.pmap[m[0]] for m in measurements])
         self.fi=np.array([self.free_map.get(m[1],-1) for m in measurements]);self.mask=self.fi>=0
-        self.b=np.array([m[2] for m in measurements]);self.sigma=np.array([m[3] for m in measurements])
+        self.b=np.array([m[2] for m in measurements])
+        self.weight=np.array([np.eye(3)/m[3] if np.ndim(m[3])==0 else m[3] for m in measurements])
         self.m=len(measurements);self.gcps=gcps;self.distances=distances
         self.anchor=scale_name if scale_anchor else None;self.baseline=baseline
-        first=self.cmap[sorted(cameras)[0]]
+        first=self.cmap[anchor_camera or sorted(cameras)[0]]
         self.fixed_center=-self.r0[first].T@self.t0[first]
         self.rows=3*self.m+3*len(gcps)+len(distances)+int(scale_anchor)
         base=np.arange(self.m)*3
@@ -59,11 +60,11 @@ class BearingProblem:
     def evaluate(self,x,jac=False,weighted=True):
         r,t,p=self.unpack(x);rotated=np.einsum('nij,nj->ni',r[self.ci],p[self.pi]);q=rotated+t[self.ci]
         norm=np.maximum(np.linalg.norm(q,axis=1),1e-12);u=q/norm[:,None]
-        residual=(u-self.b)/self.sigma[:,None] if weighted else u-self.b
+        residual=np.einsum('nij,nj->ni',self.weight,u-self.b) if weighted else u-self.b
         if not weighted:return residual.ravel()
         extra=[];er=[];ec=[];ev=[];row=3*self.m
         if jac:
-            d=(np.eye(3)-u[:,:,None]*u[:,None,:])/(norm*self.sigma)[:,None,None]
+            d=self.weight@((np.eye(3)-u[:,:,None]*u[:,None,:])/norm[:,None,None])
             jp=d@r[self.ci];jr=-(d[self.mask]@skew(rotated[self.mask])@left_jacobian(x[:self.offset].reshape(-1,6)[self.fi[self.mask],:3]))
             jc=np.concatenate([jr,d[self.mask]],axis=2)
         def block(row,col,values):
@@ -107,11 +108,13 @@ def retriangulate_batch(names,observations,cameras):
     """Triangulate a bounded point batch with the scalar solver's safeguards."""
     cmap={n:i for i,n in enumerate(cameras)}
     camera_names=list(cameras);rotation=np.asarray([cameras[n][0] for n in camera_names])
-    translation=np.asarray([cameras[n][1] for n in camera_names]);dimensions=np.asarray([cameras[n][2:] for n in camera_names])
+    translation=np.asarray([cameras[n][1] for n in camera_names])
     rows=[(i,cmap[shot],pixel) for i,name in enumerate(names) for shot,pixel,_ in observations[name]]
     pi=np.asarray([row[0] for row in rows]);ci=np.asarray([row[1] for row in rows]);pixel=np.asarray([row[2] for row in rows])
-    longitude=(pixel[:,0]/dimensions[ci,0]-.5)*2*np.pi;latitude=(.5-pixel[:,1]/dimensions[ci,1])*np.pi
-    local=np.stack([np.cos(latitude)*np.sin(longitude),-np.sin(latitude),np.cos(latitude)*np.cos(longitude)],axis=1)
+    from manual_camera_geometry import bearings_batch
+    local=np.empty((len(rows),3))
+    for index in np.unique(ci):
+        mask=ci==index;local[mask]=bearings_batch(pixel[mask],cameras[camera_names[index]])
     rays=np.einsum('nji,nj->ni',rotation[ci],local);centers=-np.einsum('nji,nj->ni',rotation[ci],translation[ci])
     projectors=np.eye(3)-rays[:,:,None]*rays[:,None,:]
     normal=np.zeros((len(names),3,3));rhs=np.zeros((len(names),3))
@@ -122,25 +125,34 @@ def retriangulate_batch(names,observations,cameras):
     return xyz,valid
 
 
-def solve_cuda(problem,initial,iterations,progress=None):
+def robust_values(residual,loss='soft_l1',scale=2.):
+    z=(residual/scale)**2
+    if loss=='linear':rho=z;derivative=np.ones_like(z)
+    elif loss=='soft_l1':rho=2*(np.sqrt(1+z)-1);derivative=1/np.sqrt(1+z)
+    elif loss=='huber':rho=np.where(z<=1,z,2*np.sqrt(z)-1);derivative=1/np.sqrt(np.maximum(z,1))
+    else:raise ValueError('Choose soft_l1, huber or linear robust loss.')
+    return float(.5*scale**2*np.sum(rho)),np.sqrt(derivative)
+
+
+def solve_cuda(problem,initial,iterations,progress=None,loss='soft_l1',loss_scale=2.,ftol=1e-8,xtol=1e-8,gtol=1e-7):
     import torch
     device='cuda';dtype=torch.float64;started=time.perf_counter()
     torch.cuda.reset_peak_memory_stats()
     baseline_memory=torch.cuda.memory_allocated()
     x=initial.copy();mu=1e-3;accepted=0;success=False;termination='Iteration budget reached'
-    def cost(residual):return float(np.sum(4*(np.sqrt(1+(residual/2)**2)-1)))
+    def cost(residual):return robust_values(residual,loss,loss_scale)[0]
     def tensor(v):return torch.as_tensor(v,device=device,dtype=dtype)
     with torch.no_grad():
         for iteration in range(iterations):
             residual,jac=problem.evaluate(x,jac=True);objective=cost(residual)
-            weight=(1+(residual/2)**2)**(-.25)
+            weight=robust_values(residual,loss,loss_scale)[1]
             jac=jac.multiply(weight[:,None]).tocsr();rw=residual*weight
             diagonal=np.maximum(np.asarray(jac.power(2).sum(axis=0)).ravel(),1e-12);scale=1/np.sqrt(diagonal)
             jac=jac.multiply(scale[None,:]).tocsr();trans=jac.T.tocsr()
             def sparse(a):
                 return torch.sparse_csr_tensor(torch.as_tensor(a.indptr.astype(np.int64),device=device),torch.as_tensor(a.indices.astype(np.int64),device=device),tensor(a.data),size=a.shape)
             j=sparse(jac);jt=sparse(trans);rhs=-torch.mv(jt,tensor(rw));rhs_norm=torch.linalg.vector_norm(rhs)
-            if float(rhs_norm)<1e-7:success=True;termination='Scaled gradient tolerance reached';break
+            if float(rhs_norm)<gtol:success=True;termination='Scaled gradient tolerance reached';break
             pcg_used=0;committed=False
             for trial in range(8):
                 def matvec(v):return torch.mv(jt,torch.mv(j,v))+mu*v
@@ -156,8 +168,8 @@ def solve_cuda(problem,initial,iterations,progress=None):
                 candidate=x+delta;new_residual=problem.evaluate(candidate);newcost=cost(new_residual)
                 if np.isfinite(newcost) and newcost<objective:
                     x=candidate;accepted+=1;committed=True;mu=max(mu/3,1e-9)
-                    if objective-newcost<=1e-8*max(1.,objective):success=True;termination='Robust objective tolerance reached'
-                    if np.linalg.norm(delta)<=1e-8*(1e-8+np.linalg.norm(x)):success=True;termination='Step tolerance reached'
+                    if objective-newcost<=ftol*max(1.,objective):success=True;termination='Robust objective tolerance reached'
+                    if np.linalg.norm(delta)<=xtol*(xtol+np.linalg.norm(x)):success=True;termination='Step tolerance reached'
                     break
                 mu=min(mu*10,1e12)
             if progress:progress({'phase':'optimize','iteration':iteration+1,'iterations':iterations,'cost':newcost if committed else objective,'accepted':accepted,'pcg_steps':pcg_used,'elapsed':time.perf_counter()-started,'device':torch.cuda.get_device_name()})

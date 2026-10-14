@@ -230,6 +230,7 @@ class InspectionWorkspace:
     def load(self, name):
         if name not in self.cache:
             data = self.loader(self.runs[name])
+            data['path']=self.runs[name]
             points, colors = data['points'], data['colors']
             if points is None:
                 points, colors = np.empty((0, 3), np.float32), np.empty((0, 3), np.uint8)
@@ -261,8 +262,9 @@ class InspectionWorkspace:
                     registration = 'Raw coordinates'
                     if self.registration.value:
                         scale, rotation, translation = similarity(right, left)
-                        b['points'] = (scale*(b['points'] @ rotation.T)+translation).astype(np.float32)
+                        b['points'] = (scale*(b['points'] @ rotation.T)+translation).astype(np.float64)
                         b['cameras'] = transform_cameras(b['cameras'], scale, rotation, translation)
+                        base_transform=np.eye(4);base_transform[:3,:3]=scale*rotation;base_transform[:3,3]=translation;b['m54_base_transform']=base_transform.tolist()
                         right = scale*(right @ rotation.T)+translation
                         registration = f'Registered B → A · scale {scale:.4g}'
                     summary = f'**{registration}**\n\n{len(pairs)} uniquely matched image names'
@@ -287,12 +289,18 @@ class InspectionWorkspace:
                 self.status.content = f'**Unable to apply selection**\n\n{error}\n\nPrevious scene retained. Change the selection or disable registration.'
 
     def render(self):
+        if not hasattr(self,'m54'):
+            from abu_m54_browser import BrowserTools
+            self.m54=BrowserTools(self.server,lambda:self.layers,self.render,normalized=True,up_control=self.up_axis)
+        display_layers=self.m54.apply_records(self.layers)
+        self.display_layers=display_layers
+        base=self.m54.source_scenes()['A'];display=lambda p:self.m54.display(p,base);display_scale=base['extent']
         for handle in self.handles:
             handle.remove()
         self.handles.clear()
         self.camera_options.clear()
         bounds, details = [], []
-        for key, layer in self.layers.items():
+        for key, layer in display_layers.items():
             visible = self.mode.value == 'Overlay' or self.mode.value.startswith(key)
             tint = MINT if key == 'A' else CORAL
             points, colors, cameras = layer['points'], layer['colors'], layer['cameras']
@@ -325,7 +333,7 @@ class InspectionWorkspace:
 
             point_colors = tint if self.mode.value == 'Overlay' or self.color.value == 'Layer color' else colors[indices]
             if key == 'B' and self.color.value == 'B distance to A':
-                distance, reference_count = cloud_distances(self.layers['A']['points'], sampled)
+                distance, reference_count = cloud_distances(display_layers['A']['points'], sampled)
                 if len(distance):
                     maximum = max(float(np.percentile(distance, 95)), 1e-9)
                     fraction = np.clip(distance/maximum, 0, 1)[:, None]
@@ -337,20 +345,20 @@ class InspectionWorkspace:
                 else:
                     self.comparison.content += '\n\nCloud distances unavailable: both runs need finite points.'
             if len(sampled):
-                self.handles.append(self.server.scene.add_point_cloud(f'/inspection/{key}/points', sampled,
+                self.handles.append(self.server.scene.add_point_cloud(f'/inspection/{key}/points', display(sampled),
                     point_colors,
-                    point_size=self.point_size.value, point_shape='circle', visible=visible and self.points.value))
+                    point_size=self.point_size.value/display_scale, point_shape='circle', visible=visible and self.points.value))
             if len(positions) > 1:
                 self.handles.append(self.server.scene.add_line_segments(f'/inspection/{key}/path',
-                    np.stack((positions[:-1], positions[1:]), axis=1), tint, line_width=2,
+                    display(np.stack((positions[:-1], positions[1:]), axis=1)), tint, line_width=2,
                     visible=visible and self.paths.value))
             # Discrete camera station markers (all registered frames as discrete nodes along trajectory)
             if len(positions) and getattr(self, 'stations', None):
                 node_size = max(cam_base_scale * 0.3 * self.camera_size.value, 0.015)
                 self.handles.append(self.server.scene.add_point_cloud(f'/inspection/{key}/stations',
-                    positions,
+                    display(positions),
                     np.tile(tint, (len(positions), 1)),
-                    point_size=node_size, point_shape='circle',
+                    point_size=node_size/display_scale, point_shape='circle',
                     visible=visible and self.stations.value))
             run_path = self.runs.get(self.a.value if key == 'A' else self.b.value, '')
             step = 1 if (getattr(self, 'frustum_density', None) and self.frustum_density.value == 'All frames') else max(1, int(np.ceil(len(cameras)/250)))
@@ -364,8 +372,8 @@ class InspectionWorkspace:
                 cache_key = (cam_name, run_path)
                 cached_thumb = self._thumb_cache.get(cache_key)
                 handle = self.server.scene.add_camera_frustum(f'/inspection/{key}/camera/{i}',
-                    fov=np.radians(60), aspect=1.5, scale=cam_base_scale * self.camera_size.value,
-                    color=tint, position=camera['pos'], wxyz=camera['wxyz'],
+                    fov=np.radians(60), aspect=1.5, scale=cam_base_scale * self.camera_size.value/display_scale,
+                    color=tint, position=display(camera['pos']), wxyz=camera['wxyz'],
                     image=cached_thumb if self.camera_thumbs.value else None, format='jpeg',
                     visible=visible and self.cameras.value)
                 handle.on_click(lambda event, value=name: self.select_camera(value, event))
@@ -378,15 +386,15 @@ class InspectionWorkspace:
                            f'**{len(cameras)} cameras aligned** ({frustums_rendered} frustums rendered)\n\n'
                            f'Camera source: {layer["source"]}\n\nCloud: `{layer["asset"]}`')
         self.center, self.span = scene_bounds(bounds)
-        self.handles.append(self.server.scene.add_grid('/inspection/grid', width=self.span*2, height=self.span*2,
-            cell_size=self.span/20, section_size=self.span/4, plane='xy', position=(self.center[0], self.center[1], self.center[2]-self.span/2),
+        self.handles.append(self.server.scene.add_grid('/inspection/grid', width=self.span*2/display_scale, height=self.span*2/display_scale,
+            cell_size=self.span/20/display_scale, section_size=self.span/4/display_scale, plane='xy', position=display((self.center[0], self.center[1], self.center[2]-self.span/2)),
             cell_color=(48, 60, 65), section_color=(70, 86, 92), visible=self.grid.value))
         if self.links.value and (self.cameras.value or self.paths.value) and self.mode.value == 'Overlay' and 'B' in self.layers:
-            a, b = self.layers['A']['cameras'], self.layers['B']['cameras']
+            a, b = display_layers['A']['cameras'], display_layers['B']['cameras']
             pairs = camera_pairs(a, b)
             if pairs:
                 self.handles.append(self.server.scene.add_line_segments('/inspection/differences',
-                    np.array([[a[i]['pos'], b[j]['pos']] for i, j in pairs]), (230, 203, 126), line_width=1.5))
+                    display(np.array([[a[i]['pos'], b[j]['pos']] for i, j in pairs])), (230, 203, 126), line_width=1.5))
         old = self.camera.value
         self.camera.options = tuple(self.camera_options) or ('No cameras',)
         self.camera.value = old if old in self.camera_options else self.camera.options[0]
@@ -395,6 +403,7 @@ class InspectionWorkspace:
         self.open_photo_btn.disabled = not bool(self.camera_options)
         self.inspect_camera()
         self.details.content = '\n\n---\n\n'.join(details)
+        self.m54.render_tools()
 
     def set_view(self, client, name):
         directions = {'Fit': (1, -1.5, 1), 'Top': (0, 0, 1), 'Front': (0, -1, 0), 'Right': (1, 0, 0)}
@@ -409,8 +418,9 @@ class InspectionWorkspace:
         aspect = max(.1, float(getattr(client.camera, 'aspect', 1)))
         half_angle = min(fov/2, np.arctan(np.tan(fov/2)*aspect))
         distance = self.span*.5/max(.05, np.sin(half_angle))*1.12
-        client.camera.position = self.center + direction*distance
-        client.camera.look_at = self.center
+        base=self.m54.source_scenes()['A']
+        client.camera.position = self.m54.display(self.center + direction*distance,base)
+        client.camera.look_at = self.m54.display(self.center,base)
 
     def navigate(self, event):
         for client in self.clients(event):
@@ -503,7 +513,7 @@ class InspectionWorkspace:
             positions = []
             for key in ('A', 'B'):
                 if key in self.layers and (self.mode.value == 'Overlay' or (key == 'A' and self.mode.value == 'A only') or (key == 'B' and self.mode.value == 'B only')):
-                    cams = self.layers[key].get('cameras', [])
+                    cams = getattr(self,'display_layers',self.layers)[key].get('cameras', [])
                     for c in cams:
                         positions.append(c['pos'])
             if not positions:
@@ -529,8 +539,8 @@ class InspectionWorkspace:
                 aspect = max(.1, float(getattr(client.camera, 'aspect', 1)))
                 half_angle = min(fov/2, np.arctan(np.tan(fov/2)*aspect))
                 distance = traj_span*.5/max(.05, np.sin(half_angle))*1.25
-                client.camera.position = traj_center + direction*distance
-                client.camera.look_at = traj_center
+                base=self.m54.source_scenes()['A'];client.camera.position = self.m54.display(traj_center + direction*distance,base)
+                client.camera.look_at = self.m54.display(traj_center,base)
             self.navigation_info.content = f'Fitted viewpoint to trajectory ({len(positions)} cameras).'
 
     def open_run_folder(self, event=None):
@@ -544,6 +554,10 @@ class InspectionWorkspace:
 
     def select_camera(self, name, event=None):
         self.camera.value = name
+        if hasattr(self,'m54') and name in self.camera_options:
+            key,index=self.camera_options[name]
+            scene=self.m54.effective()[key];position=list(scene['centers'].values())[index]
+            self.m54.select(position,getattr(event,'client',None),'camera '+name,key)
         self.inspect_camera()
         if event is not None and self.auto_open_photo.value:
             self.open_selected_photo(event)
@@ -556,7 +570,7 @@ class InspectionWorkspace:
         if self.camera.value not in self.camera_options:
             return
         key, index = self.camera_options[self.camera.value]
-        camera = self.layers[key]['cameras'][index]
+        camera = getattr(self,'display_layers',self.layers)[key]['cameras'][index]
         run_name = self.a.value if key == 'A' else self.b.value
         run_path = self.runs.get(run_name, '')
         cam_name = camera.get('name', '')
@@ -564,8 +578,8 @@ class InspectionWorkspace:
         photo_path = self._resolve_photo(cam_name, run_path)
 
         self.selection_handle = self.server.scene.add_camera_frustum('/inspection/selected',
-            fov=np.radians(60), aspect=1.5, scale=self.span*.022*self.camera_size.value,
-            color=(255, 220, 125), line_width=3, position=camera['pos'], wxyz=camera['wxyz'],
+            fov=np.radians(60), aspect=1.5, scale=self.span*.022*self.camera_size.value/self.m54.source_scenes()['A']['extent'],
+            color=(255, 220, 125), line_width=3, position=self.m54.display(camera['pos'],self.m54.source_scenes()['A']), wxyz=camera['wxyz'],
             image=thumb, format='jpeg',
             visible=self.cameras.value)
         self.open_photo_btn.disabled = not bool(photo_path)
@@ -621,19 +635,20 @@ class InspectionWorkspace:
                 self.select_camera(names[(index+(-1 if action == 'Previous' else 1)) % len(names)], event)
                 return
             key, index = self.camera_options[self.camera.value]
-            camera = self.layers[key]['cameras'][index]
+            camera = getattr(self,'display_layers',self.layers)[key]['cameras'][index]
             q = np.asarray(camera['wxyz'])
             matrix = Rotation.from_quat(q[[1, 2, 3, 0]]).as_matrix()
             for client in self.clients(event):
                 position = np.asarray(camera['pos'])
+                base=self.m54.source_scenes()['A'];display=lambda p:self.m54.display(p,base)
                 if action == 'Focus':
-                    client.camera.position = position + np.array([0, -.15, .1])*self.span
+                    client.camera.position = display(position + np.array([0, -.15, .1])*self.span)
                     client.camera.up_direction = (0, 0, 1)
-                    client.camera.look_at = position
+                    client.camera.look_at = display(position)
                 else:
-                    client.camera.position = position
+                    client.camera.position = display(position)
                     client.camera.up_direction = -matrix[:, 1]
-                    client.camera.look_at = position + matrix[:, 2]*self.span*.1
+                    client.camera.look_at = display(position + matrix[:, 2]*self.span*.1)
 
     def refresh_runs(self, event):
         with self.lock:

@@ -556,11 +556,25 @@ class OpenSfMEngine:
 
         return None
 
-    def setup_workspace(self, image_paths: List[str]):
+    def setup_workspace(self, image_paths: List[str],mask_policy=None):
         """Sets up the OpenSfM workspace layout, config.yaml, and overrides."""
+        from manual_image_policy import select_images
+        image_paths,_=select_images(image_paths,mask_policy)
+        if not image_paths:raise ValueError('No usable images remain after exclusions/masks.')
+        if mask_policy and (mask_policy.get('mask_dir') or mask_policy.get('excluded_images')) and (os.path.isfile(os.path.join(self.output_dir,'tracks.csv')) or os.path.isdir(os.path.join(self.output_dir,'features'))):raise ValueError('Image/mask policy changes require a fresh OpenSfM workspace; cached features cannot silently be reused.')
         os.makedirs(self.output_dir, exist_ok=True)
         img_dir = os.path.join(self.output_dir, "images")
         os.makedirs(img_dir, exist_ok=True)
+        # An explicit list prevents stale linked originals re-entering a run.
+        with open(os.path.join(self.output_dir,'image_list.txt'),'w',encoding='utf-8') as stream:stream.write(''.join('images/'+os.path.basename(p)+'\n' for p in image_paths))
+        if mask_policy and mask_policy.get('mask_dir'):
+            from manual_image_policy import stage_masks
+            from PIL import Image
+            from pathlib import Path
+            sizes={}
+            for p in image_paths:
+                with Image.open(p) as image:sizes[os.path.basename(p)]=image.size
+            stage_masks(mask_policy,sizes,Path(self.output_dir)/'masks')
 
         for p in image_paths:
             fname = os.path.basename(p)
@@ -728,6 +742,7 @@ class OpenSfMEngine:
             optimize_camera_parameters=self.optimize_camera_parameters,
             stride=stride,
             retrieval_neighbors=self.retrieval_neighbors,
+            mask_policy=getattr(self,'mask_policy',None),
             log_callback=log_callback
         )
 
@@ -852,7 +867,8 @@ def run_opensfm_spherical_sfm(
     optimize_camera_parameters: bool = False,
     stride: int = 1,
     log_callback: Optional[Callable[[str], None]] = None,
-    retrieval_neighbors: int = 10
+    retrieval_neighbors: int = 10,
+    mask_policy=None
 ) -> Tuple[Optional[object], np.ndarray, np.ndarray]:
     """
     Stand-alone Native Python Spherical Structure-from-Motion (Spherical SfM) Pipeline.
@@ -883,6 +899,8 @@ def run_opensfm_spherical_sfm(
     log("=" * 72)
 
     os.makedirs(output_dir, exist_ok=True)
+    from manual_image_policy import select_images
+    image_paths,_=select_images(image_paths,mask_policy)
     num_images = len(image_paths)
 
     if num_images == 0:
@@ -912,6 +930,8 @@ def run_opensfm_spherical_sfm(
         detector = cv2.SIFT_create(nfeatures=feature_min_frames, contrastThreshold=0.02, edgeThreshold=10)
 
     features = []
+    from manual_image_policy import Masks
+    mask_set=Masks(mask_policy)
     t_start_feat = time.time()
     for idx, p in enumerate(image_paths):
         img_bgr = cv2.imread(p)
@@ -919,7 +939,8 @@ def run_opensfm_spherical_sfm(
             log(f"      [WARNING] Could not read {p}, skipping.")
             continue
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        kps, des = detector.detectAndCompute(gray, None)
+        mask=mask_set.array(os.path.basename(p),(gray.shape[1],gray.shape[0]))
+        kps, des = detector.detectAndCompute(gray, mask.astype('uint8')*255 if mask is not None else None)
 
         pts = np.float32([kp.pt for kp in kps]) if kps else np.empty((0, 2), dtype=np.float32)
         bearings = uv_to_bearing(pts, w, h) if len(pts) > 0 else np.empty((0, 3), dtype=np.float64)

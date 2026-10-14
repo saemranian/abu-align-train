@@ -1,5 +1,14 @@
 # Abu Align & Train - Mandatory Agent Instructions
 
+## Shared 3D viewer architecture
+The shared viewer is **Abu 3D Viewer M54**, shortened to **Abu M54** during development.
+Use `abu_m54.py` for scene/file/transform math, `abu_m54_native.py` for the embedded
+GPU renderer, `abu_m54_browser.py` for browser navigation/transform controls and
+`abu_m54_app.py` for standalone opening. Main and control-point workspaces are host
+adapters; do not add another independent orbit, transform or file-parser fork.
+Keep source geometry immutable, transform cameras/cloud/controls together, retain
+float64 world coordinates and export explicit copies. See `docs/ABU_M54.md`.
+
 ## MANDATORY RULE: Base-10 Version Control & Git Commit on Every Modification
 
 ### Absolute Requirement

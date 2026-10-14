@@ -75,6 +75,12 @@ class InteractionTests(unittest.TestCase):
         g.selected='0599.jpg';g.keyboard(-1);self.assertEqual(g.selected,'0598.jpg');self.assertLessEqual(len(g.cache),128)
     def test_real_refinement_worker_keeps_ui_polling_and_exports(self):
         self.measure_geometry();e=self.editor;out=self.folder/'worker.json';e.settings['backend'].set('cpu');e.settings['iterations'].set(5)
+        # The worker fixture must constrain its cameras, rather than asking a
+        # one-point-only model to report a meaningful camera refinement.
+        from control_points_model import projected_pixel
+        for index,xyz in enumerate([[-1,-.5,3],[0,.3,4],[1,.5,5],[.2,-.5,6],[.8,.4,7]]):
+            e.component['points'][f'auto{index}']={'coordinates':xyz,'color':[160,175,180],'observations':[{'shot_id':n,'pixel':projected_pixel(xyz,c)} for n,c in e.cameras.items()]}
+        e.reconstruction.write_text(json.dumps([e.component]))
         ticks=[]
         def tick():
             ticks.append(time.monotonic())

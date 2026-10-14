@@ -18,17 +18,17 @@ def export_refined(path, component=None):
         else:component=data
     cloud=path.with_suffix('.points.ply');cameras=path.with_suffix('.cameras.csv');manifest=path.with_suffix('.exports.json')
     items=list(component.get('points',{}).values())
-    xyz=np.asarray([p['coordinates'] for p in items],dtype=np.float32).reshape(-1,3)
+    xyz=np.asarray([p['coordinates'] for p in items],dtype=np.float64).reshape(-1,3)
     color=np.asarray([p.get('color',[180,180,180]) for p in items]).reshape(-1,3)
     finite=np.isfinite(xyz).all(axis=1);xyz=xyz[finite];color=np.clip(color[finite],0,255).astype(np.uint8)
-    vertices=np.empty(len(xyz),dtype=[('x','<f4'),('y','<f4'),('z','<f4'),('red','u1'),('green','u1'),('blue','u1')])
+    vertices=np.empty(len(xyz),dtype=[('x','<f8'),('y','<f8'),('z','<f8'),('red','u1'),('green','u1'),('blue','u1')])
     for i,k in enumerate(['x','y','z']):vertices[k]=xyz[:,i]
     for i,k in enumerate(['red','green','blue']):vertices[k]=color[:,i]
     temporary=cloud.with_name(cloud.name+'.tmp')
     try:
         with temporary.open('wb') as stream:
             stream.write(('ply\nformat binary_little_endian 1.0\ncomment Abu refined sparse cloud; native alignment frame\n'
-                          f'element vertex {len(vertices)}\nproperty float x\nproperty float y\nproperty float z\n'
+                          f'element vertex {len(vertices)}\nproperty double x\nproperty double y\nproperty double z\n'
                           'property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n').encode('ascii'))
             vertices.tofile(stream)
         temporary.replace(cloud)

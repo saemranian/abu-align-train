@@ -105,7 +105,8 @@ def run_dvo(
     keyframe_thresh=15.0,
     load_res=1024,
     manifest_path=None,
-    polar_mask=0.08
+    polar_mask=0.08,
+    mask_policy_path=None
 ):
     started = time.perf_counter()
     torch.cuda.reset_peak_memory_stats()
@@ -146,6 +147,8 @@ def run_dvo(
         raise RuntimeError(f'No images found in {imagedir}')
 
     total_imgs = len(image_files)
+    from manual_image_policy import load_policy_file
+    mask_policy=load_policy_file(mask_policy_path);mask_atlas=None;mask_rejected=None
     print(f'[*] Initializing 360DVO on GPU: {torch.cuda.get_device_name(0)}')
     print(f'[*] Active Patches: {cfg.PATCHES_PER_FRAME} per frame | BA Window: {cfg.OPTIMIZATION_WINDOW}')
     print(f'[*] Gradient Bias: {cfg.GRADIENT_BIAS} | Patch Lifetime: {cfg.PATCH_LIFETIME} | Final Refine: {final_ba_iters} iters')
@@ -190,6 +193,10 @@ def run_dvo(
                 else:
                     slam = DPVO(cfg, network, ht=H, wd=W, viz=False)
                 original_update = slam.network.update.forward
+                if mask_policy['mask_dir']:
+                    from manual_dvo_masks import MaskAtlas
+                    mask_atlas=MaskAtlas(image_files,mask_policy,H,W,slam.RES,image.device)
+                    mask_rejected=torch.zeros((),dtype=torch.int64,device=image.device)
                 capture_state = {'active': False}
                 original_window_update = slam.update
                 def window_update():
@@ -204,6 +211,11 @@ def run_dvo(
                     y = slam.patches[0, kk, 1, slam.P // 2, slam.P // 2]
                     valid = (y >= polar_mask * H / slam.RES) & (y < (1 - polar_mask) * H / slam.RES)
                     weight = weight * valid.reshape(1, -1, 1).to(weight.dtype)
+                    if mask_atlas is not None and len(kk):
+                        center=slam.P//2;source_xy=slam.patches[0,kk,:2,center,center];target_xy=(slam.reproject((ii,jj,kk))[...,center,center]+delta.float())[0]
+                        allowed=mask_atlas.allowed(slam.tstamps_[ii],source_xy)&mask_atlas.allowed(slam.tstamps_[jj],target_xy)
+                        mask_rejected.add_((~allowed).sum())
+                        weight=weight*allowed.reshape(1,-1,1).to(weight.dtype)
                     if capture_state['active'] and len(kk):
                         with torch.no_grad():
                             center = slam.P // 2
@@ -269,6 +281,10 @@ def run_dvo(
         slam.update()
 
     print('[*] Extracting 6-DoF trajectory and 3D tie points...', flush=True)
+    cloud_keep=None
+    if mask_atlas is not None:
+        center=slam.P//2;xy=slam.patches[0,:slam.m,:2,center,center]
+        cloud_keep=mask_atlas.allowed(slam.tstamps_[slam.ix[:slam.m]],xy)
 
     if dense_cloud and slam.m > 0:
         # Extract all 9 projective depth vertices per patch for 9x higher point cloud density
@@ -285,6 +301,7 @@ def run_dvo(
                 clr_9x = clr_base.unsqueeze(1).repeat(1, 9, 1).reshape(-1, 3)
 
                 valid = torch.isfinite(pts_3d).all(dim=-1) & (pts_3d.norm(dim=-1) < 200.0)
+                if cloud_keep is not None:valid &= cloud_keep.repeat_interleave(9)
                 points = pts_3d[valid].cpu().numpy()
                 colors = clr_9x[valid].cpu().numpy()
                 print(f'[*] Dense 3x3 Micro-Patch extraction: generated {len(points)} high-density tie points.')
@@ -292,9 +309,13 @@ def run_dvo(
             print(f'[WARNING] Dense 9x unprojection fallback to center points: {e}', flush=True)
             points = slam.points_.cpu().numpy()[:slam.m]
             colors = slam.colors_.view(-1, 3).cpu().numpy()[:slam.m]
+            if cloud_keep is not None:
+                keep=cloud_keep.cpu().numpy();points=points[keep];colors=colors[keep]
     else:
         points = slam.points_.cpu().numpy()[:slam.m]
         colors = slam.colors_.view(-1, 3).cpu().numpy()[:slam.m]
+        if cloud_keep is not None:
+            keep=cloud_keep.cpu().numpy();points=points[keep];colors=colors[keep]
 
     poses, tstamps = slam.terminate()
     persistent_tracks.save(os.path.join(output_dir, 'dvo_tracks.json'))
@@ -342,6 +363,9 @@ def run_dvo(
                   'final_refinement': 'sliding_window',
                   'persistent_observations': persistent_tracks.count,
                   'persistent_tracks_truncated': persistent_tracks.truncated,
+                  'external_masks':{'enabled':mask_atlas is not None,'atlas_bytes':mask_atlas.planes.numel()*mask_atlas.planes.element_size() if mask_atlas is not None else 0,
+                                    'masked_weight_evaluations':int(mask_rejected.item()) if mask_rejected is not None else 0,
+                                    'cloud_patches_excluded':int((~cloud_keep).sum().item()) if cloud_keep is not None else 0},
                   'upstream_commit': subprocess.run(['git', '-C', '/home/ahmad/360DVO', 'rev-parse', 'HEAD'],
                                                    capture_output=True, text=True).stdout.strip()}
     with open(os.path.join(output_dir, 'engine_provenance.json'), 'w', encoding='utf-8') as stream:
@@ -369,6 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('--load_res', type=int, default=1024, help='Max resolution width to prevent DPVO cuda_corr int32 overflow')
     parser.add_argument('--manifest', type=str, default=None)
     parser.add_argument('--polar_mask', type=float, default=0.08)
+    parser.add_argument('--mask-policy',type=str,default=None)
 
     args = parser.parse_args()
 
@@ -391,5 +416,6 @@ if __name__ == '__main__':
         keyframe_thresh=args.keyframe_thresh,
         load_res=args.load_res,
         manifest_path=args.manifest,
-        polar_mask=args.polar_mask
+        polar_mask=args.polar_mask,
+        mask_policy_path=args.mask_policy
     )

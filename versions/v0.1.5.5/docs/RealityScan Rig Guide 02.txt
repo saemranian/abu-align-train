@@ -1,0 +1,20 @@
+Please update the XMP generator function in the 360 splitter script with the following changes:
+
+1. Replace the Rig tags:
+   Remove:
+   <xcr:RigId>cubemap_rig</xcr:RigId>
+   <xcr:RigInstanceId>...</xcr:RigInstanceId>
+
+   Add:
+   <xcr:LockedPoseGroup>{FRAME_INTEGER_INDEX}</xcr:LockedPoseGroup>
+
+   * Ensure all 6 faces belonging to the same frame share the exact same integer ID (e.g., frame 003 = 3, frame 004 = 4).
+
+2. Fix the Focal Length calculation:
+   For a rectilinear 120° horizontal FOV on full-frame equivalent (36mm width):
+   f = 36 / (2 * tan(60°)) = 18 / sqrt(3) ≈ 10.392305 mm.
+   Update:
+   <xcr:FocalLength35mm>10.392305</xcr:FocalLength35mm>
+
+3. Maintain the rest of the template intact:
+   Keep distortion locked at 0.0, principal points at 0.0, PosePrior set to "approximate", and write the combined world position and 3x3 rotation matrix for each face as already configured.

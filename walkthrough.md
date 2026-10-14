@@ -1,3 +1,182 @@
+# Abu Align & Train v0.1.5.5: Responsive Manual panels/grid and unified main-launcher version
+
+# Manual control points — responsive panels and grid, v0.1.5.5
+
+## Use the corrected interface
+
+Close existing Abu windows, then launch the same `Abu_Align.bat` in the main
+project folder. Its title and badge now read VERSION.txt, as do About, document
+windows and new log headers. Both batch launchers and the Abu_Align mirror use
+that same version. The earlier source changes reached the main folder while its
+counter remained0.1.5.0; v0.1.5.4 was an isolated release to preserve concurrent
+work. After confirmation that the other agent finished, v0.1.5.5 consolidates the
+completed current shared source and prior Manual/M54 work into the main release.
+
+In Manual control points, drag the visible handles between Points, the central
+views and Properties/Settings. The middle divider changes Left/Right widths.
+The Properties divider changes measurement-table height. The cursor indicates
+the divider's direction; the enlarged handles scale with desktop density.
+Dragging now continues when the pointer crosses a child image, table or notebook,
+and release there commits the final size and releases the mouse grab.
+
+**Settings → Pane resizing** offers:
+
+- **Auto** (default): live pane sizing in small windows; above2 million physical
+  window pixels, show a responsive green divider guide and commit on release.
+- **Fast**: use the guide at every window size. Content stays stable during the
+  gesture and redraws after release; this avoids repeated full-window Tk paints.
+- **Live**: resize content during dragging. Large high-DPI windows can repaint
+  more slowly; this is an explicit choice, not an assumption of60fps.
+
+The choice saves in control-file layout_settings, separately from solver settings.
+Older files default to Auto. Invalid choices are rejected before changing the
+loaded document. **Project → Reset pane sizes**, or the Settings button, restores
+the point list, image widths, properties width and measurement-table height.
+If you shrink the whole window, side panels reduce to fit usable centre/minimum
+sizes. Enlarging restores the preferred side widths instead of leaving clipped
+or unreachable panes. Measurements and reconstruction data do not change.
+
+The grid handles full and fractional wheel deltas, batches pending input into
+one normal GUI-idle frame and keeps every image in the same scroll region. A warm
+scroll does not trigger another decode or thumbnail build. The item pool updates
+when the visible row range changes; moving within that range reuses its items.
+The scrollbar coalesces pointer input too. Nearby/prefetched uncached images still
+decode on two CPU workers, using a neutral placeholder for an initial miss.
+Hidden grids do not create Tk photos on background completion, and thumbnail
+width variants are quantized to avoid a new photo for every pixel of resizing.
+There is no Loading banner, and invalid originals remain explicitly logged.
+
+## Root causes fixed
+
+The earlier grid handled each wheel event immediately, including repeated layout
+and thumbnail requests after reaching a boundary. Every small delta was treated
+as a full notch, causing excessive movement on high-resolution wheels/trackpads.
+The corrected path accumulates the real delta and applies the latest target once.
+Viewport signatures skip unchanged layouts and redundant scroll notifications.
+
+The earlier drag listener existed only on the PanedWindow widget and used local
+event coordinates. Tk's local grab can deliver events to children inside the
+grabbed subtree, so dragging/releasing over images or tables was lost. The scoped
+tool-toplevel listener and screen-to-split coordinate conversion fix that gap.
+Sashes are clamped to adjacent minima. Tk only refreshes sash coordinates during
+its geometry pass; consecutive sash_place calls during window resizing used stale
+coordinates, shrinking the final panel unexpectedly. The controller now assigns
+desired pane widths together and tracks preferred widths from the requested
+final position, rather than stale coordinates. Both horizontal and vertical
+paths, Fast/Live, shrink/expand, source preservation and cleanup are tested.
+
+While consolidating the completed shared GUI, the broader tests caught an
+existing splitter-dialog startup error: Tk Text tags interpret fg as fgstipple,
+not the widget foreground alias. Five tags now use the explicit foreground
+option; colours and the other agent's rig/splitter work remain intact.
+
+## Verification — 2026-10-14
+
+Final main-folder suite: **208 tests passed in 143.768s**,
+exit0, without Tcl finalizer/fatal warnings. It includes Manual image policy,
+local predictions, CSV/main handoff, perspective/spherical/CUDA refinement,
+image/grid/M54 layouts, desktop version/presets, native/browser/null/gizmo
+behaviour, rig CSV/designer and splitter masks. PyTorch's sparse CSR beta warning
+is informational. Synthetic splitter fixtures are separate compatibility tests;
+no client panoramas were converted. A restricted-sandbox run stalled while
+starting the localhost Viser server; the owned process was stopped and the
+browser/full suite rerun with localhost access. No remote image service was used.
+
+```powershell
+$env:PYTHONPATH = "$PWD;$PWD\tests"
+& C:\Users\USer\miniconda3\envs\vggt\python.exe -B -m unittest test_manual_responsiveness test_manual_evidence test_manual_views test_control_points_workspace test_control_import_navigation test_control_comparison_help test_control_acceleration test_manual_cameras test_spherical_refinement test_spherical_integrity test_desktop_ui test_gui_presets test_abu_m54 test_m54_objects test_native_inspection test_viewer_workspace test_fast_loader test_fast_viewer test_run_manifest test_360dvo_cache test_dvo_tracks test_rig_cameras_csv test_rig_designer test_splitter_masks
+```
+
+Numeric Windows144.07dpi test with48 synthetic original panoramas and a mapped
+1500x900 grid,2500x1400 tool window; no screenshots:
+
+| Measurement | Before | After |
+|---|---:|---:|
+| 80 fractional-wheel events: handler work | 63.65ms | 3.33ms |
+| Burst complete, including GUI processing | 69.32ms | 19.00ms |
+| Burst arrange calls | 80 | 1 |
+| Separate full-notch frame median / P95 | 6.29/11.57ms | 8.09/12.38ms |
+| Left child-target drag | 0px | +120px |
+| Settings/right child-target drag | 0px | -150px |
+| Measurement-height child-target drag | 0px | -65px |
+| Additional decodes while scrolling | 0 | 0 |
+
+The old small-delta path over-scrolled; this comparison measures input/layout cost,
+not identical visual scroll distance. Single-notch latency did not materially
+improve; the important gains are burst/backlog removal and correct fine movement.
+Continuous Fast-guide frame median/P95
+28.12/36.49ms,
+including its fixed16ms schedule. Repeated press/move gestures measured
+53.39/73.72ms, compared with
+143.57/168.20ms for old live
+full-pane updates. These are different resize modes. The final content repaint
+still costs 111.01ms median,
+144.68ms P95 at this large size. Auto avoids doing
+that paint at every movement; it does not eliminate Tk/GDI or promise60fps.
+Maximum central geometry mismatch: 0px.
+Synthetic process RSS 88.23MiB.
+
+Authorized48 real panoramas were decoded read-only in a withdrawn window, with
+numerical output only: 1.169s cold,48 decoded,0 failures,
+warm photo lookup median/P95 0.001100/
+0.001200ms,0 additional photo builds over480 lookups.
+RGB cache 2.62MiB; process RSS
+79.72MiB. A warm lookup excludes painting. Source photos,
+filenames and pixel buffers were neither emitted nor copied into the release.
+No screenshot capture or dataset uploads were used in this update.
+
+Cache limits remain128 RGB thumbnails,128 Tk photo variants and128 failures, with
+two decode workers. This is CPU/Pillow/Tk presentation work; no new CUDA training
+or prediction tensors were introduced. Shared M54 still uses its existing OpenGL
+renderer. Per-process OpenGL VRAM is not instrumented under WDDM. Solver/matching
+GPU behaviour and source geometry are unchanged by these interface corrections.
+
+## Main release and backup
+
+The main VERSION.txt is reconciled with the last published isolated release
+0.1.5.4, then version_manager.py --bump publishes v0.1.5.5. C# Suite/versioned
+launchers are recompiled. All active source, headers, docs/tests, executables,
+walkthrough and Abu_Align copies match both full v0.1.5.5 snapshots. The completed
+shared work is committed on codex/manual-ui-responsiveness, with clean main
+Git status. Earlier isolated snapshots are preserved in their attached worktree.
+No upstream repository source or user dataset was changed. Read the complete
+file inventory in [MANUAL_UI_RELEASE_FILES.md](MANUAL_UI_RELEASE_FILES.md).
+
+
+---
+
+# Abu Align & Train v0.1.5.0: Exact SO(3) Tait-Bryan ZYX Euler angles for 360 Splitter cubemaps, live Log Monitor, and Postshot alignment parity
+
+- Camera Orientation Parity: Resolved non-perpendicular / distorted cubemap frustums in Postshot. Mathematical root cause: replaced flawed spherical polar co-latitude elevation with strict SO(3) Tait-Bryan ZYX Euler angles compounding (R_cam_c2w = R_pano_c2w * R_rig_cam). All 6 cubemap faces (front, right, back, left, up, down) maintain 100% perpendicularity (orthogonal angles 90.0000° and 180.0000° with machine-epsilon dot-product error < 1e-15).
+- Direct Postshot Import: Matches RealityScan OpenSFM_01.csv and OpenSFM_02.csv standards, enabling direct import of generated cameras.csv into Postshot without requiring manual RealityScan intermediate alignment.
+- Reference Datasets Regenerated: Overwrote cameras.csv, per-perspective tables, and XMP metadata in both client reference datasets (Folder A: Perspectives 02 with refined_reconstruction_06.json; Folder B: P3 with refined_reconstruction_05.json) across all 3,558 camera views.
+- Real-time Log Monitor: Implemented collapsible dark-mode Log Monitor in 360 Splitter dialog with auto-scrolling, clear, copy to clipboard, syntax-highlighted status levels, and synchronized toggle triggers in both the 3D viewport toolbar ('Logs' button) and the bottom action bar ('📜 Log Monitor ▼').
+- Rig Designer UI: Styled Log Monitor toggle buttons to match Abu Align design tokens and preserved terminal syntax highlighting.
+
+---
+
+# Abu Align & Train v0.1.4.9: Launch shared Abu M54 viewer and responsive resizable 360 controls
+
+UI root causes: deferred horizontal splitter resizing, repeated packing on Configure and normal-quality scaling while dragging produced delayed feedback. Splitters now resize live, layout updates only on visibility changes, drawing coalesces and a lighter mip/nearest preview restores normal quality after 100 ms of inactivity. Properties and Measurements now have a vertical divider; the form scrolls independently and a compact Measurement actions menu leaves space for a taller table. Condensed 3D bars retain viewport height under combined scaling settings.
+
+Abu 3D Viewer M54 (Abu M54): shared float64 scene/file/transform/picking/grid core, one native WGL/OpenGL renderer for the main Align/Train workspace, manual controls and standalone app, and shared browser tools. Added control/camera/cloud-sample orbit pivots, double-click/O, orbit-on-selection, world up, grid plane/elevation, camera frustums/trajectory, point shading/size, view bookmarks and modeless scene tools. Existing main camera/photo inspection, look-through, profiles and A/B workflows remain available. Main browser layers normalize in the same A display frame to preserve global-coordinate detail.
+
+Model operations: translate, rotate XYZ and positive uniform scale move clouds, camera centres/orientations and triangulated controls together. Native undo/redo/reset history survives reopening tools. Manual B transforms disable auto fitting. Source data/control measurements stay immutable; explicit full-source exports write new JSON/PLY/camera CSV/transform records. Native PLY copies retain float64 coordinates. Integer transforms inputs keep fractional output rotations/translations. Frame copying is not BA or independent accuracy; separate survey/control frames and existing training packages are not silently changed.
+
+File/app integration: OpenSfM/spherical JSON, transforms JSON, binary/ASCII PLY, exact Abu quaternion CSV and documented RealityScan-style angle CSV, COLMAP image/point text/binary files and model folders, TUM/ACE0 trajectories, XYZ/PTS and M54 scene NPZ. Companion cloud/camera files are discovered. Unsupported conventions, disconnected components, truncated tracks and source/output collisions fail explicitly. Built Abu_M54.exe with csc.exe and registered the per-user Windows Open with candidate without replacing defaults. Updated AGENTS.md and HANDOVER_TO_GPT6.md to direct future agents to M54 instead of adding viewer forks.
+
+Lifecycle fixes: loader/comparison/export jobs capture data, queues and plain process state instead of retaining Tk window owners. Installed Viser 0.2.23 stop only signals a daemon whose final console print can race Python shutdown. The app-side adapter joins its exact owned server thread for up to three seconds; repeated stops and Ctrl+C are clean. All M54 browser servers bind loopback and deny public sharing before private scene data. No upstream repositories or installed package files were changed.
+
+Verification: complete acceptance suite passed 99 tests in 71.041 seconds with exit code 0. Final focused native/browser/export/lifecycle checks passed 39 tests in 14.826 seconds with exit code 0. Includes independent bearing/pose invariance, immutable sources and controls, full JSON/PLY/CSV precision, coordinate differences near 1e9, integer transforms, RC Euler convention, binary truncation, picking/grid/pivots/history, live divider resizing, native GPU contexts, standalone isolated loading, real local Viser callbacks and prior CUDA/refinement/UI regressions. Root Python syntax verified for 85 files. Reproduction commands and exact scope are in docs/ABU_M54_VERIFICATION.md.
+
+Synthetic local benchmark: NVIDIA RTX 4090/OpenGL 4.6 (driver 610.62), 50000 points and 593 cameras/frustums plus trajectory/grid, 60 GPU-completed frames: median 16.58 ms, P95 18.26 ms (glFinish included). Forty 5760x2880 panorama draws: normal median/P95 17.89/31.51 ms; resizing preview 7.01/12.65 ms. This is synthetic single-PC timing, not guaranteed FPS, a client-scene benchmark or accuracy evidence. No client images/data were uploaded or included in Git.
+
+Memory/VRAM: benchmark observed RSS maximum 269500416 bytes (about 257 MiB); RGB mip assets 66096000 bytes. One 50000-point float64 XYZ/uint8 RGB pair is 1350000 bytes before normalized arrays, previews, cameras/search structures. Clouds/caches/history are bounded; frustum geometry is vectorized/cached and contexts/processes/server threads close with their hosts. Peak additional OpenGL VRAM was not instrumented; no CUDA training tensors added. Parsing and full exports can temporarily exceed retained display memory.
+
+Primary files: new abu_m54.py, abu_m54_native.py, abu_m54_tools.py, abu_m54_browser.py, abu_m54_host.py, abu_m54_app.py, abu_m54_launcher.cs, Abu_M54.exe, benchmark_m54.py and tests/test_abu_m54.py. Updated native_inspection.py, viewer_workspace.py, fast_viewer.py, control_points_native_3d.py compatibility alias, control_points_3d.py, control_points_comparison.py, control_points_workspace.py, panorama_viewport.py, desktop_ui.py, control_points_help.py, tests/test_viewer_workspace.py, release_checkpoint.py and AGENTS.md. Docs: new ABU_M54.md/ABU_M54_VERIFICATION.md plus user guide/SPHERICAL_CONTROLS/HANDOVER updates. Release synchronizes GUI/CLI/training version headers, C# launchers, all walkthroughs, active root/mirror files and both v0.1.4.9 snapshots. Completed v0.1.4.8 splitter/UI changes from the other agent are preserved.
+
+---
+
 # Abu Align & Train v0.1.4.8: 360 Splitter UI overhaul, expansive sliders and direct keyboard parameter input
 
 Layout & Ergonomics: Overhauled the 360 Splitter (Virtual Rig Designer) parameter rows. Widened the left settings column to 620px and reduced scroll body padding to 12px, unlocking spacious 360px–385px slider tracks for Cameras, Horizontal FOV, Overlap %, and Lens Distortion ($k_1$). Completely resolved slider crowding previously caused by inline badges and checkboxes.

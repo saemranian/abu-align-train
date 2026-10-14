@@ -33,7 +33,7 @@ class DesktopTests(unittest.TestCase):
             for child in widget.winfo_children(): yield from descendants(child)
         prepare = next(w for w in descendants(self.root) if isinstance(w, tk.Menubutton) and w.cget('text') == 'Prepare input ▾')
         menu = self.root.nametowidget(prepare.cget('menu'))
-        index = next(i for i in range(menu.index('end')+1) if menu.type(i) == 'command' and menu.entrycget(i, 'label') == '360° manual control points')
+        index = next(i for i in range(menu.index('end')+1) if menu.type(i) == 'command' and menu.entrycget(i, 'label') == 'Manual control points')
         theme = ttk.Style(self.root).theme_use()
         from control_points_ui import open_editor
         opened = []
@@ -42,7 +42,7 @@ class DesktopTests(unittest.TestCase):
         with patch('control_points_ui.open_editor', side_effect=factory):
             menu.invoke(index); self.root.update()
             dialogs = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]
-            self.assertTrue(any('Control Points' in w.title() for w in dialogs))
+        self.assertTrue(any('Manual control points' in w.title() for w in dialogs))
         self.assertEqual(ttk.Style(self.root).theme_use(), theme)
         for editor in opened: editor.close()
 

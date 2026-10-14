@@ -11,8 +11,11 @@ import numpy as np
 from run_manifest import write_manifest
 
 
-def run(image_paths, output, mapper='incremental', device='auto', features=6000, width=2048, resume=False):
+def run(image_paths, output, mapper='incremental', device='auto', features=6000, width=2048, resume=False,mask_policy=None):
     import pycolmap
+    from manual_image_policy import select_images
+    image_paths,_=select_images(image_paths,mask_policy)
+    if resume and mask_policy and mask_policy.get('mask_dir'):raise ValueError('Masked extraction requires a fresh model; cached databases cannot silently change masks.')
     output = Path(output); output.mkdir(parents=True, exist_ok=True)
     previous = json.loads((output/'run_manifest.json').read_text()) if (output/'run_manifest.json').exists() else None
     if (output/'database.db').exists() and not resume:
@@ -36,6 +39,10 @@ def run(image_paths, output, mapper='incremental', device='auto', features=6000,
         raise ValueError('Resume inputs/configuration differ from the stored manifest')
     if resume: manifest_path.unlink(missing_ok=True)
     reader = pycolmap.ImageReaderOptions(camera_model='EQUIRECTANGULAR')
+    if mask_policy and mask_policy.get('mask_dir'):
+        from manual_image_policy import stage_masks
+        sizes={item['name']:(item['width'],item['height']) for item in manifest['images']}
+        records=stage_masks(mask_policy,sizes,output/'masks',fill_missing=True);reader.mask_path=str(output/'masks')
     extraction = pycolmap.FeatureExtractionOptions()
     extraction.use_gpu = gpu; extraction.max_image_size = width
     extraction.num_threads = min(8, os.cpu_count() or 4)

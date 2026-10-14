@@ -86,7 +86,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.4.8 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.5.5 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -1922,6 +1922,14 @@ def main():
         sys.exit(1)
 
     # Subsample if requested
+    from manual_image_policy import validate_policy,Masks,select_images
+    image_policy=validate_policy(json.loads(Path(args.control_points).read_text(encoding='utf-8')).get('image_policy')) if args.control_points else validate_policy()
+    image_paths,omitted_images=select_images(image_paths,image_policy)
+    if omitted_images:image_policy=dict(image_policy,excluded_images=sorted(set(image_policy['excluded_images'])|{name for name,_ in omitted_images}))
+    if omitted_images:print(f'      * Image policy:  {len(omitted_images)} disabled/fully masked originals omitted')
+    if not image_paths:raise ValueError('All input images are disabled.')
+    if image_policy['mask_dir'] and args.engine not in {'opensfm','native_colmap','360dvo','dvo'}:raise ValueError('Initial mask layers currently require OpenSfM, native COLMAP or 360DVO. Other engines support image exclusions and post-alignment masked refinement.')
+    if image_policy['mask_dir'] and Path(image_policy['mask_dir']).resolve()==Path(scan_dir).resolve():raise ValueError('Keep masks in a separate folder from original images.')
     if args.stride > 1:
         image_paths = image_paths[::args.stride]
     if args.max_frames and len(image_paths) > args.max_frames:
@@ -1929,12 +1937,9 @@ def main():
 
     num_frames = len(image_paths)
     if args.control_points:
-        if args.engine not in ['opensfm','360dvo','dvo','native_colmap']:
-            raise ValueError('Manual spherical controls are supported by OpenSfM, 360DVO and native COLMAP.')
         from control_points_pipeline import validate_selected_controls
-        validated_controls=validate_selected_controls(args.control_points,image_paths)
-        if args.engine=='opensfm' and args.projection!='equirectangular':
-            raise ValueError('Manual spherical controls require the equirectangular OpenSfM projection.')
+        require_spherical=args.engine in ['360dvo','dvo','native_colmap'] or args.engine=='opensfm' and args.projection in ['equirectangular','spherical']
+        validated_controls=validate_selected_controls(args.control_points,image_paths,require_spherical)
         if not 1<=args.spherical_ba_points<=50000 or not 5<=args.spherical_ba_iterations<=500:
             raise ValueError('Invalid spherical control-refinement budget.')
     with Image.open(image_paths[0]) as sample_img:
@@ -1964,6 +1969,19 @@ def main():
             snapshot=Path(output_dir)/('control_points.snapshot_'+uuid.uuid4().hex[:8]+'.json')
         atomic_json(snapshot,validated_controls)
         args.control_points=str(snapshot)
+    if image_policy['mask_dir']:
+        from manual_image_policy import stage_masks
+        mask_sizes={}
+        for p in image_paths:
+            with Image.open(p) as image:mask_sizes[Path(p).name]=image.size
+        mask_records=stage_masks(image_policy,mask_sizes,Path(output_dir)/'input_masks')
+        image_policy=dict(image_policy,mask_dir=str(Path(output_dir)/'input_masks'),invert_masks=False)
+        atomic_json(Path(output_dir)/'image_policy.input.json',dict(policy=image_policy,mask_layers=mask_records))
+        # Post-alignment refinement consumes the same immutable staged masks.
+        # Retain omitted originals in the run policy, even though their masks
+        # were intentionally not staged into this engine's selected image set.
+        validated_controls['image_policy']=dict(image_policy)
+        atomic_json(Path(args.control_points),validated_controls)
     print(f"      * Target Output: {output_dir}")
     if args.engine in ["opensfm", "native_colmap", "360dvo", "dvo"]:
         from run_manifest import write_manifest
@@ -2258,7 +2276,7 @@ def main():
         native_output = os.path.join(output_dir, 'native_colmap')
         report = run_native_colmap(image_paths, native_output, args.native_colmap_mapper,
                                   args.native_colmap_device, args.native_colmap_features,
-                                  args.native_colmap_width)
+                                  args.native_colmap_width,mask_policy=image_policy)
         components = sorted(Path(native_output).glob('component_*/reconstruction.json'))
         source = max(components, key=lambda path: len(json.loads(path.read_text(encoding='utf-8'))[0]['shots']))
         reconstruction = pycolmap.Reconstruction(source.parent)
@@ -2292,9 +2310,10 @@ def main():
             bundle_interval=args.opensfm_bundle_interval,
             optimize_camera_parameters=args.opensfm_optimize_camera
         )
+        opensfm.mask_policy=image_policy
 
         if opensfm.opensfm_bin is not None:
-            opensfm.setup_workspace(image_paths)
+            opensfm.setup_workspace(image_paths,mask_policy=image_policy)
             success = opensfm.run_pipeline()
             if success:
                 from opensfm_engine import opensfm_to_pycolmap, load_opensfm_points_from_json, strip_camera_gizmos_from_ply
@@ -2406,6 +2425,7 @@ def main():
             clear_cache=getattr(args, "clear_cache", False),
             cache_dir=getattr(args, "cache_dir", None),
             allow_fallback=args.dvo_allow_fallback,
+            mask_policy=image_policy,
         )
         inf_elapsed = time.time() - inf_start
         print()
@@ -2475,22 +2495,26 @@ def main():
             engine, model, image_paths, num_frames, total_images_found, device, dtype, vggt_res, args
         )
 
-    if args.spherical_refine or args.control_points:
-        if engine not in ['opensfm', '360dvo', 'dvo', 'native_colmap']:
-            raise ValueError('Spherical refinement currently accepts OpenSfM/360DVO outputs')
+    if args.spherical_refine or args.control_points and any(p.get('enabled',True) for p in validated_controls['points']):
         candidates = [os.path.join(output_dir, 'opensfm_workspace', 'reconstruction.json'),
                       os.path.join(output_dir, 'opensfm', 'reconstruction.json'),
                       os.path.join(output_dir, 'reconstruction.json')]
         source = next((p for p in candidates if os.path.isfile(p)), None)
-        if not source:
-            raise RuntimeError('No spherical reconstruction available for refinement')
+        if not source and reconstruction is not None and reconstruction.num_reg_images()>0:
+            from manual_camera_geometry import colmap_component
+            from control_points_model import atomic_json
+            source=str(Path(output_dir)/'manual_input'/'reconstruction.json');Path(source).parent.mkdir(exist_ok=True)
+            atomic_json(source,[colmap_component(reconstruction)],indent=None)
+        if not source:raise RuntimeError('No calibrated camera reconstruction available for manual refinement')
         from spherical_refinement import refine
         from opensfm_engine import opensfm_to_pycolmap
         refined = os.path.join(output_dir, 'refined', 'reconstruction.json')
         report = refine(source, refined, args.control_points, args.spherical_ba_points,args.spherical_ba_iterations,args.spherical_ba_backend)
-        shutil.copy2(args.control_points,Path(refined).with_suffix('.controls.json'))
-        print(f"Spherical refinement: {report['before_angular_rms_deg']:.4f} -> {report['after_angular_rms_deg']:.4f} degrees RMS")
-        reconstruction = opensfm_to_pycolmap(refined)
+        if args.control_points:shutil.copy2(args.control_points,Path(refined).with_suffix('.controls.json'))
+        print(f"Manual refinement: {report['before_angular_rms_deg']:.4f} -> {report['after_angular_rms_deg']:.4f} degrees RMS")
+        from manual_camera_geometry import load_alignment,spherical,to_pycolmap
+        refined_component,refined_cameras=load_alignment(refined)
+        reconstruction = opensfm_to_pycolmap(refined) if all(spherical(c) for c in refined_cameras.values()) else to_pycolmap(refined_component)
         dense_3d = np.array([p.xyz for p in reconstruction.points3D.values()], dtype=np.float32)
         dense_rgb = np.array([p.color for p in reconstruction.points3D.values()], dtype=np.uint8)
         # Keep the native handoff consistent with the corrected model used below.

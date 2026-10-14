@@ -80,7 +80,10 @@ class PanoramaViewport:
         self.photos = []
         self.render_job = None
         self.closed = False
+        self.suspended=False
         self.last_render_pixels = 0
+        self.resize_settle_job = None
+        self.resizing = False
         self.on_measure, self.on_select = on_measure, on_select
         self.on_image_navigation=None
         self.arrow_browse=True
@@ -117,15 +120,22 @@ class PanoramaViewport:
 
     def resize(self, event):
         t = self.transform
+        if (t.width, t.height) == (max(1, event.width), max(1, event.height)): return
         was_fit = abs(t.zoom-min(t.width/t.image_width, t.height/t.image_height)) < 1e-6
         t.width, t.height = max(1, event.width), max(1, event.height)
         if was_fit: t.fit()
         else: t.constrain()
+        self.resizing = True
+        if self.resize_settle_job: self.canvas.after_cancel(self.resize_settle_job)
+        self.resize_settle_job = self.canvas.after(100, self.resize_settled)
         self.request_draw()
         self.on_navigation(self)
 
+    def resize_settled(self):
+        self.resize_settle_job = None; self.resizing = False; self.request_draw()
+
     def request_draw(self):
-        if self.closed or self.render_job: return
+        if self.closed or self.suspended or self.render_job: return
         self.render_job = self.canvas.after(16, self.scheduled_draw)
     def scheduled_draw(self):
         self.render_job = None
@@ -210,14 +220,14 @@ class PanoramaViewport:
         if self.render_job:
             self.canvas.after_cancel(self.render_job)
         self.render_job = None
-        if self.closed: return
+        if self.closed or self.suspended: return
         canvas, t = self.canvas, self.transform
         canvas.delete('all'); self.photos = []; self.last_render_pixels = 0
         if not self.asset:
             canvas.create_text(t.width/2, t.height/2, text=self.overlay or 'Open an alignment to begin', fill='#a0adb5', font=('Segoe UI', 12)); return
         factor, level = self.asset.levels[0]
         for candidate_factor, candidate in self.asset.levels:
-            if candidate_factor*t.zoom <= 1: factor, level = candidate_factor, candidate
+            if candidate_factor*t.zoom <= (2 if self.resizing else 1): factor, level = candidate_factor, candidate
         left, top = t.image_at(0, 0); right, bottom = t.image_at(t.width, t.height)
         y0, y1 = max(0, top), min(t.image_height, bottom)
         wrapped = t.wrap and t.image_width*t.zoom > t.width
@@ -229,7 +239,7 @@ class PanoramaViewport:
                 box = (max(0, int(x0/factor)), max(0, int(y0/factor)), min(level.width, math.ceil(x1/factor)), min(level.height, math.ceil(y1/factor)))
                 crop = level.crop(box)
                 sw = max(1, math.ceil(crop.width*factor*t.zoom)); sh = max(1, math.ceil(crop.height*factor*t.zoom))
-                photo = ImageTk.PhotoImage(crop.resize((sw, sh), Image.Resampling.NEAREST if self.pixelated else Image.Resampling.BILINEAR), master=canvas)
+                photo = ImageTk.PhotoImage(crop.resize((sw, sh), Image.Resampling.NEAREST if self.pixelated or self.resizing else Image.Resampling.BILINEAR), master=canvas)
                 self.photos.append(photo); self.last_render_pixels += sw*sh
                 sx = (box[0]*factor+shift*t.image_width-t.cx)*t.zoom+t.width/2
                 sy = (box[1]*factor-t.cy)*t.zoom+t.height/2
@@ -254,6 +264,8 @@ class PanoramaViewport:
 
     def close(self):
         self.closed = True
+        if self.resize_settle_job:
+            self.canvas.after_cancel(self.resize_settle_job); self.resize_settle_job = None
         if self.render_job:
             self.canvas.after_cancel(self.render_job); self.render_job = None
         self.asset = None; self.photos.clear()

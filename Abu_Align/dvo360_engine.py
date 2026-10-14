@@ -687,12 +687,16 @@ def run_360dvo_reconstruction(
     cache_dir: Optional[str] = None,
     log_callback = None,
     allow_fallback: bool = True,
+    mask_policy=None,
 ) -> Tuple[object, np.ndarray, np.ndarray]:
     """
     Executes 360DVO Deep Visual Odometry on the input image list.
     Outputs: pycolmap.Reconstruction, dense_3d (np.ndarray), dense_rgb (np.ndarray).
     """
     dense_3d = np.zeros((0, 3), dtype=np.float32)
+    from manual_image_policy import select_images
+    image_paths,_=select_images(image_paths,mask_policy)
+    if not image_paths:raise ValueError('No usable 360DVO images remain after exclusions/masks.')
     dense_rgb = np.zeros((0, 3), dtype=np.uint8)
     has_opened_browser = False
     def log(msg: str):
@@ -745,6 +749,14 @@ def run_360dvo_reconstruction(
                 "runner_sha256": file_hash(runner_src),
                 "tracks_sha256": file_hash(os.path.join(os.path.dirname(__file__), "dvo_tracks.py")),
                 "weights_sha256": file_hash(weights_path) if weights_path and os.path.isfile(weights_path) else None}
+    if mask_policy and mask_policy.get('mask_dir'):
+        from manual_image_policy import Masks
+        from PIL import Image
+        mask_sizes={}
+        for p in image_paths:
+            with Image.open(p) as image:mask_sizes[os.path.basename(p)]=image.size
+        settings['image_masks']=Masks(mask_policy).validate_catalog(mask_sizes)
+        settings['mask_invert']=bool(mask_policy.get('invert_masks',False));settings['mask_adapter_sha256']=file_hash(os.path.join(os.path.dirname(__file__),'manual_dvo_masks.py'))
     manifest = write_manifest(image_paths, manifest_path, "360dvo", settings,
                               runtime_path=wsl_bridge.win_to_wsl_path if wsl_bridge else None)
 
@@ -850,6 +862,11 @@ def run_360dvo_reconstruction(
         viz_arg = f"--viz --port {port}" if enable_viz else ""
         dense_arg = "--dense_cloud" if dense_cloud else ""
         grad_arg = "" if gradient_bias else "--no_gradient_bias"
+        mask_arg=''
+        if mask_policy and mask_policy.get('mask_dir'):
+            policy_file=os.path.join(output_dir,'dvo.mask_policy.json')
+            with open(policy_file,'w',encoding='utf-8') as stream:json.dump(mask_policy,stream)
+            mask_arg=f"--mask-policy '{wsl_bridge.win_to_wsl_path(policy_file)}' "
 
         wsl_cmd = (
             f"cd {wsl_bridge.WSL_360DVO_DIR} && "
@@ -861,7 +878,7 @@ def run_360dvo_reconstruction(
             f"--patches {patches_per_frame} --ba_window {local_ba_window} --scale {metric_scale} "
             f"--patch_lifetime {patch_lifetime} --final_ba_iters {final_ba_iters} --keyframe_thresh {keyframe_thresh} "
             f"--load_res {load_res} "
-            f"{viz_arg} {dense_arg} {grad_arg}"
+            f"{viz_arg} {dense_arg} {grad_arg} {mask_arg}"
         )
 
         if enable_viz:
@@ -1034,6 +1051,8 @@ def run_360dvo_reconstruction(
 
     # Mask polar regions (zenith top and nadir bottom) to eliminate tripod shadows and sky artifacts
     mask = np.zeros((h, w), dtype=np.uint8)
+    from manual_image_policy import Masks
+    mask_set=Masks(mask_policy)
     y_start = int(h * polar_mask_pct)
     y_end = int(h * (1.0 - polar_mask_pct))
     if y_end > y_start:
@@ -1066,6 +1085,7 @@ def run_360dvo_reconstruction(
             continue
 
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        layer=mask_set.array(os.path.basename(p),(w,h));frame_mask=mask if layer is None else mask*layer.astype('uint8')
         cur_time = float(i)
 
         if prev_gray is not None and prev_kps is not None and len(prev_kps) >= 8:
@@ -1074,6 +1094,8 @@ def run_360dvo_reconstruction(
             p1_b, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev_gray, p2, None, winSize=(21, 21), maxLevel=3)
             fb_err = np.linalg.norm(prev_kps - p1_b, axis=1)
             valid = (st1.flatten() == 1) & (st2.flatten() == 1) & (fb_err < 1.5)
+            xy=np.nan_to_num(p2).astype(int);valid &= (xy[:,0]>=0)&(xy[:,0]<w)&(xy[:,1]>=0)&(xy[:,1]<h)
+            valid &= frame_mask[np.clip(xy[:,1],0,h-1),np.clip(xy[:,0],0,w-1)]>0
 
             val_p1 = prev_kps[valid]
             val_p2 = p2[valid]
@@ -1160,7 +1182,7 @@ def run_360dvo_reconstruction(
             maxCorners=n_features,
             qualityLevel=0.01,
             minDistance=min_dist,
-            mask=mask
+            mask=frame_mask
         )
         prev_kps = kps_new.reshape(-1, 2) if kps_new is not None else None
         prev_gray = gray

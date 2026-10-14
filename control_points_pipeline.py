@@ -5,13 +5,18 @@ from PIL import Image
 from control_points_model import validate_controls
 
 
-def validate_selected_controls(path, image_paths):
+def validate_selected_controls(path, image_paths, require_spherical=True):
     data=validate_controls(json.loads(Path(path).read_text(encoding='utf-8')))
     selected={Path(p).name:Path(p) for p in image_paths}
     if len(selected)!=len(image_paths):raise ValueError('Control alignment requires unique image basenames.')
     sizes={}
-    active=[p for p in data['points'] if p.get('enabled',True)]
-    if not active:raise ValueError('No enabled control points. Disable the controls option, or add measured points.')
+    from manual_image_policy import effective_controls
+    catalog={}
+    for name,p in selected.items():
+        with Image.open(p) as image:catalog[name]=image.size
+    effective,_=effective_controls(data,{**data.get('image_sizes',{}),**catalog})
+    active=[p for p in effective['points'] if p.get('enabled',True)]
+    if not active and not data.get('image_policy'):raise ValueError('No enabled control points. Disable the controls option, or add measured points.')
     for point in active:
         if len(point['observations'])<2:raise ValueError(f"{point['id']}: add measurements in at least two images.")
         for observation in point['observations']:
@@ -20,7 +25,9 @@ def validate_selected_controls(path, image_paths):
             if name not in sizes:
                 with Image.open(selected[name]) as image:sizes[name]=image.size
             width,height=sizes[name]
-            if width!=2*height:raise ValueError('Manual spherical controls require original full 2:1 panoramas.')
+            if require_spherical and width!=2*height:raise ValueError('Manual spherical controls require original full 2:1 panoramas.')
+            family=data.get('image_projection')
+            if family=='perspective' and require_spherical or family=='spherical' and not require_spherical:raise ValueError('Control image projection differs from the selected engine camera projection.')
             saved=data.get('image_sizes',{}).get(name)
             if saved is not None and list(saved)!=[width,height]:raise ValueError(f'{name}: control-file image dimensions differ from the selected originals.')
             x,y=observation['pixel']

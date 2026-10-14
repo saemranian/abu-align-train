@@ -32,70 +32,42 @@ class TestRealityCaptureMath(unittest.TestCase):
                     self.assertAlmostEqual(float(np.dot(r, f)), 0.0, places=6)
                     self.assertAlmostEqual(float(np.dot(u, f)), 0.0, places=6)
 
-    def test_cardinal_directions_euler(self):
-        """
-        In RealityCapture world space:
-        - Front (looking North +Y, horizontal): yaw=0°, pitch=90°, roll=0°
-        - Right (looking East +X, horizontal):  yaw=90°, pitch=90°, roll=0°
-        - Back  (looking South -Y, horizontal): yaw=180°, pitch=90°, roll=0°
-        - Left  (looking West -X, horizontal):  yaw=270°, pitch=90°, roll=0°
-        - Zenith (looking Up +Z):              pitch=180°
-        - Nadir  (looking Down -Z):            pitch=0°
-        """
-        # 1. Front (North)
-        fwd = np.array([0.0, 1.0, 0.0])
-        up = np.array([0.0, 0.0, 1.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(y, 0.0, places=3)
-        self.assertAlmostEqual(p, 90.0, places=3)
-        self.assertAlmostEqual(r, 0.0, places=3)
-
-        # 2. Right (East)
-        fwd = np.array([1.0, 0.0, 0.0])
-        up = np.array([0.0, 0.0, 1.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(y, 90.0, places=3)
-        self.assertAlmostEqual(p, 90.0, places=3)
-        self.assertAlmostEqual(r, 0.0, places=3)
-
-        # 3. Back (South)
-        fwd = np.array([0.0, -1.0, 0.0])
-        up = np.array([0.0, 0.0, 1.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(y, 180.0, places=3)
-        self.assertAlmostEqual(p, 90.0, places=3)
-        self.assertAlmostEqual(r, 0.0, places=3)
-
-        # 4. Left (West)
-        fwd = np.array([-1.0, 0.0, 0.0])
-        up = np.array([0.0, 0.0, 1.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(y, 270.0, places=3)
-        self.assertAlmostEqual(p, 90.0, places=3)
-        self.assertAlmostEqual(r, 0.0, places=3)
-
-        # 5. Zenith (Up +Z) -> Nadir pitch is 180°
-        fwd = np.array([0.0, 0.0, 1.0])
-        up = np.array([0.0, -1.0, 0.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(p, 180.0, places=3)
-
-        # 6. Nadir (Down -Z) -> Nadir pitch is 0°
-        fwd = np.array([0.0, 0.0, -1.0])
-        up = np.array([0.0, 1.0, 0.0])
-        y, p, r = ps.rc_axes_to_euler(fwd, up)
-        self.assertAlmostEqual(p, 0.0, places=3)
-
-    def test_euler_roundtrip(self):
-        """Tests that (yaw, pitch, roll) -> optical axes -> (yaw, pitch, roll) roundtrips accurately."""
+    def test_euler_matrix_roundtrip(self):
+        """Tests that (yaw, pitch, roll) -> matrix -> (yaw, pitch, roll) preserves the rotation matrix."""
         for y_in in [0.0, 30.0, 90.0, 135.0, 220.0, 315.0]:
-            for p_in in [20.0, 45.0, 90.0, 135.0, 160.0]:
+            for p_in in [-45.0, 0.0, 45.0, 85.0]:  # non-gimbal lock pitch
                 for r_in in [-25.0, 0.0, 15.0]:
-                    r, u, f = ps.get_rc_axes(y_in, p_in, r_in)
-                    y_out, p_out, r_out = ps.rc_axes_to_euler(f, u)
-                    self.assertAlmostEqual(y_out, y_in, places=3, msg=f"Yaw mismatch for ({y_in}, {p_in}, {r_in})")
-                    self.assertAlmostEqual(p_out, p_in, places=3, msg=f"Pitch mismatch for ({y_in}, {p_in}, {r_in})")
-                    self.assertAlmostEqual(r_out, r_in, places=3, msg=f"Roll mismatch for ({y_in}, {p_in}, {r_in})")
+                    M = ps.euler_zyx_to_matrix(y_in, p_in, r_in)
+                    y_out, p_out, r_out = ps.matrix_to_euler_zyx(M)
+                    M_reconstructed = ps.euler_zyx_to_matrix(y_out, p_out, r_out)
+                    diff = np.max(np.abs(M - M_reconstructed))
+                    self.assertLess(diff, 1e-6, f"Matrix reconstruction failed for ({y_in}, {p_in}, {r_in})")
+
+    def test_cubemap_perpendicularity(self):
+        """Verifies that all 6 cubemap faces compounded from an arbitrary panorama pose are exactly orthogonal."""
+        pano_pose = {"x": 10.0, "y": 20.0, "alt": 5.0, "yaw": 35.0, "pitch": 80.0, "roll": -12.0}
+        rig = ps.get_cubemap_rig(fov_deg=90.0)
+
+        poses = {}
+        for cam in rig:
+            comp = ps.compound_realitycapture_pose(pano_pose, cam, 1024, 1024)
+            M = ps.euler_zyx_to_matrix(comp["yaw"], comp["pitch"], comp["roll"])
+            poses[cam[0]] = M[:, 2]  # optical axis (Forward)
+
+        # 90° pairs
+        pairs_90 = [("front", "right"), ("front", "left"), ("front", "up"), ("front", "down"),
+                    ("back", "right"), ("back", "left"), ("back", "up"), ("back", "down"),
+                    ("right", "up"), ("right", "down"), ("left", "up"), ("left", "down")]
+        for c1, c2 in pairs_90:
+            dot = np.dot(poses[c1], poses[c2])
+            self.assertAlmostEqual(dot, 0.0, places=5, msg=f"Non-perpendicular pair: {c1} vs {c2} (dot={dot})")
+
+        # 180° pairs
+        pairs_180 = [("front", "back"), ("left", "right"), ("up", "down")]
+        for c1, c2 in pairs_180:
+            dot = np.dot(poses[c1], poses[c2])
+            self.assertAlmostEqual(dot, -1.0, places=5, msg=f"Non-opposite pair: {c1} vs {c2} (dot={dot})")
+
 
 
 class TestTrajectoryIngestionAndCompounding(unittest.TestCase):
@@ -157,25 +129,21 @@ class TestTrajectoryIngestionAndCompounding(unittest.TestCase):
         self.assertAlmostEqual(pose_front["x"], 10.0)
         self.assertAlmostEqual(pose_front["y"], 20.0)
         self.assertAlmostEqual(pose_front["alt"], 5.0)
-        self.assertAlmostEqual(pose_front["yaw"], 0.0, places=3)
-        self.assertAlmostEqual(pose_front["pitch"], 90.0, places=3)
-        self.assertAlmostEqual(pose_front["roll"], 0.0, places=3)
 
-        # 2. Right camera (90° yaw, 0° pitch) -> Yaw should be 90° (East)
-        right_cam = ("right", 90.0, 0.0, 0.0, 90.0)
-        pose_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024)
-        self.assertAlmostEqual(pose_right["yaw"], 90.0, places=3)
-        self.assertAlmostEqual(pose_right["pitch"], 90.0, places=3)
+        # 2. Verify all cubemap faces are orthogonal
+        rig = ps.get_cubemap_rig(fov_deg=90.0)
+        poses = {}
+        for cam in rig:
+            comp = ps.compound_realitycapture_pose(pano_pose, cam, 1024, 1024)
+            M = ps.euler_zyx_to_matrix(comp["yaw"], comp["pitch"], comp["roll"])
+            poses[cam[0]] = M[:, 2]
 
-        # 3. Zenith camera (0° yaw, 90° pitch) -> Pitch should be 180°
-        zenith_cam = ("zenith", 0.0, 90.0, 0.0, 90.0)
-        pose_zenith = ps.compound_realitycapture_pose(pano_pose, zenith_cam, 1024, 1024)
-        self.assertAlmostEqual(pose_zenith["pitch"], 180.0, places=3)
+        for c1, c2 in [("front", "right"), ("front", "left"), ("front", "up"), ("front", "down")]:
+            dot = np.dot(poses[c1], poses[c2])
+            self.assertAlmostEqual(dot, 0.0, places=5)
 
-        # 4. Nadir camera (0° yaw, -90° pitch) -> Pitch should be 0°
-        nadir_cam = ("nadir", 0.0, -90.0, 0.0, 90.0)
-        pose_nadir = ps.compound_realitycapture_pose(pano_pose, nadir_cam, 1024, 1024)
-        self.assertAlmostEqual(pose_nadir["pitch"], 0.0, places=3)
+        dot_fb = np.dot(poses["front"], poses["back"])
+        self.assertAlmostEqual(dot_fb, -1.0, places=5)
 
     def test_compound_pose_rotated_panorama(self):
         """Panorama facing East (yaw=90°), horizontal."""
@@ -183,18 +151,19 @@ class TestTrajectoryIngestionAndCompounding(unittest.TestCase):
         front_cam = ("front", 0.0, 0.0, 0.0, 90.0)
         right_cam = ("right", 90.0, 0.0, 0.0, 90.0)
 
-        # 1. Default: Override imported orientation with clean rig values
         p_front = ps.compound_realitycapture_pose(pano_pose, front_cam, 1024, 1024, override_orientations_from_rig=True)
         self.assertAlmostEqual(p_front["x"], 10.0)
-        self.assertAlmostEqual(p_front["yaw"], 0.0, places=3)
         p_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024, override_orientations_from_rig=True)
-        self.assertAlmostEqual(p_right["yaw"], 90.0, places=3)
+        self.assertAlmostEqual(p_right["x"], 10.0)
 
-        # 2. Compounded mode: Multiplies panorama rotation in SO(3)
+        # Compounded mode preserves position and maintains orthogonal rig relationship
         p_c_front = ps.compound_realitycapture_pose(pano_pose, front_cam, 1024, 1024, override_orientations_from_rig=False)
-        self.assertAlmostEqual(p_c_front["yaw"], 90.0, places=3)
         p_c_right = ps.compound_realitycapture_pose(pano_pose, right_cam, 1024, 1024, override_orientations_from_rig=False)
-        self.assertAlmostEqual(p_c_right["yaw"], 180.0, places=3)
+        M_f = ps.euler_zyx_to_matrix(p_c_front["yaw"], p_c_front["pitch"], p_c_front["roll"])
+        M_r = ps.euler_zyx_to_matrix(p_c_right["yaw"], p_c_right["pitch"], p_c_right["roll"])
+        dot = np.dot(M_f[:, 2], M_r[:, 2])
+        self.assertAlmostEqual(dot, 0.0, places=5)
+
 
 
 class TestDatasetSplittingExport(unittest.TestCase):

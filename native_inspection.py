@@ -266,9 +266,82 @@ class NativeInspection:
 
     def _build_canvas(self):
         self.scene_body.pack(fill='both',expand=True)
-        self.canvas=tk.Canvas(self.scene_body,bg=BG,highlightthickness=0,bd=0)
-        self.canvas.pack(side='left',fill='both',expand=True)
-        self.canvas.bind('<Configure>',lambda e:self.render())
+        from abu_m54_native import M54NativeViewer
+        from abu_m54_host import ViewerHost
+        self.m54=M54NativeViewer(ViewerHost(self.winfo_toplevel(),self._m54_camera),self.scene_body,compact=True)
+        self.m54.pack(side='left',fill='both',expand=True);self.canvas=self.m54.surface
+        button(self.navigation_bar,'M54 tools',self.m54.open_tools).grid(row=0,column=0,sticky='w')
+        # Re-run the existing responsive row after adding the shared viewer tools.
+        wrap_row(self.navigation_bar)
+        self._m54_key=None
+        self._m54_syncing=False;self._m54_fit_key=None;self._m54_manual=False;self.m54.on_view_change=self._m54_view
+        self.m54.on_model_transform=self._m54_transform;self.m54.on_comparison=self._m54_comparison
+
+    def _m54_transform(self,viewer,layer):
+        self._m54_manual=True
+        if layer=='B':self.register_runs.set(False);self._m54_fit_key=(self.layers['B']['path'],False,id(self.layers['B']['points']))
+    def _m54_comparison(self,result):
+        if self._m54_manual and result:
+            report=result['report'];value=report['camera_position_rmse']
+            self.compare_info.configure(text=f"Abu M54 transformed preview · {report['matched_cameras']} matched cameras · RMS "+('unavailable' if value is None else f'{value:.5g} scene units')+'. Agreement, not accuracy.')
+
+    def _m54_view(self,viewer):
+        if self._m54_syncing or viewer.data is None:return
+        self.yaw,self.pitch,self.distance=viewer.yaw,viewer.pitch,viewer.distance
+        self.center=viewer.origin+viewer.center*viewer.scale;self.scale=viewer.scale
+        self.pan_x,self.pan_y=viewer.pan
+        if viewer.look_rotation is None:self.view_matrix=None
+
+    def _m54_camera(self,name):
+        index=next((i for i,c in enumerate(self.cameras) if c['name']==name),None)
+        if index is not None:
+            self.selected_camera=index;self.camera_combo.current(index)
+            if self.auto_open_photo_var.get():self.open_selected_camera_window()
+
+    def render(self):
+        if not hasattr(self,'m54'):return
+        self._m54_syncing=True
+        try:self._render_m54()
+        finally:self._m54_syncing=False
+    def _render_m54(self):
+        from abu_m54 import from_records, transform_scene
+        from control_points_comparison import compare_scenes
+        mode=self.compare_mode.get()
+        key=(id(self.points),tuple((c['name'],c.get('layer','A')) for c in self.cameras),mode)
+        if key!=self._m54_key and self.layers:
+            self._m54_key=key
+            self.m54.set_data(from_records(self.layers['A']))
+            self.m54.compare.mode.set(mode)
+            if 'B' in self.layers:
+                b=from_records(self.layers['B']);self.m54.compare.b=b
+                # Capture legacy frame registration as an ordinary M54 transform,
+                # so exported copies and numeric scene tools use the same matrix.
+                fit_key=(self.layers['B']['path'],self.register_runs.get(),id(self.layers['B']['points']))
+                if self.register_runs.get() and fit_key!=self._m54_fit_key:
+                    pairs=camera_pairs(self.layers['A']['cameras'],self.layers['B']['cameras'])
+                    s,r,t=similarity(np.array([self.layers['B']['cameras'][j]['pos'] for i,j in pairs]),np.array([self.layers['A']['cameras'][i]['pos'] for i,j in pairs]))
+                    from abu_m54 import SceneTransform
+                    self.m54.transforms['B']=SceneTransform(t,Rotation.from_matrix(r).as_euler('xyz',degrees=True),s)
+                elif fit_key!=self._m54_fit_key:
+                    from abu_m54 import SceneTransform
+                    self.m54.transforms['B']=SceneTransform()
+                self._m54_fit_key=fit_key
+                self.m54.set_comparison(compare_scenes(self.m54.data,transform_scene(b,self.m54.transforms['B']),distances=self.distance_colors.get()))
+            else:self.m54.compare.b=None;self.m54.set_comparison(None)
+        self.m54.cloud.set(self.show_points_var.get());self.m54.cameras.set(self.show_cameras_var.get())
+        self.m54.trajectory.set(self.show_trajectory_var.get());self.m54.point_size.set(self.point_size_var.get());self.m54.camera_size.set(self.cam_scale_var.get())
+        self.m54.shading.set({'rgb':'RGB','depth':'Depth','elevation':'Elevation','white':'White'}[self.color_mode_var.get()])
+        self.m54.compare.color.set('B distance to A' if self.distance_colors.get() else 'Layer colors' if mode=='Overlay' else 'Original RGB')
+        if self.m54.data:
+            self.m54.yaw=self.yaw;self.m54.pitch=self.pitch;self.m54.distance=max(.02,self.distance)
+            self.m54.look_rotation=None if self.view_matrix is None else np.diag([1.,-1.,-1.])@self.view_matrix
+            if self.view_matrix is not None:self.m54.distance=0.
+            self.m54.center=(self.center-self.m54.origin)/self.m54.scale;self.m54.pan[:]=[self.pan_x,self.pan_y]
+        self._camera_screen=[]
+        if self.show_cameras_var.get() and self.cameras and self.m54.data:
+            points=np.array([(c['pos']-self.m54.origin)/self.m54.scale for c in self.cameras]);screen,valid,depth=self.m54.project(points)
+            self._camera_screen=[(screen[i,0],screen[i,1],depth[i],i) for i in np.flatnonzero(valid)]
+        self.m54.request()
 
     def toggle_inspector(self):
         self._inspector_visible=not self._inspector_visible
@@ -359,17 +432,17 @@ class NativeInspection:
         self.stats_lbl.configure(text='Loading reconstruction… navigation remains available.')
         paths = {key:os.path.join(directory,name) for key,name in [('A',a),('B',b)] if name and (key=='A' or name!=a)}
         cached = {p:self._run_cache[p] for p in paths.values() if p in self._run_cache}
+        results=self._load_results
         def work():
-            from fast_viewer import find_run_assets, read_ply_data, load_run_cameras
+            from abu_m54 import load_scene,to_records
             try:
                 layers={}
                 for key,path in paths.items():
                     if path in cached:
                         layers[key]=cached[path]
                         continue
-                    asset,*_=find_run_assets(path)
-                    points,colors=read_ply_data(asset) if asset else (None,None)
-                    cameras,source=load_run_cameras(path)
+                    scene=load_scene(path,limit=150000);record=to_records(scene)
+                    points,colors=record['points'],record['colors'];cameras=record['cameras'];source='Abu M54 shared loader'
                     if points is None or not len(points):
                         points,colors=np.empty((0,3),np.float32),np.empty((0,3),np.uint8)
                     mask=np.isfinite(points).all(1)
@@ -379,9 +452,9 @@ class NativeInspection:
                     indices=np.linspace(0,max(0,count-1),min(150000,count),dtype=int)
                     cameras=[c for c in cameras if np.isfinite(c['pos']).all() and np.isfinite(c['wxyz']).all() and np.linalg.norm(c['wxyz'])>0]
                     layers[key]=dict(points=points[indices],colors=colors[indices],cameras=cameras,count=count,path=path,source=source)
-                self._load_results.put((generation,layers,a,None))
+                results.put((generation,layers,a,None))
             except Exception as error:
-                self._load_results.put((generation,None,a,str(error)))
+                results.put((generation,None,a,str(error)))
         threading.Thread(target=work,daemon=True).start()
 
     def _poll_load(self):
@@ -468,6 +541,8 @@ class NativeInspection:
             self.compare_info.configure(text=f'{error} Previous scene retained.')
 
     def reset_view(self):
+        if hasattr(self,'m54') and self.m54.data:
+            self.m54.yaw,self.m54.pitch=-25.,20.;self.m54.look_rotation=None;self.m54.fit();return
         points=[] if self.points is None or not self.show_points_var.get() else [self.points]
         if self.cameras and (self.show_cameras_var.get() or self.show_trajectory_var.get()):
             points.append(np.array([c['pos'] for c in self.cameras]))
@@ -489,6 +564,7 @@ class NativeInspection:
         super().set_preset_view(yaw,pitch)
 
     def save_view(self):
+        if hasattr(self,'m54'):self.m54.save_view()
         self._saved_view=(self.center.copy(),self.scale,self.yaw,self.pitch,self.distance,self.pan_x,self.pan_y,
                           None if self.view_matrix is None else self.view_matrix.copy())
         self.stats_lbl.configure(text='View saved. Restore view returns to this position and angle.')
@@ -497,11 +573,14 @@ class NativeInspection:
         if self._saved_view is not None:
             center,self.scale,self.yaw,self.pitch,self.distance,self.pan_x,self.pan_y,matrix=self._saved_view
             self.center=center.copy(); self.view_matrix=None if matrix is None else matrix.copy(); self.render()
+            if hasattr(self,'m54'):self.m54.restore_view()
         else:
             self.stats_lbl.configure(text='No saved view yet. Choose Save view first.')
 
     def _select_named_camera(self,event=None):
         self.selected_camera=self.camera_combo.current(); self.render()
+        if hasattr(self,'m54') and 0<=self.selected_camera<len(self.cameras):
+            camera=self.cameras[self.selected_camera];self.m54.camera_selected=camera['name'];self.m54.selected_camera_layer=camera.get('layer','A');self.m54.selection_kind='camera';self.m54.request()
         if getattr(self, 'photo_viewer_window', None) is not None and self.photo_viewer_window.winfo_exists():
             self.open_selected_camera_window()
 
@@ -550,6 +629,7 @@ class NativeInspection:
         self.photo_viewer_window.show_camera(cam, img_path, self.selected_camera, len(self.cameras))
 
     def _bind_mouse_events(self):
+        if hasattr(self,'m54'):return
         super()._bind_mouse_events()
         self.canvas.configure(takefocus=True,highlightthickness=1,highlightbackground=BG,highlightcolor=ACCENT)
         self.canvas.bind('<ButtonRelease-1>',self._pick_camera)
@@ -597,6 +677,7 @@ class NativeInspection:
 
     def _cleanup_inspection(self,event):
         if event.widget is self:
+            if hasattr(self,'m54'):self.m54.close()
             self.after_cancel(self._poll_id)
             if hasattr(self, '_thumb_executor'):
                 try:

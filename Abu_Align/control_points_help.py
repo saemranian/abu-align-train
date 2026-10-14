@@ -8,27 +8,36 @@ from ui_icons import line_icon
 
 TOPICS={
  'start':('Start here','folder',[
-  ('1 · Open your panoramas','folder','Open alignment for an existing spherical reconstruction, or Open panoramas to prepare measurements before alignment. Use the original full 2:1 images.','workflow','Open alignment','open'),
+  ('1 · Open your original images','folder','Open a native reconstruction JSON or calibrated COLMAP model. For 360 use original full 2:1 images; for perspective choose Perspective in Settings before preparing points without alignment. VGGT-Omega camera calibration and tracks are imported locally.','workflow','Open alignment','open'),
   ('2 · Mark the same feature','target','Add a point, then click the same physical corner in two or more translated views. Three to six well-separated views help reveal mistaken measurements.','measure','Add a point','new'),
   ('3 · Review, save, refine','save','Check the observations and angular errors. Save controls, choose hardware and budget, then Refine the open alignment. Main Align runs registration first and applies saved controls afterward.','refine','Refinement settings','settings')]),
  'images':('Find images & predictions','camera',[
+  ('Choose the content of each view','compare','The selector beside Left and Right independently switches Image, Grid or 3D. Use Grid beside Image to measure quickly, two Images to compare, or 3D beside Image to inspect a camera. Zoom and the existing M54 viewpoint are retained when switching.','views',None,None),
   ('Keep the image grid beside you','camera','Search or filter the continuous grid, choose Left or Right, and double-click a thumbnail. The grid stays open, at the same scroll position. Close it only with its own window close button.','grid','Open image grid','grid'),
   ('Jump to likely views','target','After two reliable measurements, Predicted images lists unmeasured views ranked near supporting cameras. Open & focus a prediction, inspect the actual feature, then click it yourself. Occlusion is unknown.','predictions','Predicted images','predictions'),
+  ('Search visually across all originals','search','Predicted images → Visual search examines every enabled original in all scope, including unregistered images. Local ALIKED/LightGlue validates neighbourhood matches; SIFT is the fallback. Set up local AI model downloads only public weights. Inference has network access disabled. Verify every proposal; ambiguity and one-view support are labelled.','predictions','Predicted images','predictions'),
+  ('Choose images and mask layers','sliders','Project → Images & masks enables/disables originals and assigns masks. Black ignores, white keeps; invert is explicit. Dimensions must match originals. Apply validates, then Save controls persists. Main Align filters images before engine input; Refine filters cameras and measured rays. Masked/disabled points need two remaining usable views.','grid','Images & masks','image_policy'),
   ('Measurements and predictions','target','Yellow thumbnail markers are saved measurements. Blue markers are geometric guidance. A predicted location is never saved automatically.','measure',None,None)]),
  'navigation':('Zoom, pan & shortcuts','search',[
-  ('Navigate the panorama','search','Wheel zooms around your cursor. Middle-drag or Space + left-drag pans. F fits the panorama; 1 restores original pixel scale. Wrap panorama seam lets you work across the left/right boundary.','mouse',None,None),
+  ('Resize the panels','sliders','Drag the visible divider handles to resize the point list, image views and properties/settings. The Properties divider adjusts the measurement-table height. Settings → Pane resizing offers Auto, Fast and Live. Auto uses a responsive guide in large windows; release commits the size. Project → Reset pane sizes restores the starting layout.','views','Refinement settings','settings'),
+  ('Navigate the panorama','search','Wheel zooms around your cursor. Middle-drag or Space + left-drag pans. F fits the panorama; 1 restores original pixel scale. Ctrl+F focuses the selected measurement/prediction; in a 3D pane it focuses the selected object. Wrap panorama seam lets you work across the left/right boundary.','mouse',None,None),
   ('Browse or adjust precisely','sliders','Left/Right browses images in the active pane. Ctrl+Arrow nudges a measurement by 0.1 px; Shift+Arrow nudges 10 px. Disable arrow browsing for plain-arrow 1 px nudges. Drag an existing marker to correct it.','measure','Navigation settings','settings'),
   ('Undo and save','save','Ctrl+Z undoes a point, measurement, property or distance edit. Ctrl+Y redoes it. Ctrl+S saves the controls. Right-click a marker removes that measurement.','workflow',None,None)]),
  'points':('Point types & CSV','target',[
   ('Choose the right role','target','Tie: same feature in several images. Ground control: surveyed local XYZ used by refinement. Check: surveyed XYZ withheld from optimization for independent evaluation.','points','Point properties','properties'),
+  ('Give measurements more room','sliders','Drag the horizontal divider above Measurements upward to make the table taller. The point properties above it remain scrollable; measurement actions stay reachable. Column widths also resize.','grid','Point properties','properties'),
+  ('Read errors at a glance','activity','Angular error numbers are green through 0.10°, yellow through 0.50° and red above 0.50°. Settings changes the limits; Save controls retains them. A dash means unavailable. Colours show ray consistency, not surveyed accuracy. Check red observations before tightening uncertainty.','errors','Error colour settings','settings'),
   ('Survey and distance constraints','sliders','Use realistic uncertainty. Ground control needs at least three non-collinear measured points to establish a frame. A known distance can establish scale. Check points cannot be distance endpoints.','points',None,None),
-  ('Import existing points','folder','Import CSV previews mapped image measurements or local XYZ and source units. Pixel measurements must refer to the same original panorama projection and resolution. For a perspective export, import names and re-mark the features.','grid','Import CSV','csv')]),
+  ('Import existing points','folder','Import CSV previews mapped image measurements or local XYZ and source units. Pixels must refer to the same original images, projection and resolution. Perspective CSV measurements can be used directly on those perspective originals; transferring them onto a panorama requires importing names and re-marking.','grid','Import CSV','csv')]),
  'refine':('Refine & export','activity',[
+  ('Continue from the latest good result','compare','Open the latest GOOD refined JSON with the same original images and saved controls. Add or correct measurements, then refine again. Start from the initial model for comparison or recovery. Repeating unchanged converged constraints cannot keep improving accuracy.','compare',None,None),
+  ('Tune evidence, then budgets','sliders','Use realistic pixel/survey uncertainty and distributed independent checks. Start with soft_l1, transition 1 and 10000 tracks. Default minimum parallax is 1°. Try 3–4 automatic views only if coverage remains. Increase budgets when convergence/check reports justify it. Tight tolerances do not correct wrong observations. Perspective intrinsics stay fixed.','refine','Refinement settings','settings'),
   ('Run without freezing the editor','activity','Auto uses CUDA for larger supported jobs; CPU uses analytic derivatives. The separate worker reports progress and supports cancellation. Higher budgets may improve the fit, but reaching a limit is not convergence.','refine','Refinement settings','settings'),
   ('Find the corrected outputs','save','A successful solve writes a new JSON, controls snapshot, report, sparse PLY and native camera CSV. Open result inspects the new model; Export cloud & camera CSV also works on an older saved result.','exports','Results & outputs','results'),
   ('Use the full pipeline','play','Use with main Align saves and attaches controls. The main Align button registers images, refines, and creates the prepared export/training dataset. Editor-only refinement does not replace an existing training package.','workflow',None,None)]),
  'compare':('3D & reconstruction comparison','compare',[
-  ('Navigate and select in 3D','cube','Drag to orbit, right/middle-drag to pan, wheel to zoom. Fit visible frames the displayed layers. Click a control or camera, or use its list. Focus selected centres the current selection.','mouse','Open 3D navigator','3d'),
+  ('Navigate and select in Abu M54','cube','Drag to orbit, right/middle-drag to pan, wheel to zoom. Click a control, camera or cloud sample. Double-click, press O or choose Orbit selected to orbit around it. Fit restores a scene-centred view.','mouse','Open 3D navigator','3d'),
+  ('Grid and model transformations','sliders','M54 tools opens ground grid, XY/XZ/YZ plane, elevation, shading, view bookmarks and orbit-on-selection. Move, rotate XYZ and uniformly scale the whole reconstruction. Undo/Redo/Reset changes the preview; Export transformed copy preserves the source. Survey coordinates in a separate control file are not transformed by export.','compare','Open 3D navigator','3d'),
   ('Load a read-only comparison','compare','A is the alignment open in the control-point editor. Open Compare reconstructions and Load B, or choose a completed run folder. Show A only, B only or Overlay. Switch A/B keeps the viewpoint. Controls belong to A.','compare','Compare reconstructions','compare'),
   ('Choose a common frame deliberately','sliders','Raw frames are shown first. Fit B to A uses matching camera names and at least three non-collinear centres. Allow scale fits a similarity; switch it off for rigid fitting. This changes the preview only.','compare',None,None),
   ('Interpret differences carefully','activity','Camera offsets and position/orientation differences show agreement. B distance to A colours sampled nearest-point distances; point density affects them. These are not ground-truth accuracy. Save a comparison report for troubleshooting.','compare',None,None)]),
@@ -37,6 +46,10 @@ TOPICS={
   ('A comparison will not fit','compare','Check matching image names and choose a single component. Collinear camera centres leave fitting ambiguous. Keep raw coordinates to inspect a metric change without fitting it away. A cloud-only PLY has no camera matches.','compare',None,None),
   ('Find the local session log','document','Results → Open troubleshooting log records edits, imports, settings, solver progress, errors and outputs. Images stay on this PC. No cubemap conversion is used by this tool.','logs','Open troubleshooting log','log')])
 }
+
+from manual_refinement_settings import ORIGINS,guide as parameter_guide
+for key,title in [('backend','Processing hardware'),('loss','Robust loss'),('max_points','Automatic landmarks'),('iterations','Solver budget'),('sigma_px','New measurement uncertainty'),('marker_size','Marker radius'),('loss_scale','Robust transition'),('auto_sigma_px','Automatic track uncertainty'),('min_track_views','Minimum automatic views'),('min_angle_deg','Minimum automatic parallax'),('ftol','Objective tolerance'),('xtol','Step tolerance'),('gtol','Gradient tolerance')]:
+    TOPICS['refine'][2].append((title,'sliders',parameter_guide(key),'refine','Refinement settings','settings'))
 
 
 def illustration(kind):
@@ -52,6 +65,16 @@ def illustration(kind):
         for x,label in [(12,'Image A'),(180,'Image B')]:
             rect((x,26,x+140,103));text(x+9,33,label);line([(x+20,91),(x+65,62),(x+107,94)],'#465e68');dot(x+65,62)
         line([(82,62),(246,62)],'#ffce73',1);text(105,5,'Same feature');text(82,106,'Two views · one point')
+    elif kind=='views':
+        for x,label in [(12,'Left · Grid'),(180,'Right · Image')]:
+            rect((x,12,x+140,105));text(x+8,20,label);line([(x+8,48),(x+132,48)],'#465e68',1)
+        for i in range(6):
+            x=22+i%3*42;y=58+i//3*21;rect((x,y,x+34,y+16))
+        line([(192,88),(222,64),(247,94),(294,70)],'#465e68');dot(247,94);text(70,108,'Image / Grid / 3D · each view')
+    elif kind=='errors':
+        for i,(value,color) in enumerate([('0.050°','#70dbc0'),('0.300°','#ffce73'),('1.000°','#ff7777')]):
+            y=10+i*34;rect((22,y,311,y+30));text(34,y+3,'Image '+str(i+1));text(200,y+3,value,color)
+        text(50,112,'Review high residuals first')
     elif kind=='grid' or kind=='predictions':
         for i in range(6):
             x=12+(i%3)*108;y=12+(i//3)*53;rect((x,y,x+96,y+43),'#70dbc0' if i==1 else '#344149')
@@ -147,6 +170,6 @@ class HelpExplorer(tk.Frame):
         elif target=='compare':
             e.open_3d()
             if e.native_3d:e.native_3d.compare.show()
-        else:getattr(e,{'open':'open','new':'new','grid':'open_grid','predictions':'open_predictions','csv':'import_csv','3d':'open_3d','log':'open_log'}[target])()
+        else:getattr(e,{'open':'open','new':'new','grid':'open_grid','predictions':'open_predictions','image_policy':'open_image_policy','csv':'import_csv','3d':'open_3d','log':'open_log'}[target])()
     def destroy(self):
         self.images.clear();self.cards=[];super().destroy()

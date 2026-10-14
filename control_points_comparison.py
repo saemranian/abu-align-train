@@ -82,15 +82,19 @@ def load_scene(source,limit=50000):
 
 def save_scene(path,scene):
     names=list(scene['centers']);metadata={k:scene[k] for k in ['source','total_points']};metadata['names']=names
+    for key in ['controls','m54_base_transform','untriangulated','warnings']:
+        if key in scene:metadata[key]=scene[key]
     np.savez_compressed(path,points=scene['points'],colors=scene['colors'],centers=np.asarray(list(scene['centers'].values())).reshape(-1,3),
-                        rotations=np.asarray([scene['camera_rotations'][n] for n in names]).reshape(-1,3,3),metadata=np.array(json.dumps(metadata)))
+                        rotations=np.asarray([scene['camera_rotations'][n] for n in names]).reshape(-1,3,3),metadata=np.array(json.dumps(metadata,default=lambda v:v.tolist() if isinstance(v,np.ndarray) else v.item())))
 
 
 def read_scene(path):
     with np.load(path,allow_pickle=False) as archive:
         data=json.loads(str(archive['metadata']));names=data.pop('names')
+        controls=data.pop('controls',{})
+        for value in controls.values():value['position']=np.asarray(value['position'],dtype=np.float64)
         return dict(data,points=archive['points'].copy(),colors=archive['colors'].copy(),centers=dict(zip(names,archive['centers'].copy())),
-                    camera_rotations=dict(zip(names,archive['rotations'].copy())),controls={})
+                    camera_rotations=dict(zip(names,archive['rotations'].copy())),controls=controls)
 
 
 def compare_scenes(a,b,register=False,allow_scale=True,distances=False):
@@ -135,7 +139,12 @@ def compare_scenes(a,b,register=False,allow_scale=True,distances=False):
 
 
 class ComparisonPanel:
+    @property
+    def process(self):return self.worker_state['process']
+    @process.setter
+    def process(self,value):self.worker_state['process']=value
     def __init__(self,navigator,parent):
+        self.worker_state={'process':None,'closed':False,'generation':0}
         self.nav=navigator;self.editor=navigator.editor;self.closed=False;self.a=self.b=None;self.result=None;self.generation=0;self.load_generation=0;self.process=None
         self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='Abu comparison');self.queue=queue.Queue();self.future=None
         self.frame=tk.Frame(parent,bg='#1a2024',width=340)
@@ -179,7 +188,8 @@ class ComparisonPanel:
         if changed:self.result=None;self.nav.set_comparison(None)
         if self.b and not equal:self.apply()
     def load_file(self):
-        value=filedialog.askopenfilename(parent=self.editor.window,title='Load comparison reconstruction B',filetypes=[('Reconstructions','*.json *.ply'),('All files','*.*')])
+        from abu_m54 import FORMATS
+        value=filedialog.askopenfilename(parent=self.editor.window,title='Load comparison reconstruction B',filetypes=[('M54 reconstruction / cloud / cameras',FORMATS),('All files','*.*')])
         if value:self.load(value)
     def load_folder(self):
         value=filedialog.askdirectory(parent=self.editor.window,title='Choose completed comparison run B')
@@ -187,24 +197,26 @@ class ComparisonPanel:
     def load(self,path):
         if self.process and self.process.poll() is None:self.process.terminate()
         self.load_generation+=1;generation=self.load_generation;self.summary.set('Loading B in a separate process… You can keep navigating.');self.show()
+        state=self.worker_state;state['generation']=generation;events=self.queue
         self.editor.audit.event('comparison_load',source=path)
         def work():
-            if self.closed or generation!=self.load_generation:return
+            if state['closed'] or generation!=state['generation']:return
             try:
                 with tempfile.TemporaryDirectory(prefix='abu_compare_') as folder:
-                    target=Path(folder)/'scene.npz';command=[sys.executable,'-B',str(Path(__file__).resolve()),'--source',str(path),'--output',str(target)]
-                    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));self.process=process
-                    if self.closed or generation!=self.load_generation:process.terminate()
+                    target=Path(folder)/'scene.npz';command=[sys.executable,'-B',str(Path(__file__).with_name('abu_m54_app.py')),'--load-worker',str(path),'--output',str(target)]
+                    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));state['process']=process
+                    if state['closed'] or generation!=state['generation']:process.terminate()
                     output,_=process.communicate()
-                    if self.process is process:self.process=None
-                    if self.closed or generation!=self.load_generation:return
+                    if state['process'] is process:state['process']=None
+                    if state['closed'] or generation!=state['generation']:return
                     if process.returncode:raise RuntimeError(output[-3000:] or 'Unable to load comparison reconstruction.')
-                    self.queue.put(('loaded',generation,read_scene(target)))
+                    events.put(('loaded',generation,read_scene(target)))
             except Exception as error:
-                if not self.closed and generation==self.load_generation:self.queue.put(('load_error',generation,str(error)))
+                if not state['closed'] and generation==state['generation']:events.put(('load_error',generation,str(error)))
         self.executor.submit(work)
     def clear(self):
         self.load_generation+=1;self.generation+=1
+        self.worker_state['generation']=self.load_generation
         if self.process and self.process.poll() is None:self.process.terminate()
         self.b=self.result=None;self.mode.set('A only');self.source.set('B: choose a reconstruction to compare');self.summary.set('Comparison cleared. A remains editable.');self.nav.set_comparison(None)
         self.selection_info.set('Select a camera to inspect its individual difference.')
@@ -230,14 +242,17 @@ class ComparisonPanel:
         if not self.a or not self.b or self.closed:return
         self.generation+=1;generation=self.generation
         if self.future:self.future.cancel()
-        a,b=self.a,self.b;register=self.registration.get();allow_scale=self.allow_scale.get();distance=self.color.get()=='B distance to A'
+        a,b=self.a,self.b
+        if hasattr(self.nav,'comparison_input_b'):b=self.nav.comparison_input_b(b)
+        register=self.registration.get();allow_scale=self.allow_scale.get();distance=self.color.get()=='B distance to A'
         self.summary.set('Preparing comparison… viewpoint preserved.')
+        events=self.queue;state=self.worker_state
         def work():
             try:
                 result=compare_scenes(a,b,register,allow_scale,distance)
-                if not self.closed and generation==self.generation:self.queue.put(('compared',generation,result))
+                if not state['closed']:events.put(('compared',generation,result))
             except Exception as error:
-                if not self.closed and generation==self.generation:self.queue.put(('compare_error',generation,str(error)))
+                if not state['closed']:events.put(('compare_error',generation,str(error)))
         self.future=self.executor.submit(work)
     def switch(self):
         if not self.b:self.summary.set('Load a comparison B first.');return
@@ -259,6 +274,10 @@ class ComparisonPanel:
             kind,generation,value=event
             if generation!=(self.load_generation if kind.startswith('load') else self.generation):continue
             if kind=='loaded':
+                if hasattr(self.nav,'transforms'):
+                    from abu_m54 import SceneTransform
+                    self.nav.transforms['B']=SceneTransform()
+                    for history in [self.nav.transform_history,self.nav.transform_redo]:history['B'].clear()
                 self.b=value;self.source.set('B · '+Path(value['source']).name);self.source_guide.text=value['source'];self.mode.set('Overlay');self.fit_pending=True;self.apply()
             elif kind=='compared':
                 self.result=value;report=value['report'];rmse=report['camera_position_rmse'];angle=report['camera_orientation_rms_deg']
@@ -279,6 +298,7 @@ class ComparisonPanel:
         self.poll_job=self.frame.after(60,self.poll)
     def close(self):
         self.closed=True;self.generation+=1;self.load_generation+=1;self.frame.after_cancel(self.poll_job)
+        self.worker_state['closed']=True;self.worker_state['generation']=self.load_generation
         if self.process and self.process.poll() is None:self.process.terminate()
         self.executor.shutdown(wait=False,cancel_futures=True)
 

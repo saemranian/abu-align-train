@@ -215,6 +215,27 @@ def enhance_rig_designer(app, ctx):
     guide_button = button(view_tools, "Controls", toggle_guide)
     guide_button.configure(pady=4, padx=8)
     guide_button.pack(side="left")
+
+    if "toggle_log_monitor" in ctx:
+        orig_toggle_log = ctx["toggle_log_monitor"]
+        log_button = button(view_tools, "Logs", None)
+        log_button.configure(pady=4, padx=8)
+        log_button.pack(side="left")
+
+        def sync_log_button():
+            t_btn = ctx.get("toggle_log_btn")
+            is_open = "▲" in (t_btn.cget("text") if t_btn else "")
+            log_button.configure(text="Hide logs" if is_open else "Logs",
+                                 fg=ACCENT if is_open else TEXT)
+
+        def handle_toggle_log():
+            orig_toggle_log()
+            sync_log_button()
+
+        log_button.configure(command=handle_toggle_log)
+        if "toggle_log_btn" in ctx and ctx["toggle_log_btn"]:
+            ctx["toggle_log_btn"].configure(command=handle_toggle_log)
+        ctx["log_button"] = log_button
     def dismiss_view_help(event):
         if controls_guide.winfo_manager():
             toggle_guide()
@@ -342,7 +363,11 @@ def enhance_rig_designer(app, ctx):
     ctx["auto_res_btn"].configure(text="Match source")
 
     def theme(widget):
+        if widget == ctx.get("log_monitor_frame"):
+            return
         for child in widget.winfo_children():
+            if child == ctx.get("log_monitor_frame"):
+                continue
             if isinstance(child, tk.Button) and child is not ctx["split_btn"]:
                 child.configure(bg=FIELD, fg=TEXT, activebackground=BORDER, relief="flat", bd=0,
                                 highlightthickness=1, highlightcolor=ACCENT, highlightbackground=FIELD,
