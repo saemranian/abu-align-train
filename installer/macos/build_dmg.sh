@@ -91,10 +91,16 @@ exec "$VENV_DIR/bin/python" "$APP_HOME/abu_align_gui.py" "$@"
 EOF
 chmod +x "$APP_BUNDLE/Contents/MacOS/AbuAlign"
 
-# Create Applications symlink for drag-and-drop installation
-ln -s /Applications "$STAGING_DIR/Applications"
+# Add quick instructions file inside DMG
+cat << 'EOF' > "$STAGING_DIR/READ_ME_FIRST.txt"
+Abu Align & Train - macOS Installation
+======================================
+1. Drag "Abu Align & Train.app" into your /Applications folder.
+2. Double-click "Abu Align & Train" to launch.
+   On first launch, it will automatically configure its isolated Python + Apple Silicon MPS environment in ~/Library/Application Support/AbuAlign.
+EOF
 
 DMG_OUT="$DIST_DIR/Abu_Align_and_Train_macOS_Universal.dmg"
 rm -f "$DMG_OUT"
-hdiutil create -volname "Abu Align & Train v${VERSION}" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_OUT"
+hdiutil create -volname "Abu Align and Train v${VERSION}" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_OUT"
 echo "[SUCCESS] Built: $DMG_OUT"

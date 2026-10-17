@@ -1,0 +1,11 @@
+The XMP element `<xcr:LockedPoseGroup>3</xcr:LockedPoseGroup>` is ignored because RealityScan expects `LockedPoseGroup` strictly as an attribute of `<rdf:Description>`.
+
+Please update the XMP generation template:
+1. Remove line 5: `<xcr:LockedPoseGroup>3</xcr:LockedPoseGroup>`
+2. Add `xcr:LockedPoseGroup="{FRAME_INTEGER_INDEX}"` directly inside the opening `<rdf:Description>` tag attributes, like this:
+
+<rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/"
+  xcr:Version="3"
+  xcr:LockedPoseGroup="{FRAME_INTEGER_INDEX}">
+
+Keep everything else in the body exactly as it is.

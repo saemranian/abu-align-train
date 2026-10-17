@@ -77,8 +77,8 @@ chmod +x "$BUILD_DIR/AppRun"
 cat << EOF > "$BUILD_DIR/abu-align.desktop"
 [Desktop Entry]
 Type=Application
-Name=Abu Align & Train
-Comment=Neural Photogrammetry & 3DGS Training Studio (v${VERSION})
+Name=Abu Align and Train
+Comment=Neural Photogrammetry and 3DGS Training Studio (v${VERSION})
 Exec=AppRun
 Icon=abu_icon
 Categories=Graphics;3DGraphics;Science;
@@ -87,6 +87,7 @@ EOF
 
 if [ -f "$ROOT_DIR/abu_icon.png" ]; then
     cp "$ROOT_DIR/abu_icon.png" "$BUILD_DIR/abu_icon.png"
+    cp "$ROOT_DIR/abu_icon.png" "$BUILD_DIR/.DirIcon"
 fi
 
 # Download appimagetool if not present
@@ -96,6 +97,6 @@ if [ ! -x "$APPIMAGETOOL" ]; then
     chmod +x "$APPIMAGETOOL"
 fi
 
-ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run "$BUILD_DIR" "$DIST_DIR/Abu_Align_and_Train_Linux_x86_64.AppImage"
+ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run -n "$BUILD_DIR" "$DIST_DIR/Abu_Align_and_Train_Linux_x86_64.AppImage"
 chmod +x "$DIST_DIR/Abu_Align_and_Train_Linux_x86_64.AppImage"
 echo "[SUCCESS] Built: $DIST_DIR/Abu_Align_and_Train_Linux_x86_64.AppImage"

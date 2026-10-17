@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.5.6"
+  #define MyAppVersion "0.1.5.7"
 #endif
 
 [Setup]
@@ -23,8 +23,6 @@ UninstallDisplayIcon={app}\Abu_Align_and_Train.exe
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

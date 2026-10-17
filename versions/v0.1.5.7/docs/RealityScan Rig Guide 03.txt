@@ -1,0 +1,33 @@
+The XMP has extensive duplicate syntax: almost every parameter (LockedPoseGroup, FocalLength35mm, PosePrior, DistortionModel, PrincipalPoints, CalibrationPrior) is declared twice—once as an attribute in <rdf:Description> and once as an inner child tag. This breaks XML parsing in RealityScan.
+
+Please replace the entire XMP output template with this clean, standardized element-based format:
+
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:xcr="http://www.capturingreality.com/ns/xcr/1.1/">
+      <xcr:Version>3</xcr:Version>
+      <xcr:LockedPoseGroup>{FRAME_INTEGER_INDEX}</xcr:LockedPoseGroup>
+      <xcr:CalibrationGroup>1</xcr:CalibrationGroup>
+      <xcr:DistortionGroup>1</xcr:DistortionGroup>
+      <xcr:InTexturing>1</xcr:InTexturing>
+      <xcr:InMeshing>1</xcr:InMeshing>
+      
+      <!-- Calibration Priors -->
+      <xcr:FocalLength35mm>10.392305</xcr:FocalLength35mm>
+      <xcr:PrincipalPointU>0.000000</xcr:PrincipalPointU>
+      <xcr:PrincipalPointV>0.000000</xcr:PrincipalPointV>
+      <xcr:DistortionModel>brown3</xcr:DistortionModel>
+      <xcr:DistortionCoeficients>0.000000 0.000000 0.000000 0.000000 0.000000 0.000000</xcr:DistortionCoeficients>
+      <xcr:CalibrationPrior>locked</xcr:CalibrationPrior>
+      <xcr:LensDistortionPrior>locked</xcr:LensDistortionPrior>
+
+      <!-- Trajectory & Pose Priors -->
+      <xcr:Coordinates>absolute</xcr:Coordinates>
+      <xcr:Position>{POS_X} {POS_Y} {POS_Z}</xcr:Position>
+      <xcr:Rotation>{R00} {R01} {R02} {R10} {R11} {R12} {R20} {R21} {R22}</xcr:Rotation>
+      <xcr:PosePrior>approximate</xcr:PosePrior>
+      <xcr:PoseAccuracyPosition>0.300000 0.300000 0.300000</xcr:PoseAccuracyPosition>
+      <xcr:PoseAccuracyRotation>0.001000 0.001000 0.001000</xcr:PoseAccuracyRotation>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>

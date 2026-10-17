@@ -2,14 +2,13 @@ name: Build & Publish Single-File Installers
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Release tag (e.g. v0.1.5.6)'
-        required: false
-        default: 'v0.1.5.6'
+
+concurrency:
+  group: release-main
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -38,15 +37,11 @@ jobs:
           }
           & $iscc "/DMyAppVersion=$version" "installer\windows\abu_align_setup.iss"
 
-      - name: Publish Windows Setup (.exe) to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Windows Installer Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          files: installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          name: windows-installer
+          path: installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe
 
   build-macos:
     name: macOS Installer (.dmg)
@@ -57,18 +52,15 @@ jobs:
 
       - name: Build macOS Universal DMG
         run: |
-          chmod +x installer/macos/build_dmg.sh
-          bash installer/macos/build_dmg.sh
+          tr -d '\r' < installer/macos/build_dmg.sh > installer/macos/build_dmg_lf.sh
+          chmod +x installer/macos/build_dmg_lf.sh
+          bash installer/macos/build_dmg_lf.sh
 
-      - name: Publish macOS (.dmg) to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload macOS Installer Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          files: installer/dist/Abu_Align_and_Train_macOS_Universal.dmg
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          name: macos-installer
+          path: installer/dist/Abu_Align_and_Train_macOS_Universal.dmg
 
   build-linux:
     name: Linux Single Binary (.AppImage)
@@ -80,16 +72,59 @@ jobs:
       - name: Build Linux AppImage
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y file desktop-file-utils
-          chmod +x installer/linux/build_appimage.sh
-          bash installer/linux/build_appimage.sh
+          sudo apt-get install -y file desktop-file-utils libfuse2
+          tr -d '\r' < installer/linux/build_appimage.sh > installer/linux/build_appimage_lf.sh
+          chmod +x installer/linux/build_appimage_lf.sh
+          bash installer/linux/build_appimage_lf.sh
 
-      - name: Publish Linux (.AppImage) to GitHub Release
+      - name: Upload Linux Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer
+          path: installer/dist/Abu_Align_and_Train_Linux_x86_64.AppImage
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Version Tag
+        id: version
+        run: |
+          RAW=$(tr -d '[:space:]vV' < VERSION.txt)
+          echo "ver=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+
+      - name: Download All Built Installers
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify Built Assets
+        run: |
+          ls -lh release-assets/
+
+      - name: Publish Installers to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
-          files: installer/dist/Abu_Align_and_Train_Linux_x86_64.AppImage
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Abu Align & Train ${{ steps.version.outputs.tag }}
+          body: |
+            ## 🚀 Abu Align & Train ${{ steps.version.outputs.tag }} — One-Click Single-File Installers
+
+            Download a **single installation file** for your operating system below:
+            - 🪟 **Windows (10 / 11 x64)**: `Abu_Align_and_Train_Setup_Windows_x64.exe`
+            - 🍎 **macOS (Apple Silicon & Intel)**: `Abu_Align_and_Train_macOS_Universal.dmg`
+            - 🐧 **Linux (x86_64 AppImage)**: `Abu_Align_and_Train_Linux_x86_64.AppImage`
+          files: |
+            release-assets/Abu_Align_and_Train_Setup_Windows_x64.exe
+            release-assets/Abu_Align_and_Train_macOS_Universal.dmg
+            release-assets/Abu_Align_and_Train_Linux_x86_64.AppImage
           generate_release_notes: true
           draft: false
           prerelease: false
