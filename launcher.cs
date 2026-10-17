@@ -16,10 +16,17 @@ namespace AbuAlignLauncher
                 string scriptPath = Path.Combine(appDir, "abu_align_gui.py");
                 
                 string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 string[] candidatePythons = new string[]
                 {
                     Path.Combine(appDir, "env", "pythonw.exe"),
                     Path.Combine(appDir, "env", "python.exe"),
+                    Path.Combine(appDir, "env", "Scripts", "pythonw.exe"),
+                    Path.Combine(appDir, "env", "Scripts", "python.exe"),
+                    Path.Combine(localAppData, @"AbuAlign\env\pythonw.exe"),
+                    Path.Combine(localAppData, @"AbuAlign\env\python.exe"),
+                    Path.Combine(localAppData, @"AbuAlign\env\Scripts\pythonw.exe"),
+                    Path.Combine(localAppData, @"AbuAlign\env\Scripts\python.exe"),
                     Path.Combine(userProfile, @"miniconda3\envs\abu_align\pythonw.exe"),
                     Path.Combine(userProfile, @"miniconda3\envs\abu_align\python.exe"),
                     Path.Combine(userProfile, @"miniconda3\envs\vggt\pythonw.exe"),
@@ -42,9 +49,42 @@ namespace AbuAlignLauncher
 
                 if (string.IsNullOrEmpty(pythonPath))
                 {
-                    MessageBox.Show("Python executable not found in standard Conda environments (abu_align or vggt).\nPlease run install_abu_align.bat or set up the conda environment.",
-                        "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
+                    string installerBat = Path.Combine(appDir, "install_abu_align.bat");
+                    if (File.Exists(installerBat))
+                    {
+                        DialogResult dr = MessageBox.Show(
+                            "Welcome to Abu Align & Train!\n\nFirst-time setup is required to configure the Python & GPU runtime.\nWould you like to run the automated setup now?",
+                            "Abu Align & Train - First-Time Setup",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Information);
+                        if (dr == DialogResult.Yes)
+                        {
+                            ProcessStartInfo setupPsi = new ProcessStartInfo();
+                            setupPsi.FileName = installerBat;
+                            setupPsi.WorkingDirectory = appDir;
+                            setupPsi.UseShellExecute = true;
+                            Process setupProc = Process.Start(setupPsi);
+                            if (setupProc != null)
+                            {
+                                setupProc.WaitForExit();
+                            }
+                            foreach (string candidate in candidatePythons)
+                            {
+                                if (File.Exists(candidate))
+                                {
+                                    pythonPath = candidate;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(pythonPath))
+                    {
+                        MessageBox.Show("Python runtime not found.\nPlease run install_abu_align.bat to complete the runtime setup.",
+                            "Abu Align - Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
                 }
 
                 if (!File.Exists(scriptPath))

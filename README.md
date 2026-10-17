@@ -1,20 +1,79 @@
 <div align="center">
-<h1>VGGT: Visual Geometry Grounded Transformer</h1>
 
-<a href="https://jytime.github.io/data/VGGT_CVPR25.pdf" target="_blank" rel="noopener noreferrer">
-  <img src="https://img.shields.io/badge/Paper-VGGT" alt="Paper PDF">
-</a>
-<a href="https://arxiv.org/abs/2503.11651"><img src="https://img.shields.io/badge/arXiv-2503.11651-b31b1b" alt="arXiv"></a>
-<a href="https://vgg-t.github.io/"><img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page"></a>
-<a href="https://huggingface.co/spaces/facebook/vggt"><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Demo-blue'></a>
+<h1>Abu Align & Train</h1>
+<h3>End-to-End Neural Photogrammetry, 360° Spherical Rig Processing & 3D Gaussian Splatting Studio</h3>
 
+<p>
+  <a href="https://github.com/saemranian/abu-align-train/releases/latest">
+    <img src="https://img.shields.io/github/v/release/saemranian/abu-align-train?label=Latest%20Release&style=for-the-badge&color=70dbc0" alt="Latest Release">
+  </a>
+  <a href="https://github.com/saemranian/abu-align-train/actions/workflows/release.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/saemranian/abu-align-train/release.yml?label=Installers%20Build&style=for-the-badge" alt="Build Status">
+  </a>
+  <a href="THIRD_PARTY_NOTICES.md">
+    <img src="https://img.shields.io/badge/License-Apache%202.0%20%2F%20Open%20Source-38bdf8?style=for-the-badge" alt="License">
+  </a>
+</p>
 
-**[Visual Geometry Group, University of Oxford](https://www.robots.ox.ac.uk/~vgg/)**; **[Meta AI](https://ai.facebook.com/research/)**
-
-
-[Jianyuan Wang](https://jytime.github.io/), [Minghao Chen](https://silent-chen.github.io/), [Nikita Karaev](https://nikitakaraevv.github.io/), [Andrea Vedaldi](https://www.robots.ox.ac.uk/~vedaldi/), [Christian Rupprecht](https://chrirupp.github.io/), [David Novotny](https://d-novotny.github.io/)
 </div>
 
+---
+
+## One-Click Download (Single Installation File)
+
+No manual terminal commands, Conda setups, or complex dependencies required. Download the **single installation file** for your operating system and launch the studio immediately:
+
+| Operating System | Single-File Installer Download | Instructions |
+| :--- | :---: | :--- |
+| **Windows 10 / 11 (64-bit)** | [**Download Windows Setup (.exe)**](https://github.com/saemranian/abu-align-train/releases/latest/download/Abu_Align_and_Train_Setup_Windows_x64.exe) | Double-click the `.exe` installer and launch **Abu Align & Train** from your Desktop. |
+| **macOS (Apple Silicon & Intel)** | [**Download macOS Disk Image (.dmg)**](https://github.com/saemranian/abu-align-train/releases/latest/download/Abu_Align_and_Train_macOS_Universal.dmg) | Open the `.dmg`, drag **Abu Align & Train.app** to `Applications`, and launch. |
+| **Linux (Ubuntu / Debian / Fedora)** | [**Download Linux AppImage (.AppImage)**](https://github.com/saemranian/abu-align-train/releases/latest/download/Abu_Align_and_Train_Linux_x86_64.AppImage) | Mark executable (`chmod +x`) or double-click to run directly—no root required. |
+
+> Looking for all versions and release notes? Visit the [**Official Releases Page**](https://github.com/saemranian/abu-align-train/releases).
+
+---
+
+## What is Abu Align & Train?
+
+**Abu Align & Train** unifies state-of-the-art neural photogrammetry, spherical $S^2$ structure-from-motion, 360° camera rig splitting, AI segmentation masking, and 3D Gaussian Splatting (3DGS) training into a single desktop studio:
+
+1. **Multi-Engine Photogrammetry & Alignment**:
+   - **VGGT-Omega / VGG-T3**: Feed-forward transformer 3D reconstruction in seconds.
+   - **Mapillary OpenSfM**: True spherical $S^2$ structure-from-motion for 360° equirectangular panoramas.
+   - **360DVO**: Direct visual odometry for continuous 360° video walks.
+   - **NVIDIA PyCuSFM & COLMAP**: GPU-accelerated feature matching and bundle adjustment.
+   - **Niantic ACE0**: Coordinate regression relocalization *(non-commercial research module)*.
+2. **360° Rig Designer & Cubemap Splitter**:
+   - Virtual multi-camera rig extraction with locked $90^\circ$ / custom FOV projections.
+   - Full 6-DoF trajectory prior compounding (`reconstruction.json`, `transforms.json`, `cameras.csv`, `images.txt`).
+   - Exact RealityCapture / RealityScan `.xmp` sidecar and `cameras.csv` generation.
+3. **AI Preprocessing & Quality Control Suite ("Abu Tools")**:
+   - **SAM 2 Masker**: Zero-shot AI tripod/nadir/operator removal across image sequences.
+   - **Blur Drop**: Multi-metric sharpness scoring (Laplacian, Tenengrad, FFT, CPBD).
+   - **Frame Picker & Video Extractor**: High-speed keyframe extraction.
+   - **M54 Control Points Workspace**: Interactive multi-view control point tie-point registration & 3D verification.
+4. **3D Gaussian Splatting (3DGS) Training & Live 3D Inspection**:
+   - Direct integration with **LichtFeld Studio** (Vulkan + GUT), **Nerfstudio Splatfacto**, **NVIDIA 3DGRUT**, and **PFGS360**.
+   - Built-in **Native 3D Workspace** & **Viser WebGL Viewer** with A/B run registration and residual inspection.
+
+---
+
+## Developer & AI Agent Release Workflow
+
+For contributors or AI coding agents updating this repository, publishing a new release with freshly compiled Windows, macOS, and Linux installers is fully automated:
+
+```bash
+python push_to_github.py "Brief summary of your changes"
+```
+This single command increments the base-10 version (`VERSION.txt`), updates `walkthrough.md`, recompiles the launcher binaries, commits, creates a version tag, and pushes to GitHub—automatically triggering **GitHub Actions** to build and attach the new `.exe`, `.dmg`, and `.AppImage` installers to GitHub Releases.
+
+---
+
+## License & Citations
+
+**Abu Align & Train** is distributed for free under the **Apache 2.0 License** (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [LICENSE.txt](LICENSE.txt) for upstream terms).
+
+If you use the VGGT neural backbone in academic work, please cite:
 ```bibtex
 @inproceedings{wang2025vggt,
   title={VGGT: Visual Geometry Grounded Transformer},
@@ -23,261 +82,3 @@
   year={2025}
 }
 ```
-
-## Updates
-
-- [May 18, 2026] The next step of VGGT — **VGGT-Omega** — has been released! Check it out at [https://vggt-omega.github.io/](https://vggt-omega.github.io/).
-
-
-- [May 15, 2026] We fixed an implementation issue that was keeping redundant intermediate tensors in memory. With the same GPU memory budget, VGGT can now run on roughly 2-3x more input frames! See [VGGT-Omega](https://vggt-omega.github.io/) for more details.
-
-
-
-- [July 29, 2025] We've updated the license for VGGT to permit **commercial use** (excluding military applications). All code in this repository is now under a commercial-use-friendly license. However, only the newly released checkpoint [**VGGT-1B-Commercial**](https://huggingface.co/facebook/VGGT-1B-Commercial) is licensed for commercial usage — the original checkpoint remains non-commercial. Full license details are available [here](https://github.com/facebookresearch/vggt/blob/main/LICENSE.txt). Access to the checkpoint requires completing an application form, which is processed by a system similar to LLaMA's approval workflow, automatically. The new checkpoint delivers similar performance to the original model. Please submit an issue if you notice a significant performance discrepancy.
-
-
-
-- [July 6, 2025] Training code is now available in the `training` folder, including an example to finetune VGGT on a custom dataset. 
-
-
-- [June 13, 2025] Honored to receive the Best Paper Award at CVPR 2025! Apologies if I’m slow to respond to queries or GitHub issues these days. If you’re interested, our oral presentation is available [here](https://docs.google.com/presentation/d/1JVuPnuZx6RgAy-U5Ezobg73XpBi7FrOh/edit?usp=sharing&ouid=107115712143490405606&rtpof=true&sd=true). Another long presentation can be found [here](https://docs.google.com/presentation/d/1aSv0e5PmH1mnwn2MowlJIajFUYZkjqgw/edit?usp=sharing&ouid=107115712143490405606&rtpof=true&sd=true) (Note: it’s shared in .pptx format with animations — quite large, but feel free to use it as a template if helpful.)
-
-
-- [June 2, 2025] Added a script to run VGGT and save predictions in COLMAP format, with bundle adjustment support optional. The saved COLMAP files can be directly used with [gsplat](https://github.com/nerfstudio-project/gsplat) or other NeRF/Gaussian splatting libraries.
-
-
-- [May 3, 2025] Evaluation code for reproducing our camera pose estimation results on Co3D is now available in the [evaluation](https://github.com/facebookresearch/vggt/tree/evaluation) branch. 
-
-
-## Overview
-
-Visual Geometry Grounded Transformer (VGGT, CVPR 2025) is a feed-forward neural network that directly infers all key 3D attributes of a scene, including extrinsic and intrinsic camera parameters, point maps, depth maps, and 3D point tracks, **from one, a few, or hundreds of its views, within seconds**.
-
-
-## Quick Start
-
-First, clone this repository to your local machine, and install the dependencies (torch, torchvision, numpy, Pillow, and huggingface_hub). 
-
-```bash
-git clone git@github.com:facebookresearch/vggt.git 
-cd vggt
-pip install -r requirements.txt
-```
-
-Alternatively, you can install VGGT as a package (<a href="docs/package.md">click here</a> for details).
-
-
-Now, try the model with just a few lines of code:
-
-```python
-import torch
-from vggt.models.vggt import VGGT
-from vggt.utils.load_fn import load_and_preprocess_images
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-# bfloat16 is supported on Ampere GPUs (Compute Capability 8.0+) 
-dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-
-# Initialize the model and load the pretrained weights.
-# This will automatically download the model weights the first time it's run, which may take a while.
-model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
-
-# Load and preprocess example images (replace with your own image paths)
-image_names = ["path/to/imageA.png", "path/to/imageB.png", "path/to/imageC.png"]  
-images = load_and_preprocess_images(image_names).to(device)
-
-with torch.no_grad():
-    with torch.cuda.amp.autocast(dtype=dtype):
-        # Predict attributes including cameras, depth maps, and point maps.
-        predictions = model(images)
-```
-
-The model weights will be automatically downloaded from Hugging Face. If you encounter issues such as slow loading, you can manually download them [here](https://huggingface.co/facebook/VGGT-1B/blob/main/model.pt) and load, or:
-
-```python
-model = VGGT()
-_URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
-```
-
-## Detailed Usage
-
-<details>
-<summary>Click to expand</summary>
-
-You can also optionally choose which attributes (branches) to predict, as shown below. This achieves the same result as the example above. This example uses a batch size of 1 (processing a single scene), but it naturally works for multiple scenes.
-
-```python
-from vggt.utils.pose_enc import pose_encoding_to_extri_intri
-from vggt.utils.geometry import unproject_depth_map_to_point_map
-
-with torch.no_grad():
-    with torch.cuda.amp.autocast(dtype=dtype):
-        images = images[None]  # add batch dimension
-        aggregated_tokens_list, ps_idx = model.aggregator(images)
-                
-    # Predict Cameras
-    pose_enc = model.camera_head(aggregated_tokens_list)[-1]
-    # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
-    extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, images.shape[-2:])
-
-    # Predict Depth Maps
-    depth_map, depth_conf = model.depth_head(aggregated_tokens_list, images, ps_idx)
-
-    # Predict Point Maps
-    point_map, point_conf = model.point_head(aggregated_tokens_list, images, ps_idx)
-        
-    # Construct 3D Points from Depth Maps and Cameras
-    # which usually leads to more accurate 3D points than point map branch
-    point_map_by_unprojection = unproject_depth_map_to_point_map(depth_map.squeeze(0), 
-                                                                extrinsic.squeeze(0), 
-                                                                intrinsic.squeeze(0))
-
-    # Predict Tracks
-    # choose your own points to track, with shape (N, 2) for one scene
-    query_points = torch.FloatTensor([[100.0, 200.0], 
-                                        [60.72, 259.94]]).to(device)
-    track_list, vis_score, conf_score = model.track_head(aggregated_tokens_list, images, ps_idx, query_points=query_points[None])
-```
-
-
-Furthermore, if certain pixels in the input frames are unwanted (e.g., reflective surfaces, sky, or water), you can simply mask them by setting the corresponding pixel values to 0 or 1. Precise segmentation masks aren't necessary - simple bounding box masks work effectively (check this [issue](https://github.com/facebookresearch/vggt/issues/47) for an example).
-
-</details>
-
-
-## Interactive Demo
-
-We provide multiple ways to visualize your 3D reconstructions. Before using these visualization tools, install the required dependencies:
-
-```bash
-pip install -r requirements_demo.txt
-```
-
-### Interactive 3D Visualization
-
-**Please note:** VGGT typically reconstructs a scene in less than 1 second. However, visualizing 3D points may take tens of seconds due to third-party rendering, independent of VGGT's processing time. The visualization is slow especially when the number of images is large.
-
-
-#### Gradio Web Interface
-
-Our Gradio-based interface allows you to upload images/videos, run reconstruction, and interactively explore the 3D scene in your browser. You can launch this in your local machine or try it on [Hugging Face](https://huggingface.co/spaces/facebook/vggt).
-
-
-```bash
-python demo_gradio.py
-```
-
-<details>
-<summary>Click to preview the Gradio interactive interface</summary>
-
-![Gradio Web Interface Preview](https://jytime.github.io/data/vggt_hf_demo_screen.png)
-</details>
-
-
-#### Viser 3D Viewer
-
-Run the following command to run reconstruction and visualize the point clouds in viser. Note this script requires a path to a folder containing images. It assumes only image files under the folder. You can set `--use_point_map` to use the point cloud from the point map branch, instead of the depth-based point cloud.
-
-```bash
-python demo_viser.py --image_folder path/to/your/images/folder
-```
-
-## Exporting to COLMAP Format
-
-We also support exporting VGGT's predictions directly to COLMAP format, by:
-
-```bash 
-# Feedforward prediction only
-python demo_colmap.py --scene_dir=/YOUR/SCENE_DIR/ 
-
-# With bundle adjustment
-python demo_colmap.py --scene_dir=/YOUR/SCENE_DIR/ --use_ba
-
-# Run with bundle adjustment using reduced parameters
-# Reduces max_query_pts from 4096 (default) to 2048 and query_frame_num from 8 (default) to 5
-# Trade-off: Potentially less robust reconstruction in complex scenes (you may consider setting query_frame_num equal to your total number of images) 
-# See demo_colmap.py for additional bundle adjustment configuration options
-python demo_colmap.py --scene_dir=/YOUR/SCENE_DIR/ --use_ba --max_query_pts=2048 --query_frame_num=5
-```
-
-Please ensure that the images are stored in `/YOUR/SCENE_DIR/images/`. This folder should contain only the images. Check the examples folder for the desired data structure. 
-
-The reconstruction result (camera parameters and 3D points) will be automatically saved under `/YOUR/SCENE_DIR/sparse/` in the COLMAP format, such as:
-
-``` 
-SCENE_DIR/
-├── images/
-└── sparse/
-    ├── cameras.bin
-    ├── images.bin
-    └── points3D.bin
-```
-
-## Integration with Gaussian Splatting
-
-
-The exported COLMAP files can be directly used with [gsplat](https://github.com/nerfstudio-project/gsplat) for Gaussian Splatting training. Install `gsplat` following their official instructions (we recommend `gsplat==1.3.0`):
-
-An example command to train the model is:
-```
-cd gsplat
-python examples/simple_trainer.py  default --data_factor 1 --data_dir /YOUR/SCENE_DIR/ --result_dir /YOUR/RESULT_DIR/
-```
-
-
-
-## Zero-shot Single-view Reconstruction
-
-Our model shows surprisingly good performance on single-view reconstruction, although it was never trained for this task. The model does not need to duplicate the single-view image to a pair, instead, it can directly infer the 3D structure from the tokens of the single view image. Feel free to try it with our demos above, which naturally works for single-view reconstruction.
-
-
-We did not quantitatively test monocular depth estimation performance ourselves, but [@kabouzeid](https://github.com/kabouzeid) generously provided a comparison of VGGT to recent methods [here](https://github.com/facebookresearch/vggt/issues/36). VGGT shows competitive or better results compared to state-of-the-art monocular approaches such as DepthAnything v2 or MoGe, despite never being explicitly trained for single-view tasks. 
-
-## Research Progression
-
-Our work builds upon a series of previous research projects. If you're interested in understanding how our research evolved, check out our previous works:
-
-
-<table border="0" cellspacing="0" cellpadding="0">
-  <tr>
-    <td align="left">
-      <a href="https://github.com/jytime/Deep-SfM-Revisited">Deep SfM Revisited</a>
-    </td>
-    <td style="white-space: pre;">──┐</td>
-    <td></td>
-  </tr>
-  <tr>
-    <td align="left">
-      <a href="https://github.com/facebookresearch/PoseDiffusion">PoseDiffusion</a>
-    </td>
-    <td style="white-space: pre;">─────►</td>
-    <td>
-      <a href="https://github.com/facebookresearch/vggsfm">VGGSfM</a> ──►
-      <a href="https://github.com/facebookresearch/vggt">VGGT</a>
-    </td>
-  </tr>
-  <tr>
-    <td align="left">
-      <a href="https://github.com/facebookresearch/co-tracker">CoTracker</a>
-    </td>
-    <td style="white-space: pre;">──┘</td>
-    <td></td>
-  </tr>
-</table>
-
-
-## Acknowledgements
-
-Thanks to these great repositories: [PoseDiffusion](https://github.com/facebookresearch/PoseDiffusion), [VGGSfM](https://github.com/facebookresearch/vggsfm), [CoTracker](https://github.com/facebookresearch/co-tracker), [DINOv2](https://github.com/facebookresearch/dinov2), [Dust3r](https://github.com/naver/dust3r), [Moge](https://github.com/microsoft/moge), [PyTorch3D](https://github.com/facebookresearch/pytorch3d), [Sky Segmentation](https://github.com/xiongzhu666/Sky-Segmentation-and-Post-processing), [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2), [Metric3D](https://github.com/YvanYin/Metric3D) and many other inspiring works in the community.
-
-## Checklist
-
-- [x] Release the training code
-- [ ] Release VGGT-500M and VGGT-200M
-
-
-## License
-See the [LICENSE](./LICENSE.txt) file for details about the license under which this code is made available.
-
-Please note that only this [model checkpoint](https://huggingface.co/facebook/VGGT-1B-Commercial) allows commercial usage. This new checkpoint achieves the same performance level (might be slightly better) as the original one, e.g., AUC@30: 90.37 vs. 89.98 on the Co3D dataset.

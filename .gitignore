@@ -190,3 +190,10 @@ datasets/
 
 # Public prediction checkpoints and local setup downloads; never release data.
 /.abu_models/
+
+# Local installer build staging & outputs (uploaded via GitHub Releases)
+/.abu_depth_cache/
+/installer/dist/
+/installer/build/
+*.dmg
+*.AppImage

@@ -1,0 +1,95 @@
+name: Build & Publish Single-File Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.5.6)'
+        required: false
+        default: 'v0.1.5.6'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows Installer (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile Windows Installer with Inno Setup
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION.txt -Raw).Trim().TrimStart('v', 'V')
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (Test-Path $csc) {
+            & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align_and_Train.exe launcher.cs
+            & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align.exe launcher.cs
+          }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DMyAppVersion=$version" "installer\windows\abu_align_setup.iss"
+
+      - name: Publish Windows Setup (.exe) to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          files: installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  build-macos:
+    name: macOS Installer (.dmg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build macOS Universal DMG
+        run: |
+          chmod +x installer/macos/build_dmg.sh
+          bash installer/macos/build_dmg.sh
+
+      - name: Publish macOS (.dmg) to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          files: installer/dist/Abu_Align_and_Train_macOS_Universal.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  build-linux:
+    name: Linux Single Binary (.AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Linux AppImage
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y file desktop-file-utils
+          chmod +x installer/linux/build_appimage.sh
+          bash installer/linux/build_appimage.sh
+
+      - name: Publish Linux (.AppImage) to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          name: Abu Align & Train ${{ github.ref_name != 'main' && github.ref_name || inputs.tag_name || 'v0.1.5.6' }}
+          files: installer/dist/Abu_Align_and_Train_Linux_x86_64.AppImage
+          generate_release_notes: true
+          draft: false
+          prerelease: false

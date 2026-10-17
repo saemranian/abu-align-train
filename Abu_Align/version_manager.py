@@ -236,9 +236,13 @@ def recompile_executables(version_str: str) -> None:
         os.path.join(bin_dir, f"Abu_Align_v{version_str}.exe"),
     ]
 
+    ico_path = os.path.join(ROOT_DIR, "abu_icon.ico")
     for exe_out in exe_targets:
         try:
-            cmd = [csc_path, "/nologo", "/target:winexe", f"/out:{exe_out}", launcher_cs]
+            cmd = [csc_path, "/nologo", "/target:winexe", f"/out:{exe_out}"]
+            if os.path.isfile(ico_path):
+                cmd.append(f"/win32icon:{ico_path}")
+            cmd.append(launcher_cs)
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             print(f"[VersionManager Warning] Failed to compile {exe_out}: {e}")

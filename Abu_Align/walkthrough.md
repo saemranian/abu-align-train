@@ -1,3 +1,9 @@
+# Abu Align & Train v0.1.5.6: Add cross-platform single-file installers (Windows EXE, macOS DMG, Linux AppImage) and automated GitHub Actions release pipeline
+
+Added Inno Setup Windows installer, macOS DMG bundle builder, Linux AppImage builder, GitHub Actions multi-OS release workflow (.github/workflows/release.yml), THIRD_PARTY_NOTICES.md, one-click README download links, and push_to_github.py release publisher.
+
+---
+
 # Abu Align & Train v0.1.5.5: Responsive Manual panels/grid and unified main-launcher version
 
 # Manual control points — responsive panels and grid, v0.1.5.5
