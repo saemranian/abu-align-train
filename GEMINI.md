@@ -60,8 +60,10 @@ After **EVERY** modification, bugfix, refactor, or feature addition to the Abu A
 
 ---
 
-### Step 6: "Push to GitHub" Automated Release Trigger
-Whenever the user instructs **"Push to GitHub"** (or asks to update the GitHub repository / installers):
-1. Run `python push_to_github.py "<Concise summary of changes>" --details "<Detailed release notes>"` (or pass `--no-bump` if the version was already bumped in the current turn).
-2. This automatically bumps the Base-10 version, synchronizes `Abu_Align/` and `versions/vX.Y.Z.W/`, updates installer metadata, commits, creates git tag `vX.Y.Z.W`, and pushes `HEAD:main` and the tag to `https://github.com/saemranian/abu-align-train.git`.
-3. GitHub Actions (`.github/workflows/release.yml`) will automatically build and attach the three single-file installers (`Abu_Align_and_Train_Setup_Windows_x64.exe`, `Abu_Align_and_Train_macOS_Universal.dmg`, `Abu_Align_and_Train_Linux_x86_64.AppImage`) to GitHub Releases.
+### Step 6: "Push to GitHub" Safe Candidate Release
+Whenever the user asks to update GitHub or installers:
+1. Complete Steps 1-5 once. The release must already be versioned, mirrored, snapshotted, tested and committed.
+2. Run `python push_to_github.py "Summary" --details "Tests and limitations" --no-bump --dry-run` and review the explicit public source export.
+3. Run the same command without `--dry-run`. The helper preserves public ancestry, exports only `installer/public-files.json`, and atomically pushes a new commit and immutable version tag. Never force-push or stage the entire private workspace for publication.
+4. Inspect the three supported OS/architecture jobs. Only passing jobs assemble a draft CPU core candidate; failed builds are not successful releases. See `docs/RELEASE_GUIDE.md`.
+5. Do not claim stable availability, all-engine GPU support or legal clearance without the documented qualification. Never upload client datasets, local logs, presets, snapshots or model caches.

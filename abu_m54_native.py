@@ -2,6 +2,7 @@
 import ctypes as ct
 from ctypes import wintypes as wt
 import math
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -150,6 +151,12 @@ class M54NativeViewer(tk.Frame):
         else:self.compare.show()
     def initialize(self,event=None):
         if self.context or self.closed:return
+        if sys.platform != 'win32':
+            self.info.set('Embedded WGL viewport is Windows-only. Use Browser view for the shared GPU 3D viewer.')
+            if not getattr(self,'portable_browser_button',None):
+                self.portable_browser_button=tk.Button(self.surface,text='Open Abu M54 browser workspace',command=self.open_browser)
+                self.portable_browser_button.place(relx=.5,rely=.5,anchor='center')
+            return
         try:
             self.gl=ct.WinDLL('opengl32');self.gdi=ct.WinDLL('gdi32');self.user=ct.WinDLL('user32')
             self.user.GetDC.argtypes=[wt.HWND];self.user.GetDC.restype=wt.HDC;self.user.ReleaseDC.argtypes=[wt.HWND,wt.HDC]

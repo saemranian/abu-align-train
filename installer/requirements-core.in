@@ -1,0 +1,15 @@
+# CPU core build inputs. The generated requirements-core.lock pins all transitives and hashes.
+numpy==1.26.4
+scipy==1.17.1
+Pillow==11.3.0
+opencv-python==4.11.0.86
+trimesh==5.1.0
+viser==0.2.23
+psutil==7.2.2
+matplotlib==3.11.2
+pycolmap==4.2.0
+PyInstaller==6.22.3
+setuptools==79.0.1
+macholib==1.16.4
+pefile==2024.8.26
+pywin32-ctypes==0.2.3

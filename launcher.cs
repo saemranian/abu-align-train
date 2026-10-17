@@ -14,6 +14,16 @@ namespace AbuAlignLauncher
             try
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string bundled = Path.Combine(appDir, "runtime", "AbuRuntime.exe");
+                if (File.Exists(bundled))
+                {
+                    var installed = new ProcessStartInfo(bundled);
+                    installed.WorkingDirectory = appDir;
+                    installed.UseShellExecute = false;
+                    installed.CreateNoWindow = true;
+                    Process.Start(installed);
+                    return;
+                }
                 string scriptPath = Path.Combine(appDir, "abu_align_gui.py");
                 if (!File.Exists(scriptPath))
                 {

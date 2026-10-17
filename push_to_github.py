@@ -1,111 +1,72 @@
-"""
-Abu Align & Train - One-Command GitHub Release & Installer Publisher
-====================================================================
-Usage:
-    python push_to_github.py "Release summary" [--details "Detailed release notes"] [--no-bump]
-
-When invoked (e.g. when the user says 'Push to GitHub'), this script:
-1. Configures the 'origin' remote to https://github.com/saemranian/abu-align-train.git
-2. Runs the mandatory Base-10 version bump, C# launcher compilation, and parity snapshot (unless --no-bump is passed and working tree is clean)
-3. Synchronizes installer metadata with the active version
-4. Commits all staged changes, creates tag vX.Y.Z.W, and pushes HEAD -> main + tags to GitHub
-5. Triggers GitHub Actions to build and attach the single-file installers (.exe, .dmg, .AppImage) to GitHub Releases.
-"""
-
+"""Publish an allowlisted source commit and a new candidate tag without rewriting history."""
 import argparse
+import json
+from pathlib import Path
 import re
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
 
-import release_checkpoint
-import version_manager
-
-REPO_URL = "https://github.com/saemranian/abu-align-train.git"
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT=Path(__file__).resolve().parent
+REPO_URL="https://github.com/saemranian/abu-align-train.git"
 
 
-def run_git(args, check=True):
-    return subprocess.run(["git"] + args, cwd=ROOT_DIR, check=check, text=True, capture_output=True)
+def git(*args,cwd=ROOT):
+    return subprocess.run(['git',*args],cwd=cwd,check=True,capture_output=True,text=True).stdout.strip()
 
 
-def ensure_remote():
-    res = run_git(["remote"], check=False)
-    remotes = res.stdout.split() if res.returncode == 0 else []
-    if "origin" in remotes:
-        run_git(["remote", "set-url", "origin", REPO_URL])
-    else:
-        run_git(["remote", "add", "origin", REPO_URL])
-    print(f"[GitHub Publisher] Remote 'origin' -> {REPO_URL}")
+def validate_remote(url):
+    if url not in {REPO_URL,REPO_URL[:-4],'git@github.com:saemranian/abu-align-train.git'}:
+        raise ValueError('origin does not match the configured Abu repository. It will not be rewritten.')
 
 
-def sync_installer_version(ver_str: str):
-    clean = ver_str.strip().lstrip("vV")
-    iss_path = ROOT_DIR / "installer" / "windows" / "abu_align_setup.iss"
-    if iss_path.is_file():
-        content = iss_path.read_text(encoding="utf-8")
-        new_content = re.sub(
-            r'#define MyAppVersion "[^"]+"',
-            f'#define MyAppVersion "{clean}"',
-            content,
-        )
-        if new_content != content:
-            iss_path.write_text(new_content, encoding="utf-8")
-
-    wf_path = ROOT_DIR / ".github" / "workflows" / "release.yml"
-    if wf_path.is_file():
-        content = wf_path.read_text(encoding="utf-8")
-        new_content = re.sub(r"v\d+\.\d+\.\d+\.\d+", f"v{clean}", content)
-        if new_content != content:
-            wf_path.write_text(new_content, encoding="utf-8")
+def validate_version(version):
+    if not re.fullmatch(r'[0-9]\.[0-9]\.[0-9]\.[0-9]',version):raise ValueError('Expected the four-field base-10 release version')
+    return version
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Push Abu Align & Train release to GitHub and build installers")
-    parser.add_argument("summary", nargs="?", default="Update Abu Align & Train release and cross-platform installers", help="Short summary of release")
-    parser.add_argument("--details", default="Automated release publish with synchronized Windows (.exe), macOS (.dmg), and Linux (.AppImage) single-file installers.", help="Detailed release notes")
-    parser.add_argument("--no-bump", action="store_true", help="Publish current version without incrementing base-10 odometer")
-    args = parser.parse_args()
-
-    ensure_remote()
-
-    if not args.no_bump:
-        ver = release_checkpoint.publish_stage(args.summary, args.details)
-    else:
-        ver = version_manager.get_current_version()
-
-    sync_installer_version(ver)
-
-    # Check if there are changes to commit
-    status = run_git(["status", "--porcelain"]).stdout.strip()
-    if status:
-        run_git(["add", "-A"])
-        commit_msg = f"v{ver}: {args.summary}\n\n{args.details}"
-        run_git(["commit", "-m", commit_msg])
-        print(f"[GitHub Publisher] Committed release v{ver}")
-    else:
-        print(f"[GitHub Publisher] Working tree already clean at v{ver}")
-
-    tag_name = f"v{ver}"
-    run_git(["tag", "-f", "-a", tag_name, "-m", f"Abu Align & Train {tag_name}: {args.summary}"])
-    print(f"[GitHub Publisher] Tagged release: {tag_name}")
-
-    print("[GitHub Publisher] Pushing branch 'main' and release tag to GitHub...")
-    push_main = subprocess.run(["git", "push", "-u", "origin", "HEAD:main", "--force"], cwd=ROOT_DIR)
-    if push_main.returncode != 0:
-        sys.exit(push_main.returncode)
-
-    push_tag = subprocess.run(["git", "push", "origin", tag_name, "--force"], cwd=ROOT_DIR)
-    if push_tag.returncode != 0:
-        sys.exit(push_tag.returncode)
-
-    print("======================================================================")
-    print(f"[SUCCESS] Pushed Abu Align & Train {tag_name} to GitHub!")
-    print(f"  * Repository: https://github.com/saemranian/abu-align-train")
-    print(f"  * Actions CI: https://github.com/saemranian/abu-align-train/actions")
-    print(f"  * Releases:   https://github.com/saemranian/abu-align-train/releases/tag/{tag_name}")
-    print("======================================================================")
+def prepare_export(destination):
+    from installer.public_export import export
+    return export(ROOT,destination)
 
 
-if __name__ == "__main__":
-    main()
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('summary',nargs='?',default='Update qualified Abu CPU core candidate')
+    parser.add_argument('--details',default='Candidate source release; see docs/DISTRIBUTION_AUDIT.md')
+    parser.add_argument('--no-bump',action='store_true')
+    parser.add_argument('--dry-run',action='store_true',help='Validate and export locally without Git or network mutations')
+    args=parser.parse_args(argv)
+    validate_remote(git('remote','get-url','origin'))
+    version=validate_version((ROOT/'VERSION.txt').read_text().strip().lstrip('vV'))
+    if not args.dry_run and git('status','--porcelain'):
+        raise RuntimeError('Commit the reviewed local release first. This publisher never stages unrelated work.')
+    if not args.dry_run and not args.no_bump:
+        raise RuntimeError('Prepare the mandatory local version/snapshot/commit first, then use --no-bump. No implicit workspace commit is performed.')
+    staging=ROOT/'installer/build'
+    staging.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='public-export-',dir=staging) as temporary:
+        target=Path(temporary)
+        if args.dry_run:
+            records=prepare_export(target)
+            print(json.dumps({'dry_run':True,'version':version,'files':len(records),'destination':REPO_URL}));return 0
+        # Clone the PUBLIC ancestry rather than pushing private local commits or snapshot history.
+        subprocess.run(['git','clone','--depth=1','--branch','main',REPO_URL,str(target)],check=True)
+        if git('ls-remote','--tags','origin',f'refs/tags/v{version}',cwd=target):
+            raise RuntimeError('That version already exists. Published versions and tags are immutable.')
+        git('rm','-r','--ignore-unmatch','.',cwd=target)
+        records=prepare_export(target)
+        git('add','--all',cwd=target)
+        author=git('config','user.name');email=git('config','user.email')
+        git('config','user.name',author,cwd=target);git('config','user.email',email,cwd=target)
+        git('commit','-m',f'v{version}: {args.summary}\n\n{args.details}',cwd=target)
+        git('tag','-a',f'v{version}','-m',f'Abu CPU core candidate v{version}',cwd=target)
+        # Atomic, ordinary fast-forward push; a concurrent remote update fails safely.
+        git('push','--atomic','origin','HEAD:main',f'refs/tags/v{version}',cwd=target)
+        print(json.dumps({'version':version,'public_commit':git('rev-parse','HEAD',cwd=target),
+                          'files':len(records),'channel':'draft candidate',
+                          'actions':REPO_URL[:-4]+'/actions'}))
+    return 0
+
+
+if __name__=='__main__':raise SystemExit(main())

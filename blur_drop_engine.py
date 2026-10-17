@@ -11,6 +11,7 @@ Incorporates:
   6. Reversible atomic move and one-click Undo restoration
 """
 
+from __future__ import annotations
 import os
 import sys
 import math
@@ -23,8 +24,12 @@ from typing import List, Dict, Tuple, Optional, Callable, Any
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
-import torch
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn.functional as F
+except ImportError:
+    torch = None
+    F = None
 
 SUPPORTED_IMAGE_EXTS = {
     ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".ppm", ".pgm",
@@ -66,9 +71,11 @@ class BlurDropEngine:
 
     def __init__(self, device: Optional[str] = None, analysis_res: Optional[int] = None):
         if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
         else:
             self.device = device
+        if self.device.startswith('cuda') and torch is None:
+            raise RuntimeError('GPU blur analysis needs PyTorch; choose CPU in the core installation.')
 
         self.analysis_res = analysis_res
         self.cached_results: List[ImageQualityResult] = []

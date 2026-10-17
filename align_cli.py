@@ -5,6 +5,7 @@ A rich terminal interface for running 3D camera alignment and reconstruction
 with live progress bars, stage status, timing, VRAM usage, and final report.
 """
 
+from __future__ import annotations
 import os
 import sys
 import re
@@ -64,8 +65,12 @@ def get_next_sparse_dir(results_base_dir, engine_name="vggt", use_ba=False):
 
 
 import numpy as np
-import torch
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn.functional as F
+except ImportError:
+    torch = None
+    F = None
 from PIL import Image
 import trimesh
 import json
@@ -77,7 +82,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 def get_vram_usage():
-    if torch.cuda.is_available():
+    if torch is not None and torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / (1024**3)
         reserved = torch.cuda.memory_reserved() / (1024**3)
         return allocated, reserved
@@ -86,7 +91,7 @@ def get_vram_usage():
 def print_banner():
     banner = r"""
 ======================================================================
-   Abu Align & Train v0.1.5.8 - Neural Photogrammetry & 3DGS Training
+   Abu Align & Train v0.1.5.9 - Neural Photogrammetry & 3DGS Training
    Align: VGGT-Omega | NVIDIA VGG-T3 | Niantic ACE0 | PyCuSFM | OpenSfM | 360DVO
    Train: LichtFeld Studio | Nerfstudio Splatfacto | NVIDIA 3DGRUT | PFGS360
 ======================================================================
@@ -104,7 +109,7 @@ def print_progress_bar(current, total, prefix="Progress", stage="", length=30, s
         time_str = f" | Elapsed: {int(elapsed//60):02d}:{int(elapsed%60):02d}"
 
     vram_alloc, _ = get_vram_usage()
-    vram_str = f" | VRAM: {vram_alloc:.1f}GB" if torch.cuda.is_available() else ""
+    vram_str = f" | VRAM: {vram_alloc:.1f}GB" if torch is not None and torch.cuda.is_available() else ""
 
     status_line = f"\r[{bar}] {percent*100:5.1f}% | {prefix}: {current}/{total}{time_str}{vram_str} | {stage}"
     try:
@@ -2067,7 +2072,9 @@ def main():
     # Stage 2: Load Model & GPU Environment
     # -------------------------------------------------------------
     print("[2/5] Initializing Neural Network & GPU...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch is None and args.engine not in {'native_colmap','opensfm','realityscan','realitycapture','rc'}:
+        raise RuntimeError('This engine needs a qualified PyTorch runtime. The core installer includes native COLMAP and CPU manual refinement.')
+    device = "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
     if device != "cuda":
         print("[WARNING] CUDA GPU not detected! Running on CPU will be extremely slow.")
     else:
@@ -2075,7 +2082,7 @@ def main():
         total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"      * Device:        {gpu_name} ({total_vram:.1f} GB Dedicated VRAM)")
 
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = (torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16) if device == 'cuda' else (torch.float32 if torch is not None else None)
     print(f"      * Precision:     {dtype}")
 
     engine = args.engine

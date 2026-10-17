@@ -1,46 +1,33 @@
-# Third-Party Notices & Open-Source Attribution
+# Third party licensing scope
 
-**Abu Align & Train** is an open-source Neural Photogrammetry, 360° Spherical Rig Processing, and 3D Gaussian Splatting (3DGS) Studio released under the **Apache License 2.0**.
+This inventory is not a legal clearance opinion or a replacement for complete license texts. It distinguishes shipped core components from external integrations. The root LICENSE.txt retains the custom VGGT terms; retained upstream copyrights must not be removed. Abu is not uniformly Apache licensed. Original VGGT authorship remains with the Oxford and Meta authors identified in the retained source headers.
 
-It integrates and builds upon the following open-source research and engineering projects. All original copyrights, notices, and license terms apply to their respective components:
+## Bundled CPU core
 
----
+The builder copies actual dependency license files into THIRD_PARTY_LICENSES and generates a CycloneDX inventory. Core source and collected notices accompany candidate assets. CPython, Tcl/Tk, NumPy, SciPy, Pillow, OpenCV, Trimesh, Viser, PyCOLMAP and their native dependencies have separate terms. Review the exact wheel build, embedded FFmpeg and native solver dependencies before a stable release; a top-level package license alone is insufficient. No model weights, ACE0 package, PFGS360 package, LichtFeld binary or NVIDIA GPU toolkit are included in the core.
 
-## 1. Visual Geometry Grounded Transformer (VGGT & VGGT-Omega)
-- **Authors**: Visual Geometry Group (University of Oxford) & Meta AI Research (`Jianyuan Wang`, `Minghao Chen`, `Nikita Karaev`, `Andrea Vedaldi`, `Christian Rupprecht`, `David Novotny`)
-- **Upstream Repository**: [https://github.com/facebookresearch/vggt](https://github.com/facebookresearch/vggt)
-- **License**: Meta Research License (Updated July 29, 2025 to permit commercial and non-commercial derivative works; see `LICENSE.txt` for full terms and Acceptable Use Policy).
-- **Model Weights**: Downloaded on-demand from Hugging Face (`facebook/VGGT-1B` / `facebook/VGGT-1B-Commercial`).
+## External integrations and models
 
-## 2. Mapillary OpenSfM
-- **Authors**: Mapillary AB / Meta Platforms, Inc.
-- **Upstream Repository**: [https://github.com/mapillary/OpenSfM](https://github.com/mapillary/OpenSfM)
-- **License**: BSD 2-Clause License
+| Component | Actual upstream terms and release treatment |
+| --- | --- |
+| Original VGGT code | [Custom VGGT license](https://github.com/facebookresearch/vggt/blob/main/LICENSE.txt), with acceptable-use terms. Preserve file-specific additional notices. |
+| Original VGGT weights | [Original checkpoint](https://huggingface.co/facebook/VGGT-1B) and [commercial checkpoint](https://huggingface.co/facebook/VGGT-1B-Commercial) differ. Account approval is not automatically transferable to all users. |
+| VGGT-Omega | [FAIR Noncommercial Research License](https://github.com/facebookresearch/vggt-omega/blob/main/LICENSE). This is separate from original VGGT's July 2025 change and restricts commercial use of materials and outputs. |
+| VGG-T3 | [NVIDIA OneWay Noncommercial License](https://github.com/nv-dvl/vgg-ttt/blob/main/LICENSE), plus its third-party notices. |
+| ACE0 | [Custom Niantic license](https://github.com/nianticlabs/acezero/blob/main/LICENSE): noncommercial use and source-format-only redistribution. A label does not authorize frozen binaries or client consulting use. |
+| OpenSfM | [BSD-2-Clause style grant](https://github.com/mapillary/OpenSfM/blob/main/LICENSE); native dependencies require review. |
+| 360DVO | [MIT code](https://github.com/chris1004336379/360DVO/blob/master/LICENSE); inherited code, native extensions and checkpoint redistribution must be checked separately. |
+| COLMAP | [BSD license guidance](https://colmap.github.io/license.html), explicitly separate from dependencies of the selected build. |
+| Nerfstudio and gsplat | Apache-2.0 top-level code; selected native extensions and optional models must be audited. |
+| PFGS360 | [No complete top-level license grant established](https://github.com/zcq15/PFGS360). Some copied files have Apache notices; this does not license all original additions. Redistribution held pending clarification. |
+| UniK3D | [CC-BY-NC-SA-4.0](https://github.com/lpiccinelli-eth/UniK3D/blob/main/LICENSE); model terms must also be established. |
+| gsplat360 and Spherical Package | Apache-2.0 and BSD-3-Clause respectively; they do not override UniK3D or compiled CGAL terms. |
+| NVIDIA 3DGRUT | [Apache-2.0 top level](https://github.com/nv-tlabs/3dgrut/blob/main/LICENSE), not generically research-only. SDKs and native dependencies still need review. |
+| PyCuSFM | Apache-2.0 wrapper; cuSFM, TensorRT, cuDSS and native model distributions have separate terms. |
+| LichtFeld Studio | [GPLv3 or later plus GPU-library permission](https://github.com/MrNeRF/LichtFeld-Studio#license). Redistribution needs corresponding source and notices. |
+| RealityScan | Proprietary external application. No permission to repackage it is established by free eligibility. |
+| SAM2 | [Apache-2.0 code and official checkpoints](https://github.com/facebookresearch/sam2#license); additional connected-component and font notices apply where included. |
+| Manual learned matching | [LightGlue code and weights Apache-2.0](https://github.com/cvg/LightGlue#license), ALIKED BSD-3-Clause. SuperPoint has separate restrictive terms. |
+| FFmpeg and GPU SDKs | Exact binary configurations and redistribution grants matter. Do not ship nonfree FFmpeg builds or arbitrary CUDA toolkit components. |
 
-## 3. Segment Anything 2 (SAM 2)
-- **Authors**: Meta AI Research (FAIR)
-- **Upstream Repository**: [https://github.com/facebookresearch/sam2](https://github.com/facebookresearch/sam2)
-- **License**: Apache License 2.0
-
-## 4. COLMAP & PyCOLMAP
-- **Authors**: Johannes L. Schönberger and Contributors
-- **Upstream Repository**: [https://github.com/colmap/colmap](https://github.com/colmap/colmap)
-- **License**: BSD 3-Clause License
-
-## 5. Nerfstudio & gsplat
-- **Authors**: Nerfstudio Team (UC Berkeley / Luma AI / Contributors)
-- **Upstream Repository**: [https://github.com/nerfstudio-project/nerfstudio](https://github.com/nerfstudio-project/nerfstudio)
-- **License**: Apache License 2.0
-
-## 6. Viser 3D WebGL Visualization Engine
-- **Authors**: Brent Yi and Nerfstudio Contributors
-- **Upstream Repository**: [https://github.com/nerfstudio-project/viser](https://github.com/nerfstudio-project/viser)
-- **License**: Apache License 2.0
-
-## 7. Optional Research Backends (Non-Commercial Notice)
-- **Niantic ACE0 (Accelerated Coordinate Encoding)**:
-  - **Authors**: Niantic Labs ([https://github.com/nianticlabs/acezero](https://github.com/nianticlabs/acezero))
-  - **License**: Niantic Non-Commercial Research License. *Note: When selecting the optional ACE0 engine inside Abu Align, usage is governed by Niantic's academic/non-commercial license terms.*
-- **NVIDIA 3DGRUT / PyCuSFM**:
-  - **Authors**: NVIDIA Corporation
-  - **License**: NVIDIA Source Code / Apache 2.0 License as specified by the respective upstream repositories.
+Free distribution does not make commercial use noncommercial. Downloading at first use is not a license loophole. Obtain qualified review of the final bill of materials and any rights-holder permissions before claiming unrestricted or commercial use of the whole suite. Attribution alone is not compliance with every license.

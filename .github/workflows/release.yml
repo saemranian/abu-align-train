@@ -1,130 +1,110 @@
-name: Build & Publish Single-File Installers
-
+name: Build and verify CPU core candidates
 on:
   push:
-    branches:
-      - main
+    tags: ['v[0-9].[0-9].[0-9].[0-9]']
   workflow_dispatch:
-
-concurrency:
-  group: release-main
-  cancel-in-progress: true
-
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: candidate-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  build-windows:
-    name: Windows Installer (.exe)
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      ABU_OFFLINE_TEST: '1'
+      ABU_DATA_HOME: ${{ runner.temp }}/abu-test-state
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Compile Windows Installer with Inno Setup
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          # CPython publishes 3.11 security releases as source only on Windows/macOS.
+          # These are draft compatibility builds until a maintained interpreter is qualified.
+          python-version: ${{ runner.os == 'Linux' && '3.11.16' || '3.11.9' }}
+      - name: Install locked builder dependencies
+        run: python -m pip install --require-hashes --only-binary=:all: -r installer/requirements-core.lock
+      - name: Validate source and publisher safety
+        run: python -m unittest discover -s tests -p "test_distribution*.py" -v
+      - name: Linux UI libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk libgl1 libegl1 libfuse2
+      - name: Build actual interpreter and libraries
+        run: python installer/build_core.py
+      - name: Windows offline worker and UI tests
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = (Get-Content VERSION.txt -Raw).Trim().TrimStart('v', 'V')
-          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          if (Test-Path $csc) {
-            & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align_and_Train.exe launcher.cs
-            & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align.exe launcher.cs
-          }
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            choco install innosetup -y
-            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          }
-          & $iscc "/DMyAppVersion=$version" "installer\windows\abu_align_setup.iss"
-
-      - name: Upload Windows Installer Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe
-
-  build-macos:
-    name: macOS Installer (.dmg)
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build macOS Universal DMG
+          & installer/dist/AbuRuntime/AbuRuntime.exe --worker-smoke-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & installer/dist/AbuRuntime/AbuRuntime.exe --viewer-smoke-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & installer/dist/AbuRuntime/AbuRuntime.exe --gui-smoke-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $tool = python installer/fetch_tool.py inno
+          $toolDir = Join-Path $env:RUNNER_TEMP 'inno'
+          $setup = Start-Process -FilePath $tool -ArgumentList "/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS /DIR=`"$toolDir`"" -Wait -PassThru -WindowStyle Hidden
+          if ($setup.ExitCode) { throw "Build tool setup failed: $($setup.ExitCode)" }
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align_and_Train.exe launcher.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$toolDir/ISCC.exe" "/DMyAppVersion=$version" installer/windows/abu_align_setup.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $installed = Join-Path $env:RUNNER_TEMP 'abu-installed'
+          $setup = Start-Process installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installed`"" -Wait -PassThru -WindowStyle Hidden
+          if ($setup.ExitCode) { throw "Product setup failed: $($setup.ExitCode)" }
+          & "$installed/runtime/AbuRuntime.exe" --self-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$installed/runtime/AbuRuntime.exe" --worker-smoke-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $uninstall = Start-Process "$installed/unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru -WindowStyle Hidden
+          if ($uninstall.ExitCode) { throw "Uninstall failed: $($uninstall.ExitCode)" }
+      - name: Linux offline UI worker and AppImage tests
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          tr -d '\r' < installer/macos/build_dmg.sh > installer/macos/build_dmg_lf.sh
-          chmod +x installer/macos/build_dmg_lf.sh
-          bash installer/macos/build_dmg_lf.sh
-
-      - name: Upload macOS Installer Artifact
-        uses: actions/upload-artifact@v4
+          installer/dist/AbuRuntime/AbuRuntime --worker-smoke-test
+          installer/dist/AbuRuntime/AbuRuntime --viewer-smoke-test
+          xvfb-run -a installer/dist/AbuRuntime/AbuRuntime --gui-smoke-test
+          export ABU_APPIMAGETOOL="$(python installer/fetch_tool.py appimagetool)"
+          bash installer/linux/build_appimage.sh
+          installer/dist/Abu_Align_and_Train_Linux_x86_64.AppImage --appimage-extract-and-run --self-test
+      - name: Mac native architecture tests and DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          installer/dist/AbuRuntime/AbuRuntime --worker-smoke-test
+          installer/dist/AbuRuntime/AbuRuntime --viewer-smoke-test
+          installer/dist/AbuRuntime/AbuRuntime --gui-smoke-test
+          bash installer/macos/build_dmg.sh
+          "installer/build/macos/Abu Align and Train.app/Contents/MacOS/AbuRuntime" --self-test
+      - name: Verify payload and generate checksums
+        run: python installer/prepare_candidate.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: macos-installer
-          path: installer/dist/Abu_Align_and_Train_macOS_Universal.dmg
-
-  build-linux:
-    name: Linux Single Binary (.AppImage)
+          name: candidate-${{ matrix.os }}
+          if-no-files-found: error
+          path: installer/dist/release-assets/*
+  draft:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build Linux AppImage
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y file desktop-file-utils libfuse2
-          tr -d '\r' < installer/linux/build_appimage.sh > installer/linux/build_appimage_lf.sh
-          chmod +x installer/linux/build_appimage_lf.sh
-          bash installer/linux/build_appimage_lf.sh
-
-      - name: Upload Linux Installer Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          name: linux-installer
-          path: installer/dist/Abu_Align_and_Train_Linux_x86_64.AppImage
-
-  publish-release:
-    name: Publish GitHub Release
-    needs: [build-windows, build-macos, build-linux]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Resolve Version Tag
-        id: version
-        run: |
-          RAW=$(tr -d '[:space:]vV' < VERSION.txt)
-          echo "ver=$RAW" >> "$GITHUB_OUTPUT"
-          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
-
-      - name: Download All Built Installers
-        uses: actions/download-artifact@v4
+          python-version: '3.11.16'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: release-assets
           merge-multiple: true
-
-      - name: Verify Built Assets
-        run: |
-          ls -lh release-assets/
-
-      - name: Publish Installers to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: Abu Align & Train ${{ steps.version.outputs.tag }}
-          body: |
-            ## 🚀 Abu Align & Train ${{ steps.version.outputs.tag }} — One-Click Single-File Installers
-
-            Download a **single installation file** for your operating system below:
-            - 🪟 **Windows (10 / 11 x64)**: `Abu_Align_and_Train_Setup_Windows_x64.exe`
-            - 🍎 **macOS (Apple Silicon & Intel)**: `Abu_Align_and_Train_macOS_Universal.dmg`
-            - 🐧 **Linux (x86_64 AppImage)**: `Abu_Align_and_Train_Linux_x86_64.AppImage`
-          files: |
-            release-assets/Abu_Align_and_Train_Setup_Windows_x64.exe
-            release-assets/Abu_Align_and_Train_macOS_Universal.dmg
-            release-assets/Abu_Align_and_Train_Linux_x86_64.AppImage
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+      - name: Assemble new draft only after all targets pass
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python installer/github_draft.py

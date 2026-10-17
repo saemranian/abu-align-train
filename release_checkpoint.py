@@ -26,9 +26,11 @@ def publish_stage(summary, details):
     artifacts.mkdir(exist_ok=True)
     shutil.copy2(walkthrough, artifacts / "walkthrough.md")
     files = [p for p in root.iterdir() if p.is_file() and
-             (p.suffix in {".py", ".exe", ".bat", ".cs", ".ico"} or p.name in {"VERSION.txt", "walkthrough.md", "AGENTS.md"})]
-    for folder in (root / "docs", root / "tests"):
-        files.extend(p for p in folder.rglob("*") if p.is_file() and p.suffix in {".md", ".py", ".json", ".txt"})
+             (p.suffix in {".py", ".exe", ".bat", ".cs", ".ico", ".png", ".md", ".toml"} or p.name in {"VERSION.txt", "LICENSE.txt", ".gitignore"})]
+    for folder in (root / "docs", root / "tests", root / "installer", root / ".github"):
+        files.extend(p for p in folder.rglob("*") if p.is_file()
+                     and not any(part in {"build", "dist", "__pycache__"} for part in p.relative_to(folder).parts)
+                     and p.suffix in {".md", ".py", ".json", ".txt", ".toml", ".yml", ".yaml", ".in", ".lock", ".sh", ".iss"})
     for source in files:
         relative = source.relative_to(root)
         for destination in (mirror / relative, snapshot / relative, canonical / relative):

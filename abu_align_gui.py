@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.5.8
+Abu Align & Train Version 0.1.5.9
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -240,7 +240,7 @@ class AbuAlignApp:
         self.root.configure(bg=self.bg_dark)
         self._set_window_icon()
 
-        self.conda_python = r"C:\Users\USer\miniconda3\envs\vggt\python.exe"
+        self.conda_python = os.environ.get('ABU_ENGINE_PYTHON', sys.executable)
         cli_candidates = [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "align_cli.py"),
             os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "align_cli.py"),
@@ -276,7 +276,7 @@ class AbuAlignApp:
         # ----------------------------------------------------
         # Alignment Engine & Parameter Variables
         # ----------------------------------------------------
-        self.engine_var = tk.StringVar(value="vggt_omega")
+        self.engine_var = tk.StringVar(value="native_colmap" if getattr(sys,'frozen',False) else "vggt_omega")
         self.res_var = tk.StringVar(value="1024")
         self.stride_var = tk.StringVar(value="1")
 
@@ -603,6 +603,8 @@ class AbuAlignApp:
         tools_menu.add_command(label="🌐 Launch 3D Browser Viewer", command=self._launch_viewer)
         tools_menu.add_separator()
         tools_menu.add_command(label="🔄 Check Engine Repository Updates...", command=self._open_engine_updates_dialog)
+        from abu_components import show_capabilities
+        tools_menu.add_command(label="Distribution and engines...", command=lambda:show_capabilities(self.root))
 
         # Engines Menu (Repository Tracker & Upstream Docs)
         engines_menu = tk.Menu(menubar, tearoff=0, bg=self.panel_bg, fg=self.text_primary)
@@ -1494,6 +1496,9 @@ class AbuAlignApp:
             self.panel_train_pfgs360.pack(fill=tk.BOTH, expand=True)
 
     def _get_presets_dir(self) -> Path:
+        if getattr(sys,'frozen',False):
+            from abu_paths import state_dir
+            return state_dir('presets')
         candidate = Path(__file__).resolve().parent / "presets"
         try:
             candidate.mkdir(parents=True, exist_ok=True)
@@ -1507,6 +1512,9 @@ class AbuAlignApp:
             return fallback
 
     def _get_logs_dir(self):
+        if getattr(sys,'frozen',False):
+            from abu_paths import state_dir
+            return str(state_dir('logs'))
         base_dir = os.path.dirname(os.path.abspath(__file__))
         if "versions" in base_dir:
             logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
@@ -5077,6 +5085,12 @@ class AbuAlignApp:
         latest_path = os.path.join(logs_dir, "abu_align_latest.log")
 
         try:
+            if getattr(sys,'frozen',False) and self.conda_python == sys.executable:
+                from abu_components import check_bundled_engine
+                is_training=self.train_script in cmd
+                check_bundled_engine(self.train_engine_var.get() if is_training else self.engine_var.get(),is_training)
+                if '--train' in cmd:
+                    raise RuntimeError('This core installation does not bundle a Gaussian training runtime. Select Align only, or configure ABU_ENGINE_PYTHON.')
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
                 lf.write(f"Abu Align & Train v{get_current_version()} - Run Telemetry & Diagnostic Log\n")
@@ -5157,6 +5171,7 @@ class AbuAlignApp:
 
         except Exception as e:
             err_msg = f"\n[ERROR] Worker process execution failed: {str(e)}\n"
+            exit_code = 1
             self.output_queue.put(err_msg)
             try:
                 with open(log_path, "a", encoding="utf-8") as lf:
@@ -5938,6 +5953,7 @@ class AbuAlignApp:
                 self._safe_open_url(url)
 
     def _start_background_engine_check(self):
+        if getattr(sys,'frozen',False):return
         """Asynchronously checks upstream GitHub repositories for engine updates."""
         if getattr(self, "_checking_engine_updates", False):
             return
