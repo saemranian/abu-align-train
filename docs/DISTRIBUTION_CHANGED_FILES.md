@@ -1,4 +1,4 @@
-# Distribution change inventory: v0.1.5.9
+# Distribution change inventory: v0.1.6.0
 
 Active source, documentation and launcher files changed by this audit:
 
@@ -7,6 +7,7 @@ Active source, documentation and launcher files changed by this audit:
 - `Abu_Align.exe`
 - `Abu_Align_and_Train.exe`
 - `Abu_Align_and_Train_v0.1.5.9.exe`
+- `Abu_Align_and_Train_v0.1.6.0.exe`
 - `GEMINI.md`
 - `README.md`
 - `THIRD_PARTY_NOTICES.md`
@@ -48,4 +49,4 @@ Active source, documentation and launcher files changed by this audit:
 - `train_engine.py`
 - `walkthrough.md`
 
-Matching files are synchronized into Abu_Align/ and both v0.1.5.9 snapshot trees. Generated build environments, frozen payloads and installers stay under ignored installer/build and installer/dist; they are not committed to source Git. The pre-existing docs/ABU_ALIGN_WEBSITE_OVERVIEW.md is preserved in the local snapshot/commit and excluded from the public export.
+Matching files are synchronized into Abu_Align/ and both v0.1.6.0 snapshot trees. Generated build environments, frozen payloads and installers stay under ignored installer/build and installer/dist; they are not committed to source Git. The pre-existing docs/ABU_ALIGN_WEBSITE_OVERVIEW.md is preserved in the local snapshot/commit and excluded from the public export.

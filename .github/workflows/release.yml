@@ -26,7 +26,8 @@ jobs:
           # These are draft compatibility builds until a maintained interpreter is qualified.
           python-version: ${{ runner.os == 'Linux' && '3.11.16' || '3.11.9' }}
       - name: Install locked builder dependencies
-        run: python -m pip install --require-hashes --only-binary=:all: -r installer/requirements-core.lock
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r installer/requirements-core.lock
       - name: Validate source and publisher safety
         run: python -m unittest discover -s tests -p "test_distribution*.py" -v
       - name: Linux UI libraries

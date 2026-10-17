@@ -57,3 +57,7 @@ The interpreter inventory revealed a second platform gate: setup-python has 3.11
 Final Windows frozen browser check served the packaged M54 HTML over loopback with external networking blocked and Python removed from PATH. The bundle removes Viser client development sources after freezing, preventing its first-launch Node/npm build path. The test does not replace a user-driven WebGL/navigation acceptance session on each target OS.
 
 The final local Windows installer is 180,985,583 bytes (SHA256 6606415997e1ac19c3f68137d6fc63e7286f4549fddf80cd9d2ff702265747e0). A test-identity installation, upgrade, four installed-runtime checks and uninstall all succeeded. The test runtime was removed. The production installer was compiled separately; it was not installed over the owner's existing application. The installed runtime uses the same frozen payload as the production package.
+
+## First public workflow validation
+
+Public candidate v0.1.5.9 (0dc3f87466148a27f7ac327b839f0e9b04ef3a9f) failed GitHub YAML validation before jobs ran: the unquoted pip --only-binary option contained a colon followed by a space. The command now uses a YAML block scalar, and the entire workflow parses successfully with PyYAML. A new v0.1.6.0 candidate replaces it without rewriting the existing tag. No installer release was published by the failed run.
