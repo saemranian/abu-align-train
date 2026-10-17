@@ -40,8 +40,11 @@ def self_test(gui=False):
         from unittest.mock import patch
         with patch.object(AbuAlignApp,'_start_background_engine_check',lambda self:None):
             root=tk.Tk();root.withdraw()
+            callback_errors=[]
+            root.report_callback_exception=lambda *error:callback_errors.append(error)
             try:
                 app=AbuAlignApp(root);root.update_idletasks()
+                if callback_errors:raise RuntimeError('GUI callback failed during construction: '+str(callback_errors[0][1]))
                 if getattr(sys,'frozen',False):
                     assert app.engine_var.get()=='native_colmap'
                     assert not app.auto_train_var.get(), 'Core must not default to unbundled training'

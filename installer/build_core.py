@@ -69,6 +69,10 @@ def build():
           '--paths',str(ROOT),'--noupx','--collect-data','viser','--collect-binaries','pycolmap',
           '--add-data',f'{licenses}:THIRD_PARTY_LICENSES']
     if sys.platform=='win32':args+=['--icon',str(ROOT/'abu_icon.ico')]
+    else:args+=['--hidden-import','PIL._tkinter_finder']
+    if sys.platform=='darwin':
+        args+=['--windowed','--osx-bundle-identifier','io.github.saemranian.abu-align-train',
+               '--icon',str(ROOT/'abu_icon.png')]
     # Dependencies such as imageio query their distribution metadata at runtime.
     # Preserve installed metadata as well as importable modules in the frozen app.
     for dist in metadata.distributions():
@@ -84,12 +88,16 @@ def build():
     bundle=DIST/'AbuRuntime'
     # Ship the wheel's prebuilt browser assets only. Leaving client/src present
     # makes Viser consider rebuilding with Node on an end user's first launch.
-    client=bundle/'_internal/viser/client'
-    if not (client/'build/index.html').is_file():raise RuntimeError('Prebuilt Viser browser assets are missing')
-    source=client/'src'
-    if source.is_dir():
-        if not source.resolve().is_relative_to(bundle.resolve()):raise RuntimeError('Invalid generated browser path')
-        shutil.rmtree(source)
+    containers=[(bundle,bundle/'_internal/viser/client')]
+    if sys.platform=='darwin':
+        app=DIST/'AbuRuntime.app'
+        containers.append((app,app/'Contents/Resources/viser/client'))
+    for container,client in containers:
+        if not (client/'build/index.html').is_file():raise RuntimeError('Prebuilt Viser browser assets are missing')
+        source=client/'src'
+        if source.is_dir():
+            if not source.resolve().is_relative_to(container.resolve()):raise RuntimeError('Invalid generated browser path')
+            shutil.rmtree(source)
     record={'schema_version':1,'version':(ROOT/'VERSION.txt').read_text().strip(),
             'edition':'CPU core candidate','system':sys.platform,'architecture':platform.machine(),
             'source_files':{str(r).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p,r in files},

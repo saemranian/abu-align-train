@@ -12,7 +12,7 @@ def wrap_row(row):
         widget.pack_forget()
     previous = [None]
     def arrange(event=None):
-        available = max(1, row.winfo_width() - 2 * int(row.cget("padx")))
+        available = max(1, row.winfo_width() - 2 * row.winfo_pixels(row.cget("padx")))
         signature = (available, tuple((w.winfo_reqwidth(), w.winfo_reqheight()) for w in children))
         if signature == previous[0]:
             return
