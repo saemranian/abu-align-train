@@ -44,7 +44,7 @@ Completed before the final candidate build:
 - The real frozen Windows executable passed native-library, full GUI construction and refinement-subprocess smoke tests with Conda/Python removed from PATH and external connections denied.
 - Synthetic CPU refinement reduced angular RMS from 0.721854 degrees to 2.3741e-10 degrees and wrote eight exports without changing its input. This is a packaging/regression fixture, not a real-image accuracy benchmark.
 - A source wheel built and installed into an isolated target; its CPU native-library self test passed.
-- The public-source dry run exported 175 explicitly approved files and excluded client data and private snapshots. A pre-existing website overview was preserved locally and excluded from publication.
+- The public-source dry run exported 176 explicitly approved files and excluded client data and private snapshots. A pre-existing website overview was preserved locally and excluded from publication.
 
 Final-version installer, memory measurements and live CI results are recorded in walkthrough.md. No all-engine hardware qualification, independent clean-OS acceptance or final legal clearance is implied by these tests.
 
@@ -61,3 +61,5 @@ The final local Windows installer is 180,985,583 bytes (SHA256 6606415997e1ac19c
 ## First public workflow validation
 
 Public candidate v0.1.5.9 (0dc3f87466148a27f7ac327b839f0e9b04ef3a9f) failed GitHub YAML validation before jobs ran: the unquoted pip --only-binary option contained a colon followed by a space. The command now uses a YAML block scalar, and the entire workflow parses successfully with PyYAML. A new v0.1.6.0 candidate replaces it without rewriting the existing tag. No installer release was published by the failed run.
+
+Candidate v0.1.6.0 was also rejected before jobs: runner.temp is unavailable in job-level env expressions. The state path now uses github.workspace. Pinned actionlint 1.7.12 passes the corrected workflow and independently rejects both earlier error fixtures. The publisher now requires this preflight before any public Git mutation, and CI runs it as a prerequisite job. Candidate v0.1.6.1 carries the correction; earlier tags remain unchanged.

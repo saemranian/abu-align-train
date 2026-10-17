@@ -43,6 +43,9 @@ def main(argv=None):
         raise RuntimeError('Commit the reviewed local release first. This publisher never stages unrelated work.')
     if not args.dry_run and not args.no_bump:
         raise RuntimeError('Prepare the mandatory local version/snapshot/commit first, then use --no-bump. No implicit workspace commit is performed.')
+    if not args.dry_run:
+        from installer.workflow_lint import validate
+        validate()
     staging=ROOT/'installer/build'
     staging.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='public-export-',dir=staging) as temporary:

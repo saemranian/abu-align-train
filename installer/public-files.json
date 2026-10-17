@@ -85,6 +85,7 @@
     "installer/smoke_core.py",
     "installer/verify_assets.py",
     "installer/windows/abu_align_setup.iss",
+    "installer/workflow_lint.py",
     "launcher.cs",
     "manual_camera_geometry.py",
     "manual_dvo_masks.py",

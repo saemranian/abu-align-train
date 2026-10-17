@@ -23,4 +23,5 @@ def fetch(name):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('name',choices=['inno','appimagetool']);args=parser.parse_args();print(fetch(args.name))
+    manifest=Path(__file__).resolve().parent/'build-tools.json'
+    parser=argparse.ArgumentParser();parser.add_argument('name',choices=sorted(json.loads(manifest.read_text())));args=parser.parse_args();print(fetch(args.name))

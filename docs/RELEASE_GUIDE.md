@@ -31,3 +31,5 @@ The source wheel is an optional developer path. It uses the Abu package identity
 ## Interpreter qualification
 
 Local Windows verification uses Conda CPython 3.11.16. The official setup-python inventory supplies 3.11.16 for Linux but only 3.11.9 binaries for Windows/macOS in the 3.11 family. CI pins those explicitly for draft compatibility builds; it does not pretend 3.11.16 binaries exist on every runner. A maintained Windows/macOS interpreter build (or a tested upgrade of Python/NumPy and all native wheels) is a mandatory stable-release gate. Do not promote the draft compatibility artifacts as production installers. Official inventory: https://github.com/actions/python-versions/blob/main/versions-manifest.json .
+
+The publisher now runs checksum-pinned actionlint 1.7.12 before cloning or making any public Git changes. This validates GitHub expression contexts as well as YAML. `python installer/workflow_lint.py` runs the same preflight directly; CI also runs it before platform builds. Only the build-tool archive is downloaded when absent; no image or model data is involved.
