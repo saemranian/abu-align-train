@@ -42,6 +42,9 @@ def self_test(gui=False):
             root=tk.Tk();root.withdraw()
             try:
                 app=AbuAlignApp(root);root.update_idletasks()
+                if getattr(sys,'frozen',False):
+                    assert app.engine_var.get()=='native_colmap'
+                    assert not app.auto_train_var.get(), 'Core must not default to unbundled training'
                 from control_points_workspace import open_editor
                 # Main construction covers host adapters without reading a dataset.
                 assert root.winfo_exists();report['gui']=True

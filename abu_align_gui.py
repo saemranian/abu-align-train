@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.6.1
+Abu Align & Train Version 0.1.6.2
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -363,7 +363,7 @@ class AbuAlignApp:
         # ----------------------------------------------------
         # Training Engine & Parameter Variables
         # ----------------------------------------------------
-        self.auto_train_var = tk.BooleanVar(value=True)
+        self.auto_train_var = tk.BooleanVar(value=not getattr(sys,'frozen',False))
         self.train_engine_var = tk.StringVar(value="lichtfeld")
         self.train_iter_var = tk.StringVar(value="30,000 (Production High-Fidelity)")
         self.train_target_run_var = tk.StringVar(value="Latest Run (Auto-Detect)")
