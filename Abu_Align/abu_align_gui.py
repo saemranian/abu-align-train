@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.5.7
+Abu Align & Train Version 0.1.5.8
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -409,7 +409,7 @@ class AbuAlignApp:
             name.removesuffix("_var"): value for name, value in vars(self).items()
             if isinstance(value, tk.Variable)
         }
-        self.presets_dir = Path(__file__).resolve().parent / "presets"
+        self.presets_dir = self._get_presets_dir()
         self.preset_var = tk.StringVar(value="")
         # Controls belong to this dataset, so keep them outside reusable presets.
         self.controls_file_var=tk.StringVar(value='')
@@ -1493,14 +1493,40 @@ class AbuAlignApp:
         elif engine == "pfgs360":
             self.panel_train_pfgs360.pack(fill=tk.BOTH, expand=True)
 
+    def _get_presets_dir(self) -> Path:
+        candidate = Path(__file__).resolve().parent / "presets"
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError:
+            fallback = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "AbuAlign" / "presets"
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
+
     def _get_logs_dir(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         if "versions" in base_dir:
             logs_dir = os.path.join(os.path.dirname(os.path.dirname(base_dir)), "logs")
         else:
             logs_dir = os.path.join(base_dir, "logs")
-        os.makedirs(logs_dir, exist_ok=True)
-        return logs_dir
+        try:
+            os.makedirs(logs_dir, exist_ok=True)
+            probe = os.path.join(logs_dir, ".write_probe")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("")
+            os.remove(probe)
+            return logs_dir
+        except OSError:
+            fallback = os.path.join(
+                os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                "AbuAlign",
+                "logs",
+            )
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
 
     def _ensure_logs_dir(self):
         return self._get_logs_dir()

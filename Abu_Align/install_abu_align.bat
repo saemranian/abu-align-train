@@ -26,11 +26,11 @@ if %ERRORLEVEL% EQU 0 (
 if not defined CONDA_EXE (
     echo [!] Conda was not found in PATH or standard installation locations.
     echo [*] Downloading and installing Miniconda silently for you...
-    powershell -Command "Invoke-WebRequest -Uri 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe' -OutFile 'miniconda_installer.exe'"
-    if exist "miniconda_installer.exe" (
+    powershell -Command "Invoke-WebRequest -Uri 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe' -OutFile '$env:TEMP\miniconda_installer.exe'"
+    if exist "%TEMP%\miniconda_installer.exe" (
         echo [*] Running Miniconda installation to %USERPROFILE%\miniconda3 ...
-        start /wait "" miniconda_installer.exe /InstallationType=JustMe /RegisterPython=0 /S /D=%USERPROFILE%\miniconda3
-        del /f /q miniconda_installer.exe >nul 2>&1
+        start /wait "" "%TEMP%\miniconda_installer.exe" /InstallationType=JustMe /RegisterPython=0 /S /D=%USERPROFILE%\miniconda3
+        del /f /q "%TEMP%\miniconda_installer.exe" >nul 2>&1
         set "CONDA_EXE=%USERPROFILE%\miniconda3\condabin\conda.bat"
     ) else (
         echo [ERROR] Failed to download Miniconda installer. Please install Miniconda manually from https://docs.conda.io/

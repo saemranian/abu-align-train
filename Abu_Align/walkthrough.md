@@ -1,3 +1,9 @@
+# Abu Align & Train v0.1.5.8: Fix Program Files read-only permission error on startup and add launcher error diagnostics
+
+Added write-probe and automatic %LOCALAPPDATA%\AbuAlign fallback for logs, presets, SAM2 checkpoints, and manual prediction models when installed in UAC-protected folders like C:\Program Files\AbuAlign; added Inno Setup users-modify directory permissions and C# launcher startup diagnostics.
+
+---
+
 # Abu Align & Train v0.1.5.7: Trigger automated GitHub Release installer builds on main branch
 
 Updated .github/workflows/release.yml to trigger directly on main pushes, hardened Inno Setup / macOS DMG / Linux AppImage scripts, and added atomic multi-platform release publishing so one-click download links are immediately live.

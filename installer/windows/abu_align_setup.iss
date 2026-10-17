@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.5.7"
+  #define MyAppVersion "0.1.5.8"
 #endif
 
 [Setup]
@@ -45,10 +45,16 @@ Source: "..\..\vggt\*"; DestDir: "{app}\vggt"; Flags: ignoreversion recursesubdi
 Source: "..\..\training\*"; DestDir: "{app}\training"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\..\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Dirs]
+Name: "{app}"; Permissions: users-modify
+Name: "{app}\logs"; Permissions: users-modify
+Name: "{app}\presets"; Permissions: users-modify
+Name: "{app}\checkpoints"; Permissions: users-modify
+
 [Icons]
 Name: "{autoprograms}\Abu Align & Train"; Filename: "{app}\Abu_Align_and_Train.exe"; WorkingDir: "{app}"; IconFilename: "{app}\abu_icon.ico"
 Name: "{autodesktop}\Abu Align & Train"; Filename: "{app}\Abu_Align_and_Train.exe"; WorkingDir: "{app}"; IconFilename: "{app}\abu_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\install_abu_align.bat"; Description: "Configure Python & GPU Dependencies (Required on first install)"; Flags: postinstall shellexec waituntilterminated
 Filename: "{app}\Abu_Align_and_Train.exe"; Description: "Launch Abu Align & Train Studio"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\install_abu_align.bat"; Description: "Run Fresh Python/CUDA Environment Provisioner (Only needed if Python/Conda is not installed yet)"; Flags: postinstall shellexec waituntilterminated unchecked

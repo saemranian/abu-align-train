@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Forms;
@@ -14,40 +15,37 @@ namespace AbuAlignLauncher
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory;
                 string scriptPath = Path.Combine(appDir, "abu_align_gui.py");
-                
+                if (!File.Exists(scriptPath))
+                {
+                    MessageBox.Show("GUI script not found at:\n" + scriptPath,
+                        "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
                 string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 string[] candidatePythons = new string[]
                 {
-                    Path.Combine(appDir, "env", "pythonw.exe"),
                     Path.Combine(appDir, "env", "python.exe"),
-                    Path.Combine(appDir, "env", "Scripts", "pythonw.exe"),
                     Path.Combine(appDir, "env", "Scripts", "python.exe"),
-                    Path.Combine(localAppData, @"AbuAlign\env\pythonw.exe"),
                     Path.Combine(localAppData, @"AbuAlign\env\python.exe"),
-                    Path.Combine(localAppData, @"AbuAlign\env\Scripts\pythonw.exe"),
                     Path.Combine(localAppData, @"AbuAlign\env\Scripts\python.exe"),
-                    Path.Combine(userProfile, @"miniconda3\envs\abu_align\pythonw.exe"),
                     Path.Combine(userProfile, @"miniconda3\envs\abu_align\python.exe"),
-                    Path.Combine(userProfile, @"miniconda3\envs\vggt\pythonw.exe"),
                     Path.Combine(userProfile, @"miniconda3\envs\vggt\python.exe"),
-                    Path.Combine(userProfile, @"anaconda3\envs\abu_align\pythonw.exe"),
                     Path.Combine(userProfile, @"anaconda3\envs\abu_align\python.exe"),
-                    Path.Combine(userProfile, @"anaconda3\envs\vggt\pythonw.exe"),
                     Path.Combine(userProfile, @"anaconda3\envs\vggt\python.exe")
                 };
 
-                string pythonPath = null;
+                List<string> existingPythons = new List<string>();
                 foreach (string candidate in candidatePythons)
                 {
                     if (File.Exists(candidate))
                     {
-                        pythonPath = candidate;
-                        break;
+                        existingPythons.Add(candidate);
                     }
                 }
 
-                if (string.IsNullOrEmpty(pythonPath))
+                if (existingPythons.Count == 0)
                 {
                     string installerBat = Path.Combine(appDir, "install_abu_align.bat");
                     if (File.Exists(installerBat))
@@ -72,14 +70,13 @@ namespace AbuAlignLauncher
                             {
                                 if (File.Exists(candidate))
                                 {
-                                    pythonPath = candidate;
-                                    break;
+                                    existingPythons.Add(candidate);
                                 }
                             }
                         }
                     }
 
-                    if (string.IsNullOrEmpty(pythonPath))
+                    if (existingPythons.Count == 0)
                     {
                         MessageBox.Show("Python runtime not found.\nPlease run install_abu_align.bat to complete the runtime setup.",
                             "Abu Align - Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -87,21 +84,35 @@ namespace AbuAlignLauncher
                     }
                 }
 
-                if (!File.Exists(scriptPath))
+                string lastError = "";
+                foreach (string pyExe in existingPythons)
                 {
-                    MessageBox.Show("GUI script not found at:\n" + scriptPath,
-                        "Abu Align - Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
+                    ProcessStartInfo psi = new ProcessStartInfo();
+                    psi.FileName = pyExe;
+                    psi.Arguments = "\"" + scriptPath + "\"";
+                    psi.WorkingDirectory = appDir;
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    psi.RedirectStandardError = true;
+
+                    Process proc = Process.Start(psi);
+                    if (proc != null)
+                    {
+                        bool exitedQuickly = proc.WaitForExit(2000);
+                        if (!exitedQuickly || proc.ExitCode == 0)
+                        {
+                            return;
+                        }
+                        lastError = proc.StandardError.ReadToEnd();
+                    }
                 }
 
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = pythonPath;
-                psi.Arguments = "\"" + scriptPath + "\"";
-                psi.WorkingDirectory = appDir;
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-
-                Process.Start(psi);
+                MessageBox.Show(
+                    "Abu Align & Train encountered a startup error:\n\n" +
+                    (string.IsNullOrWhiteSpace(lastError) ? "Python process exited unexpectedly." : lastError),
+                    "Abu Align & Train - Startup Diagnostic",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {

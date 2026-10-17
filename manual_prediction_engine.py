@@ -7,26 +7,37 @@ from PIL import Image
 from manual_camera_geometry import Camera,bearing,calibration_parameters,spherical
 from manual_image_policy import Masks
 
+import os
 MODEL_DIR=Path(__file__).parent/'.abu_models/manual_predictions'
+USER_MODEL_DIR=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'AbuAlign'/'.abu_models'/'manual_predictions'
 URLS={'aliked-n16.pth':'https://raw.githubusercontent.com/Shiaoming/ALIKED/main/models/aliked-n16.pth',
       'aliked_lightglue_v0-1_arxiv.pth':'https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/aliked_lightglue.pth'}
 
 
 def setup_models():
     import hashlib,urllib.request
-    MODEL_DIR.mkdir(parents=True,exist_ok=True);records={}
+    target_dir=MODEL_DIR
+    try:
+        target_dir.mkdir(parents=True,exist_ok=True)
+        probe=target_dir/'.write_probe'
+        probe.write_text('',encoding='utf-8')
+        probe.unlink()
+    except OSError:
+        target_dir=USER_MODEL_DIR
+        target_dir.mkdir(parents=True,exist_ok=True)
+    records={}
     for name,url in URLS.items():
-        path=MODEL_DIR/name
+        path=target_dir/name
         if not path.exists():
             temporary=path.with_suffix('.download');urllib.request.urlretrieve(url,temporary);temporary.replace(path)
         records[name]={'url':url,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'bytes':path.stat().st_size}
-    (MODEL_DIR/'models.json').write_text(json.dumps(records,indent=2));return records
+    (target_dir/'models.json').write_text(json.dumps(records,indent=2));return records
 
 
 def model_paths():
     import torch
     hub=Path(torch.hub.get_dir())/'checkpoints'
-    folders=[MODEL_DIR,*[p/'.abu_models/manual_predictions' for p in list(Path(__file__).parents)[:5]],hub]
+    folders=[MODEL_DIR,USER_MODEL_DIR,*[p/'.abu_models/manual_predictions' for p in list(Path(__file__).parents)[:5]],hub]
     return {name:next((folder/name for folder in folders if (folder/name).is_file()),None) for name in URLS}
 
 

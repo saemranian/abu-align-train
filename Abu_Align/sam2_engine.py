@@ -116,7 +116,20 @@ class SAM2MaskingEngine:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             checkpoints_dir = os.path.join(base_dir, "checkpoints", "sam2")
         self.checkpoints_dir = os.path.abspath(checkpoints_dir)
-        os.makedirs(self.checkpoints_dir, exist_ok=True)
+        try:
+            os.makedirs(self.checkpoints_dir, exist_ok=True)
+            probe = os.path.join(self.checkpoints_dir, ".write_probe")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("")
+            os.remove(probe)
+        except OSError:
+            self.checkpoints_dir = os.path.join(
+                os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                "AbuAlign",
+                "checkpoints",
+                "sam2",
+            )
+            os.makedirs(self.checkpoints_dir, exist_ok=True)
 
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
