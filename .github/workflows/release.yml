@@ -39,6 +39,8 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: -r installer/requirements-core.lock
       - name: Validate source and publisher safety
         run: python -m unittest discover -s tests -p "test_distribution*.py" -v
+      - name: Validate GPU component and full-installer gates
+        run: python -m unittest tests.test_engine_packs tests.test_full_payload -v
       - name: Linux UI libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk libgl1 libegl1 libfuse2
@@ -62,11 +64,14 @@ jobs:
           $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
           & $csc /nologo /target:winexe /win32icon:abu_icon.ico /out:Abu_Align_and_Train.exe launcher.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & "$toolDir/ISCC.exe" "/DMyAppVersion=$version" installer/windows/abu_align_setup.iss
+          python installer/windows/build_setup.py --iscc "$toolDir/ISCC.exe"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $installed = Join-Path $env:RUNNER_TEMP 'abu-installed'
+          # Full online setup downloads only pinned software; this runner has no user dataset.
+          $env:ABU_OFFLINE_TEST = '0'
           $setup = Start-Process installer/dist/Abu_Align_and_Train_Setup_Windows_x64.exe -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installed`"" -Wait -PassThru -WindowStyle Hidden
           if ($setup.ExitCode) { throw "Product setup failed: $($setup.ExitCode)" }
+          $env:ABU_OFFLINE_TEST = '1'
           & "$installed/runtime/AbuRuntime.exe" --self-test
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & "$installed/runtime/AbuRuntime.exe" --worker-smoke-test

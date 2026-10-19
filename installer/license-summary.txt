@@ -1,0 +1,29 @@
+Abu Align & Train - distribution license scope
+
+This is a mixed-license application. Free download does not make every optional
+research engine unrestricted or commercially licensed.
+
+The retained VGGT license applies to material covered by that grant. See
+LICENSE.txt and THIRD_PARTY_NOTICES.md in the installed runtime. Independent
+components keep their own licenses, copyright notices and source obligations.
+
+COLMAP is acquired directly from its upstream publisher; its native dependencies
+have separate licenses. The GPU trainer is an independent LichtFeld executable,
+licensed GPLv3-or-later with the upstream NVIDIA GPU Library Exception. Its
+corresponding source, build settings and third-party notices are supplied with
+the engine release. NVIDIA runtime libraries retain NVIDIA's own license terms.
+
+Installation does not extend Abu/VGGT restrictions to independent GPL or LGPL
+components or restrict rights granted by their licenses. Their own terms apply.
+
+Research integrations with noncommercial, source-only or unresolved model terms
+are not automatically bundled or authorized by this installer. Check the engine
+catalog before selecting them for a project.
+
+GPU setup downloads software components to this computer. It does not upload
+your images, control points, reconstructions or training datasets.
+
+The software and independent components are provided under their respective
+license warranty and liability provisions. This summary does not replace or
+amend those licenses. Full notices are available inside the component packages
+and at https://github.com/saemranian/abu-align-train .

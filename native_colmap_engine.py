@@ -25,12 +25,15 @@ def run(image_paths, output, mapper='incremental', device='auto', features=6000,
     if len(directories) != 1: raise ValueError('Selected images must share one folder')
     root = directories.pop()
     cuda = bool(pycolmap.has_cuda)
-    if device == 'cuda' and not cuda:
-        raise RuntimeError('This PyCOLMAP build lacks CUDA; install/build a CUDA backend before selecting GPU')
-    gpu = cuda and device != 'cpu'
+    from colmap_gpu_component import installed_executable
+    cuda_executable = installed_executable() if device != 'cpu' and not cuda else None
+    if device == 'cuda' and not cuda and not cuda_executable:
+        raise RuntimeError('No CUDA backend installed. Open Tools > Distribution and engines > GPU components to install the prebuilt GPU alignment component.')
+    gpu = (cuda or bool(cuda_executable)) and device != 'cpu'
     manifest_path = output/('candidate_manifest.json' if resume else 'run_manifest.json')
     manifest = write_manifest(image_paths, manifest_path, 'native_colmap',
-                              {'mapper': mapper, 'gpu': gpu, 'features': features, 'width': width, 'pycolmap': pycolmap.__version__})
+                              {'mapper': mapper, 'gpu': gpu, 'features': features, 'width': width, 'pycolmap': pycolmap.__version__,
+                               'feature_runtime': 'official_colmap_cuda_4.2.1' if cuda_executable else 'pycolmap'})
     if any(item['width'] != 2*item['height'] for item in manifest['images']):
         raise ValueError('Native COLMAP input must contain full 2:1 panoramas')
     database = output/'database.db'
@@ -58,10 +61,15 @@ def run(image_paths, output, mapper='incremental', device='auto', features=6000,
     backend = pycolmap.Device.cuda if gpu else pycolmap.Device.cpu
     started = time.perf_counter()
     if not resume:
-        pycolmap.extract_features(database, root, image_names=[item['name'] for item in manifest['images']],
-                                 camera_mode=pycolmap.CameraMode.SINGLE, reader_options=reader,
-                                 extraction_options=extraction, device=backend)
-        pycolmap.match_sequential(database, matching_options=matching, pairing_options=pairing, device=backend)
+        if cuda_executable:
+            from colmap_gpu_component import extract_and_match
+            extract_and_match(cuda_executable,database,root,[item['name'] for item in manifest['images']],
+                              output,width,features,output/'masks' if mask_policy and mask_policy.get('mask_dir') else None)
+        else:
+            pycolmap.extract_features(database, root, image_names=[item['name'] for item in manifest['images']],
+                                     camera_mode=pycolmap.CameraMode.SINGLE, reader_options=reader,
+                                     extraction_options=extraction, device=backend)
+            pycolmap.match_sequential(database, matching_options=matching, pairing_options=pairing, device=backend)
     sparse = output/'sparse'; sparse.mkdir(exist_ok=True)
     if mapper == 'global':
         options = pycolmap.GlobalPipelineOptions()

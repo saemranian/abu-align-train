@@ -24,7 +24,7 @@ The builder copies actual dependency license files into THIRD_PARTY_LICENSES and
 | gsplat360 and Spherical Package | Apache-2.0 and BSD-3-Clause respectively; they do not override UniK3D or compiled CGAL terms. |
 | NVIDIA 3DGRUT | [Apache-2.0 top level](https://github.com/nv-tlabs/3dgrut/blob/main/LICENSE), not generically research-only. SDKs and native dependencies still need review. |
 | PyCuSFM | Apache-2.0 wrapper; cuSFM, TensorRT, cuDSS and native model distributions have separate terms. |
-| LichtFeld Studio | [GPLv3 or later plus GPU-library permission](https://github.com/MrNeRF/LichtFeld-Studio#license). Redistribution needs corresponding source and notices. |
+| LichtFeld Studio | [GPLv3 or later](https://github.com/MrNeRF/LichtFeld-Studio/blob/00a96b63c0ce45691d3dd9b4dcfd02069269c40c/LICENSE) plus the [GPU-library exception in the exact distributed revision](https://github.com/MrNeRF/LichtFeld-Studio/blob/00a96b63c0ce45691d3dd9b4dcfd02069269c40c/LICENSE-EXCEPTION.txt). Managed Windows CUDA candidate; matching corresponding source, dependency notices and source offer accompany its separate runtime archive. The older v0.5.4 tag lacked this exception. |
 | RealityScan | Proprietary external application. No permission to repackage it is established by free eligibility. |
 | SAM2 | [Apache-2.0 code and official checkpoints](https://github.com/facebookresearch/sam2#license); additional connected-component and font notices apply where included. |
 | Manual learned matching | [LightGlue code and weights Apache-2.0](https://github.com/cvg/LightGlue#license), ALIKED BSD-3-Clause. SuperPoint has separate restrictive terms. |

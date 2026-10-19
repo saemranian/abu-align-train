@@ -26,9 +26,13 @@ def main():
               'Abu_Align_and_Train_macOS_arm64.dmg'}
     if {record['name'] for record in records} != expected:
         raise ValueError('The complete supported platform set is required before creating a draft')
+    windows=Path('release-assets/capabilities-windows-x64.json')
+    gpu=windows.is_file() and json.loads(windows.read_text()).get('gpu_setup') is True
+    scope=('Windows x64: one online installer supplies the desktop plus pinned CUDA panorama alignment and native panorama Gaussian training components. Internet is required during setup; a compatible NVIDIA GPU/driver is required for GPU processing. Linux x64 and macOS arm64 remain CPU desktop candidates; their CUDA/Metal training parity is not claimed. '
+           if gpu else 'Bundled CPU core candidate. Gaussian training runtimes and neural weights are not included. ')
     release=request(api,{'tag_name':tag,'target_commitish':os.environ['GITHUB_SHA'],
-        'name':'Abu CPU core candidate '+tag,'draft':True,'prerelease':True,
-        'body':'Bundled CPU core candidate. Includes interpreter, native dependencies, Manual Control Points and CPU refinement, M54 and spherical COLMAP. No Gaussian training runtimes or neural weights are bundled. Signing, notarization and independent clean-machine qualification are still required before a stable release. See docs/DISTRIBUTION_AUDIT.md and THIRD_PARTY_NOTICES.md. Do not describe this suite as uniformly Apache licensed.'})
+        'name':'Abu Align & Train candidate '+tag,'draft':True,'prerelease':True,
+        'body':scope+'Includes the interpreter, native dependencies, Manual Control Points, M54 and native spherical COLMAP. Projects stay local. Signing, notarization and independent clean-machine qualification remain stable-release gates. See docs/DISTRIBUTION_FINAL_REVIEW.md and THIRD_PARTY_NOTICES.md. The suite has mixed licenses; restricted research integrations are not automatically bundled or authorized.'})
     for path in sorted(Path('release-assets').iterdir()):
         if path.is_file():request(release['upload_url'].split('{')[0]+'?name='+path.name,path.read_bytes(),'application/octet-stream')
     print(json.dumps({'draft_url':release['html_url'],'assets':len(records),'stable':False}))

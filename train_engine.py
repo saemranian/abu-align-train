@@ -1,5 +1,5 @@
 """
-Abu Align & Train v0.1.6.3 - 3D Gaussian Splatting Training Engine
+Abu Align & Train v0.1.6.6 - 3D Gaussian Splatting Training Engine
 ==================================================================
 Integrates 4 premier 3DGS training engines:
 1. LichtFeld Studio (C++ / Vulkan Real-Time Viewport & Headless with GUT)
@@ -161,7 +161,32 @@ PFGS360_NS_EXPORT_CANDIDATES = [
 ]
 
 
+def lichtfeld_requires_gut(dataset_dir):
+    """Use actual calibration metadata, not image aspect ratio, to select GUT."""
+    root=Path(dataset_dir)
+    for sparse in (root/'sparse'/'0',root/'sparse',root):
+        text=sparse/'cameras.txt'
+        if text.is_file():
+            models=[line.split()[1] for line in text.read_text(encoding='utf-8').splitlines()
+                    if line.strip() and not line.lstrip().startswith('#')]
+            if models:return any(m.upper() not in {'PINHOLE','SIMPLE_PINHOLE'} for m in models)
+        if (sparse/'cameras.bin').is_file():
+            import pycolmap
+            reconstruction=pycolmap.Reconstruction(sparse)
+            return any(c.model_name not in {'PINHOLE','SIMPLE_PINHOLE'} for c in reconstruction.cameras.values())
+    transforms=root/'transforms.json'
+    if transforms.is_file():
+        metadata=json.loads(transforms.read_text(encoding='utf-8'))
+        models=[metadata.get('camera_model','')]+[f.get('camera_model','') for f in metadata.get('frames',[])]
+        return any(m and m.upper() not in {'PINHOLE','SIMPLE_PINHOLE','PERSPECTIVE'} for m in models)
+    return False
+
+
 def get_lichtfeld_executable() -> Optional[str]:
+    from abu_engine_packs import optional_executable
+    managed=optional_executable('lichtfeld-cuda','trainer')
+    if managed:return managed
+    if getattr(sys,'frozen',False):return None
     for p in LICHTFELD_CANDIDATES:
         if os.path.isfile(p):
             return p
@@ -298,6 +323,9 @@ def train_lichtfeld(
         )
 
     os.makedirs(output_dir, exist_ok=True)
+    if not gut and lichtfeld_requires_gut(dataset_dir):
+        gut=True
+        log('      * Enabling GUT for native spherical/distorted camera calibration; images remain in their original projection.')
     log(f"      * Initializing LichtFeld Studio Training Engine...")
     log(f"      * Executable: {lfs_exe}")
     log(f"      * Dataset:    {dataset_dir}")
@@ -320,18 +348,23 @@ def train_lichtfeld(
         "-i", str(iterations),
         "--export", export_fmt,
     ]
+    if getattr(sys,'frozen',False):
+        # Managed training must not inherit arbitrary plugins from a separate
+        # developer/user LichtFeld installation.
+        cmd.append('--safe-mode')
 
-    res_clean = str(train_res).strip().lower()
-    if any(k in res_clean for k in ["original", "native", "100%", "full", "none", "0"]):
+    res_clean = str(train_res).strip().lower().split()
+    res_clean = res_clean[0] if res_clean else "original"
+    if res_clean in ["original", "native", "100%", "full", "none", "0"]:
         cmd.extend(["--resize_factor", "1", "--max-width", "0"])
         log(f"      * Resolution: Full Original Native (100% Quality, Zero Downscaling)")
-    elif any(k in res_clean for k in ["2k", "1920", "half", "2"]):
+    elif res_clean in ["2k", "1920", "half", "2"]:
         cmd.extend(["--max-width", "1920"])
         log(f"      * Resolution: 2K Downscale (1920px Max on-the-fly)")
-    elif any(k in res_clean for k in ["1k", "1024", "quarter", "4"]):
+    elif res_clean in ["1k", "1024", "quarter", "4"]:
         cmd.extend(["--max-width", "1024"])
         log(f"      * Resolution: 1K Downscale (1024px Max on-the-fly)")
-    elif any(k in res_clean for k in ["4k", "3840"]):
+    elif res_clean in ["4k", "3840"]:
         cmd.extend(["--max-width", "3840"])
         log(f"      * Resolution: 4K Downscale (3840px Max on-the-fly)")
     else:
@@ -363,6 +396,8 @@ def train_lichtfeld(
 
     proc = subprocess.Popen(
         cmd,
+        cwd=os.path.dirname(os.path.abspath(lfs_exe)),
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' and headless else 0,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -415,6 +450,9 @@ def train_lichtfeld(
             pass
 
     is_early_finish = check_save_and_finish_sentinel(output_dir, dataset_dir)
+
+    if proc.returncode and not is_early_finish:
+        raise RuntimeError(f'LichtFeld training exited with code {proc.returncode}; existing output files are not evidence of a successful run.')
 
     # Locate output PLY/SPZ file
     ply_candidates = glob.glob(os.path.join(output_dir, "*.ply")) + \

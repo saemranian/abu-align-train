@@ -8,22 +8,22 @@ Local tools for camera reconstruction, Manual Control Points, image preparation 
 
 **The old v0.1.5.8 downloads are bootstrap installers, not self-contained applications.** Their first run downloads Python and dependencies. They do not establish support for all engines on Mac or Linux.
 
-The replacement pipeline builds a **CPU core candidate** containing its interpreter and native dependencies. Installing or starting this core does not execute pip, Conda, curl or a compiler. Candidates remain drafts until all required jobs pass and the owner qualifies signing, installation and licensing. Do not assume an older download has these fixes.
+The replacement pipeline builds a frozen desktop plus a **Windows NVIDIA GPU candidate**. Its single online installer automatically acquires pinned CUDA alignment and native panorama Gaussian training components. Users need no Python, pip, Conda, compiler or CUDA toolkit setup. Internet is required during Windows GPU setup; training requires an NVIDIA SM75+ GPU and CUDA 13 compatible driver (R580+). Check each release's capability manifest: older binaries do not gain these features when source changes. Candidates remain drafts until their build and installation checks pass; signing/notarization remain stable-release gates.
 
 | Download target | Candidate scope |
 | --- | --- |
-| Windows x64 EXE | CPU core plus Windows native GPU viewport |
+| Windows x64 EXE | Desktop, native GPU viewport, managed CUDA panorama alignment and native GUT Gaussian training |
 | Linux x64 AppImage | CPU core; shared browser 3D workspace |
 | macOS 14+ arm64 DMG | CPU core; shared browser 3D workspace |
 | macOS Intel | Deferred: PyCOLMAP 4.2.0 publishes no Intel Mac wheel; no installer claimed |
 
-The core includes Manual Control Points and CPU refinement, native spherical COLMAP, M54, panorama/image utilities and diagnostics. **Gaussian training runtimes, neural checkpoints and FFmpeg are not bundled.** Other engines remain external integrations. A Mac installer does not make CUDA engines compatible with Metal.
+The desktop includes Manual Control Points and CPU refinement, native spherical COLMAP, M54, panorama/image utilities and diagnostics. Windows GPU setup supplies COLMAP CUDA extraction/matching and the qualified LichtFeld trainer, with matching source and notices. Mapping uses CPU Ceres. Original panoramas stay equirectangular; no cubemaps. Neural research checkpoints and the standalone FFmpeg video CLI are not bundled. Other engines remain external integrations. Linux/macOS packages currently supply the CPU desktop; CUDA training is not available on macOS. First Windows training startup can spend minutes compiling CUDA kernels; cached runs are faster. See [tested scope and limitations](docs/DISTRIBUTION_FINAL_REVIEW.md).
 
 ## Use
 
 Once a qualified candidate is available, download the file for your system, install it and open Abu. Choose **Tools > Distribution and engines** for the exact capabilities and restrictions. Existing developer installations can retain their configured engines. Projects, controls and source geometry stay local; no client imagery belongs in public build artifacts.
 
-Developers can automate the installed runtime with `--doctor`, `--m54 PATH`, or the bundled allowlisted CLI workers. A source Python installation exposes `abu-align`, `abu-gui`, `abu-m54` and `abu-doctor`; source installation is optional, not an end-user prerequisite. External engine runtimes can be selected through `ABU_ENGINE_PYTHON` and must be independently compatible and licensed.
+Developers can automate the installed runtime with `--doctor`, `--m54 PATH`, `--align` or `--train` (use `--help` for dispatch). A source Python installation exposes `abu-align`, `abu-gui`, `abu-m54` and `abu-doctor`; source installation is optional, not an end-user prerequisite. External engine runtimes can be selected through `ABU_ENGINE_PYTHON` and must be independently compatible and licensed.
 
 ## Licensing
 

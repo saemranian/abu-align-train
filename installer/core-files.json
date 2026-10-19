@@ -4,6 +4,8 @@
     "360dvo_engine.py",
     "abu_align_gui.py",
     "abu_components.py",
+    "abu_engine_packs.py",
+    "colmap_gpu_component.py",
     "abu_m54.py",
     "abu_m54_app.py",
     "abu_m54_browser.py",
@@ -95,6 +97,8 @@
     "THIRD_PARTY_NOTICES.md",
     "installer/core-files.json",
     "installer/engines.json",
+    "installer/engine-packs.json",
+    "installer/license-summary.txt",
     "installer/smoke_core.py",
     "installer/__init__.py"
   ]

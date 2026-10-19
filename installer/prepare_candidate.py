@@ -17,6 +17,8 @@ def main():
     for record in records:shutil.copy2(dist/record['name'],output/record['name'])
     shutil.copy2(dist/'release-manifest.json',output/('manifest-'+label+'.json'))
     shutil.copy2(root/'installer/build/compliance/sbom.cdx.json',output/('sbom-'+label+'.cdx.json'))
+    edition=root/'installer/build/windows-edition.json'
+    if sys.platform=='win32' and edition.is_file():shutil.copy2(edition,output/'capabilities-windows-x64.json')
     with tempfile.TemporaryDirectory(prefix='candidate-source-',dir=root/'installer/build') as temporary:
         source=Path(temporary);export(root,source)
         with zipfile.ZipFile(output/('licenses-and-core-source-'+label+'.zip'),'w',zipfile.ZIP_DEFLATED) as archive:

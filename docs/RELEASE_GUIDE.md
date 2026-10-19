@@ -16,7 +16,7 @@ The new pipeline builds **CPU core candidates** with a bundled interpreter and l
 
 Use Python 3.11.16 and `python -m pip install --require-hashes --only-binary=:all: -r installer/requirements-core.lock` in an isolated build environment. `python installer/build_core.py` builds the real runtime and runs a native-library self test. Then run the frozen binary's `--gui-smoke-test` and `--worker-smoke-test` with `ABU_OFFLINE_TEST=1` and a temporary `ABU_DATA_HOME`.
 
-Compile the C# launcher, then the Inno script on Windows. Mac and Linux scripts consume the already built runtime. They never install Python or pip dependencies on the user's computer. Build tools are checksum pinned in installer/build-tools.json. Updating a mutable upstream tool requires reviewing and changing its expected hash explicitly.
+Compile the C# launcher, then run `python installer/windows/build_setup.py --iscc PATH_TO_ISCC` on Windows. It selects the GPU edition only when the catalog contains hash-bound native training/export/resume qualification and corresponding-source assets; a broken trainer entry fails the build rather than silently producing a CPU edition. Windows GPU setup automatically downloads pinned alignment/training components. Mac and Linux scripts consume the already built CPU runtime. End users do not install Python or pip dependencies. Build tools are checksum pinned in installer/build-tools.json. Updating an upstream tool requires reviewing and changing its expected hash explicitly.
 
 `installer/prepare_candidate.py` collects installers, architecture-specific manifests, a CycloneDX inventory and collected notices/core source. The assembly job recomputes checksums over all platform installers. Do not flatten different platform SBOMs onto the same filename. No test images, logs, caches or private backup snapshots belong in the upload directory.
 
@@ -26,7 +26,9 @@ installer/public-files.json and installer/core-files.json are explicit independe
 
 ## Source packaging and licensing
 
-The source wheel is an optional developer path. It uses the Abu package identity and CLI entry points and retains required VGGT source/header licenses. Neural and Gaussian training runtimes remain external; the wheel must not imply they are included. Full compiled dependency license qualification and model rights are release gates. Consult THIRD_PARTY_NOTICES.md and installer/engines.json rather than assuming every integration is Apache licensed.
+The source wheel is an optional developer path. It uses the Abu package identity and CLI entry points and retains required VGGT source/header licenses. The wheel itself contains no neural or Gaussian training runtime. Windows GPU setup acquires the separately qualified trainer, corresponding source and notices. Other integrations remain external unless explicitly qualified. Full dependency license qualification and model rights are release gates. Consult THIRD_PARTY_NOTICES.md and installer/engines.json rather than assuming every integration is Apache licensed.
+
+GPU engine binaries are not rebuilt for an unrelated UI edit. Reuse their immutable catalog hashes and source assets. For an engine/toolchain update, use `installer/build_gpu_trainer.py` with a fresh isolated short build directory, then qualify native equirectangular training, finite loss/exports and project resume on an authorized local fixture. `installer/package_gpu_trainer.py` requires the clean pinned upstream revision, portable notices and LGPL FFmpeg selection, and writes a matching hashed source offer. Publish only those explicit runtime/source assets after validation; never upload client scenes or private acceptance logs. Update catalog qualification to the exact new runtime hash before building the desktop installer. Keep the GPU runtime release available while any installer references it. See gpu-build-lock.json and DISTRIBUTION_FINAL_REVIEW.md for the tested toolchain and limitations.
 
 ## Interpreter qualification
 

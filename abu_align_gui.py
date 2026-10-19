@@ -1,5 +1,5 @@
 """
-Abu Align & Train Version 0.1.6.3
+Abu Align & Train Version 0.1.6.6
 Professional Graphical User Interface for Neural Photogrammetry & 3DGS Training
 Built on VGGT-Omega, Niantic ACE0, NVIDIA PyCuSFM, Mapillary OpenSfM, 360DVO with LichtFeld Studio, Nerfstudio Splatfacto, NVIDIA 3DGRUT, and PFGS360
 """
@@ -5090,7 +5090,7 @@ class AbuAlignApp:
                 is_training=self.train_script in cmd
                 check_bundled_engine(self.train_engine_var.get() if is_training else self.engine_var.get(),is_training)
                 if '--train' in cmd:
-                    raise RuntimeError('This core installation does not bundle a Gaussian training runtime. Select Align only, or configure ABU_ENGINE_PYTHON.')
+                    check_bundled_engine(self.train_engine_var.get(),True)
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write("=" * 72 + "\n")
                 lf.write(f"Abu Align & Train v{get_current_version()} - Run Telemetry & Diagnostic Log\n")

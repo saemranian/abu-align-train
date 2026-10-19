@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "trainer_repository": "https://github.com/MrNeRF/LichtFeld-Studio.git",
+  "trainer_commit": "00a96b63c0ce45691d3dd9b4dcfd02069269c40c",
+  "vcpkg_repository": "https://github.com/microsoft/vcpkg.git",
+  "vcpkg_commit": "bf19794383e8fb95eba5aa553235bc8ec2271688",
+  "cuda_release": "13.0.2",
+  "cuda_origin": "https://developer.download.nvidia.com/compute/cuda/redist/",
+  "cuda_components": {
+    "cuda_cccl": {
+      "relative_path": "cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.0.85-archive.zip",
+      "sha256": "f4f5187f7976d8057d76e1e04e72c8b7d0a2a22793107a671ad709b1d8d3408d",
+      "md5": "8dba9713ce4b4e6f0c58a92a8a1379db",
+      "size": "3119228"
+    },
+    "cuda_crt": {
+      "relative_path": "cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.0.88-archive.zip",
+      "sha256": "ff413c89dbd96ed3b3dcfac923437de78acea32fb90309277197c8a127588112",
+      "md5": "29b09d1ab8f3b5550a8e8da587b105f1",
+      "size": "140187"
+    },
+    "cuda_cudart": {
+      "relative_path": "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.0.96-archive.zip",
+      "sha256": "a2ed875f9997aa24904fb70cc9db3acd9308433cde99bc8e63ec1271c9da31b4",
+      "md5": "dc22a52b5b75c198a12ce8c4d885e2e5",
+      "size": "2873447"
+    },
+    "cuda_nvcc": {
+      "relative_path": "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.0.88-archive.zip",
+      "sha256": "61760e24a44937c6c29a20ddea69067b4d3860ccd6a9a0564573f840d96e6c5f",
+      "md5": "00f382c4efc8602a6fce54fd61da0c23",
+      "size": "29142142"
+    },
+    "libcurand": {
+      "relative_path": "libcurand/windows-x86_64/libcurand-windows-x86_64-10.4.0.35-archive.zip",
+      "sha256": "c4db1ed0595fcdba3c4da0f5605ca4c3f4340b6be833d94765994e239c775a32",
+      "md5": "b204f174a5bf30a728a4f6f68356ad8c",
+      "size": "54762976"
+    },
+    "libnvjpeg": {
+      "relative_path": "libnvjpeg/windows-x86_64/libnvjpeg-windows-x86_64-13.0.1.86-archive.zip",
+      "sha256": "b8d64f9fb90632e33685529e2b8baee245ca3dcaecab4b8998815ae0f44c5171",
+      "md5": "8c0faada587f472d75ae4e22ced3f6c1",
+      "size": "3144778"
+    },
+    "libnvvm": {
+      "relative_path": "libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.0.88-archive.zip",
+      "sha256": "6dda4a82d22a2c173a65c66b4b4c933e3424a56ce845e2864bdca9cc66e6c524",
+      "md5": "779d2fb0a5235cc7763c06686def0226",
+      "size": "52909116"
+    },
+    "cuda_nvtx": {
+      "relative_path": "cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.0.85-archive.zip",
+      "sha256": "184f578d7bcce2012edf266c51dfa7834ded41464f62459f4ebcb2398cddc665",
+      "md5": "9b01b0d114755775d98626f6dd176137",
+      "size": "147156"
+    },
+    "cuda_profiler_api": {
+      "relative_path": "cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.0.85-archive.zip",
+      "sha256": "38c6c854f325b64e7ca0a8b14e1996dedb5abbb38f3580e5c7744b688abdc56e",
+      "md5": "61c405a619241f213110f0a5ea7fe559",
+      "size": "21185"
+    },
+    "cuda_nvml_dev": {
+      "relative_path": "cuda_nvml_dev/windows-x86_64/cuda_nvml_dev-windows-x86_64-13.0.87-archive.zip",
+      "sha256": "b19b2b5fd534f37c3f0aab49d25ebb28496963aef3e819466bcf0fa20607b0cd",
+      "md5": "6f820eb0f0de554e48e6dd627acd0845",
+      "size": "162340"
+    }
+  },
+  "msvc_toolset": "14.44",
+  "cuda_min_sm": 75,
+  "upstream_source_modified": false,
+  "distribution_manifest": "Remove optional FFmpeg x264 feature; disable FFmpeg default features; keep native NVIDIA codecs."
+}

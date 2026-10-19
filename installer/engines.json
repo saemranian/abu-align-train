@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "engines": [
-    {"id":"native_colmap","name":"Native spherical COLMAP","license":"BSD-3-Clause; native dependencies separately licensed","distribution":"bundled CPU candidate","notes":"No neural weights; CUDA is not claimed for the core build."},
+    {"id":"native_colmap","name":"Native spherical COLMAP","license":"BSD-3-Clause; native dependencies separately licensed","distribution":"bundled CPU candidate; managed Windows CUDA component","notes":"Optional official COLMAP 4.2.1 archive supplies CUDA SIFT extraction/matching. Native equirectangular cameras; no cubemaps. Mapping/refinement acceleration is reported separately."},
     {"id":"opensfm","name":"OpenSfM","license":"BSD-2-Clause","distribution":"external; no qualified pack yet","notes":"Native dependency notices and platform builds must be qualified."},
     {"id":"360dvo","name":"360DVO","license":"MIT code; checkpoint scope unresolved","distribution":"external; no checkpoint redistribution","notes":"DPVO, SphereNet, CUDA extensions and the chosen weights require review."},
     {"id":"vggt_omega","name":"VGGT-Omega","license":"FAIR Noncommercial Research License","distribution":"external research engine","notes":"Commercial use of materials and outputs is restricted. This is not the original VGGT commercial code license."},
@@ -9,10 +9,11 @@
     {"id":"ace0","name":"Niantic ACE0","license":"Custom noncommercial; redistribution in source format only","distribution":"external; excluded from frozen payload","notes":"Free pricing does not authorize binary redistribution or client consulting use."},
     {"id":"splatfacto","name":"Nerfstudio and gsplat","license":"Apache-2.0; native dependencies separately licensed","distribution":"external training engine","notes":"Requires a separately qualified GPU runtime."},
     {"id":"3dgrut","name":"NVIDIA 3DGRUT","license":"Apache-2.0 top-level code","distribution":"external training engine","notes":"CUDA/OptiX and other native components require their own distribution review."},
-    {"id":"lichtfeld","name":"LichtFeld Studio","license":"GPL-3.0-or-later with upstream GPU-library exception","distribution":"external application","notes":"Binary redistribution requires corresponding source and applicable notices."},
+    {"id":"lichtfeld","name":"LichtFeld Studio","license":"GPL-3.0-or-later with upstream GPU-library exception","distribution":"qualified managed Windows CUDA candidate; external on other platforms","notes":"Clean pinned revision 00a96b63c0ce45691d3dd9b4dcfd02069269c40c. Native equirectangular GUT training, Gaussian export and resume tested. Corresponding source and dependency notices accompany the binary; NVIDIA SM75+ and R580+ driver required."},
     {"id":"pfgs360","name":"PFGS360","license":"No complete top-level grant established; UniK3D CC-BY-NC-SA-4.0","distribution":"external; redistribution held","notes":"Some Nerfstudio-derived files have Apache notices; this does not license all original additions or checkpoints."},
     {"id":"realityscan","name":"RealityScan","license":"Proprietary","distribution":"user-installed external application","notes":"Free eligibility is not permission to repackage RealityScan."},
     {"id":"sam2","name":"SAM2","license":"Apache-2.0 code and official checkpoints; additional notices apply","distribution":"external optional inference runtime","notes":"No SAM2 checkpoint is included in the core installer."},
     {"id":"pycusfm","name":"PyCuSFM","license":"Apache-2.0 wrapper; native libraries separately licensed","distribution":"external GPU engine","notes":"Wrapper terms alone do not clear cuSFM, TensorRT or cuDSS binaries."}
   ]
 }
+
